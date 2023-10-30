@@ -1,0 +1,35 @@
+[ See $PIN_ROOT/extras/pinplay/PinPoints/bin/LICENSE.simpoint first. ]
+
+Here's how you can  generate PinPoints for "specrand" from SPEC2006
+ and evaluate the quality of selection using a simple bimodal
+ branch predictor.
+
+[1] setenv PIN_ROOT <root of the pinplay kit>
+
+[2] setenv PATH $PIN_ROOT/extras/pinplay/PinPoints/scripts/:$PATH
+
+[3] In the specrand work directory, edit "specrand.test.cfg" look as follows:
+[Parameters]
+program_name:   specrand
+input_name:     test
+command:        "./base.exe 1255432124 234923 > rand.234923.out"
+debug:          False
+cutoff:         1.0
+epilog_length:  0
+maxk:           5
+mode:           st
+num_proc:       1
+prolog_length:  0
+slice_size:     100000
+verbose:        False
+warmup_length:  300000
+  #Assumes your specrand binary is 'base.exe'
+
+[4] Run the all PinPoints generation and validation phases 
+[whole-prgram logging, basic block vector generation, 
+simpoint run and PinPoints selection, 
+creation of pinballs for PinPoints, 
+branch predictor run on whole-program and PinPoints pinballs, 
+computation of misses per instruction (MPI)]
+
+  brpred_pinpoints.py --delete --cfg specrand.test.cfg --pinplayhome=$PIN_ROOT -lrbsp -TWc

@@ -1,0 +1,133 @@
+1.0: Initial release
+1.1: 
+  * Included include-ext/zconf.h.
+  * examples: new makefile and makefile.rules.
+  * New knobs:
+     Logger: -log:whole_image
+       "Log all image pages loaded (even if not touched)".
+     Replayer: -replay:injection 0/1
+       "Instrument for register/memory injection and thread synchronization."
+        use "-replay:injection 0" to prevent any injection during replay.
+  * New API:
+       PINPLAY_ENGINE now has four new methods:
+           UINT64 LoggerGetICount(THREADID pintid);
+           UINT64 ReplayerGetICount(THREADID pintid);
+            string LoggerGetBaseName();
+            string ReplayerGetBaseName();
+
+           See examples/bimodal.* and pinplay-branch-predictor.cpp for usage 
+           example.
+
+1.1: Update 11/20/2013 
+    New APIs exported in pinlay.H.
+    
+     static enum CALL_ORDER PinPlayFirstBeforeCallOrder()
+     static enum CALL_ORDER PinPlayLastAfterCallOrder()
+
+1.2:
+   * Based on the recently released Pin kit: pin-2.13-62141-gcc.4.4.7-linux.
+   * PIN_ROOT initialization fixed in <pinkit>/source/tools/Config/makefile.unix.config (required for building PinPlay-enabled Maple https://github.com/jieyu/maple).
+
+1.3:
+   * Based on released Pin kit: pin-2.13-65163-gcc.4.4.7-linux.
+   * PinPoints scripts updated for upcoming ISCA2014 tutorial.
+   * Pinball format upgraded from 2.0 --> 2.1 for supporting logging/replaying
+     side-effects of 'xgetbv'.
+
+1.4:
+  * Based on pin-2.14-67254-gcc.4.4.7-linux
+  * Major overhaul of multi-threaded region logging/replay.
+   Here’s what needs to be done (example from another PinPlay based pintool)
+     1.       Link in $(CONTROLLERLIB)
+     2.       Add a rule for $(CONTROLLERLIB)
+     3.       Add to the ‘clean’ rule, deletion of controller objects 
+                $(PIN_ROOT)/source/tools/InstLib/obj-*
+
+    Diffs for the tool’s makefile below.
+
+% diff Makefile.old Makefile
+124,125c124,128
+< $(pintools): $(builddir)%.so : $$(%_objs)
+<       $(LINKER) $(TOOL_LDFLAGS) $(LINK_DEBUG) ${LINK_EXE}$@ $^ ${TOOL_LPATHS} $(TOOL_LIBS) $(DBG)
+---
+> $(CONTROLLERLIB):
+>       $(MAKE) -C $(TOOLS_ROOT)/InstLib dir $(OBJDIR)controller$(LIB_SUFFIX)
+>
+>  $(pintools): $(builddir)%.so : $$(%_objs) $(CONTROLLERLIB)
+>       $(LINKER) $(TOOL_LDFLAGS) $(LINK_DEBUG) ${LINK_EXE}$@ $^ ${TOOL_LPATHS} $(TOOL_LIBS) $(CONTROLLERLIB) $(DBG)
+133a137
+>       rm -rf $(PIN_ROOT)/source/tools/InstLib/obj-*
+
+2.0:
+  * Extends Linux Pin kit pin-2.14-71313-gcc.4.4.7-linux.
+
+  * No installation necessary anymore. Pre-built pinplay-driver.so included.
+
+  * Recording/replaying made easier with new scripts:
+     (put $PIN_ROOT/extras/pinplay/scripts in PATH)
+     1. 'record' 
+      Usage : record <options> <pintool options> -- binary args
+      OR record --pid=XXXX <pintool options> -- binary #no args
+     2. 'replay'
+       Usage : replay <options> <pintool options> -- pinball-basename
+     3. 'relog'
+       Usage : relog <options> <pintool options> -- old-pinball-basename new-pinball-basename
+
+  * First release with DrDebug('D'eterministic 'r'eplay based 'Debug'ging)
+    support:
+
+   o pinplay-driver.so now includes a "PinPlay debugger shell" that uses
+    Pin's Advanced Debugger Extensions (PinADX) for supporting fast
+    breakpoints, gathering/printing of memory/register values.
+
+   o GDB wrapper scripts: 
+     (put $PIN_ROOT/extras/pinplay/scripts in PATH)
+
+     Pre-requisite: GDB version 7.4 or higher configured with Python support.
+
+     1. 'gdb_record' allows interactive recording of a region of interest.
+       Usage : gdb_record <options> <pintool options> -- binary args
+       OR  gdb_record --pid=XXXX <pintool options> -- binary #no args
+
+       #<BEGIN:region of interest>
+       (gdb) pin record on 
+
+       #<END:region of interest>
+       (gdb) pin record off
+
+     2. 'gdb_replay' allows replay-based debugging.
+      Usage : gdb_replay <options> <pintool options> -- pinball-basename program-binary
+ 
+   * Pin's IMG API is now supported with replay-based Pintools.
+
+   * New APIs exported in $PIN_ROOT/extras/pinplay/include/pinplay.H:
+       //register to start/stop logging callbacks
+       VOID RegisterRegionStart(PINPLAY_HANDLER handler,VOID* args);
+       VOID RegisterRegionStop(PINPLAY_HANDLER handler,VOID* args);
+
+       // If replayer uses address translation, return translated address
+       // else return the original address.
+       ADDRINT ReplayerTranslateAddress(ADDRINT addr);
+
+       BOOL IsLoggerActive(); // enabled via -log switch to pinplay-driver
+       BOOL IsReplayerActive(); // enabled via -replay switch to pinplay-driver
+
+       BOOL IsLoggerRecording(); // logger active and is currently recording
+
+       VOID ReplayerDoBreakpoint(CONTEXT * ctxt, THREADID pin_tid, BOOL after, 
+        string msg); //use instead of PIN_ApplicationBreakpoint() during replay.
+2.2:
+    Special release for the PLDI2015 PinPlay tutorial.
+    * pinplay-driver now supports dynamic slicing.
+        See https://software.intel.com/en-us/articles/pintool-slicing 
+    * Dynamic control-flow graph generation now supported.
+        See https://software.intel.com/en-us/articles/pintool-dcfg 
+
+3.0:
+    Based on Pin 3.0 using the new OS-agnostic, compiler-agnostic runtime, 
+      named PinCRT.
+    * pinball format changed to reduce disk space usage. 
+3.2:
+    Based on Pin 3.2 with multiple bug fixes. 
+3.5:
+    Based on Pin 3.5 with multiple performance improvements and bug fixes. 

@@ -1,0 +1,219 @@
+Version 7.3
+  * Fix compilation and version detection issues for modern Pin versions (3.10)
+  * Properly handle time during fast-forwarding and warmup by default
+  * Remove transitional Pin 3 SIFT recorder code
+
+Version 7.2
+  * Improve SIFT recorder error handling to reduce crashes caused by aborts
+  * Fix additional crashes caused by modern GCC behavior (NULL valued this pointer checks are removed by the compiler)
+  * Verify thread count in the sift recorder. Support larger thread counts with the new --maxthreads option
+  * Fix debug symbol parsing with modern Pin versions
+  * Numerous bug fixes and improvements
+
+Version 7.1
+  * Fix compilation errors for GCC 6 and 7
+  * Fix parallel make builds
+  * Add Dockerfile for Ubuntu 18.04
+  * Make zlib optional (Pin3 requires a PinCRT-compiled zlib which is found with Pinplay)
+  * Numerous bug fixes and improvements
+
+Version 7.0
+  * Added Pin 3, GCC 5 support by default, keeping Pin 2 support in the new pin2 branch
+  * Added initial RISC-V support
+  * Add a new utility to automatically compile RISC-V requirements and SPEC CPU2006 binaries for RISC-V
+  * Add a Docker image for Sniper and RISC-V compilation support
+  * Fixes SIFT recorder address mapping issue caused by physical page mapping access restrictions in Linux kernels 4.0+
+
+Version 6.1
+  * Support for newer Pin versions, up to Pin 2.14-71313 / PinPlay 2.1
+  * Support GCC 4.9
+  * Integrate the Cheetah cache models
+  * Remove legacy Graphite core models simple, magic and iocoom
+  * A new dumpstats.py option (-c|--config) prints configuration parameters one-per-line
+  * Numerous bug fixes and improvements
+
+Version 6.0
+  * Add Instruction Window-Centric core model (internal name: ROB core model, use rob.cfg)
+  * Add SMT support (IWC/ROB core model only, use smt*.cfg)
+  * Add SniperLite, a fast cache-only model (use nehalem-lite.cfg)
+  * Add DRAM cache prefetcher
+  * Add support for non-standard SQLite paths through the SQLITE_PATH environment variable
+  * Add sniperdiff.py for easy diff-ing of Sniper results and configurations
+  * Branch predictor accuracy improvements
+  * New roi-icount script to more easily specify fast-forward/warmup/detailed lengths by instruction count
+  * Faster mode for running single-program / single-threaded PinBall (--pinball-non-sift)
+  * Support for newer Pin versions, up to Pin 2.13.65163 / PinPlay 1.3
+  * Numerous bug fixes and improvements
+
+Version 5.3
+  * Fast, cache-only one-IPC timing model (-c cacheonly)
+  * Add energystats script to provide runtime energy counters
+  * Add Python-based thread scheduler infrastructure and example
+  * Add support for Query-Based Selection (Jaleel, MICRO 2010)
+  * Add support for plotting Bottle graphs (Du Bois, OOPSLA 2013)
+  * Memory tracker infrastructure to measure cache hit rates by allocation site
+  * Support for McPAT 1.0
+  * Various bug fixes and improvements
+
+Version 5.2
+  * Configurable coherency protocol (MSI/MESI/MESIF), made MESI the default
+  * Add more cache statistics: LRU stack distance historgram, LLC miss latency breakdown
+  * Implement auxiliary tag directories (ATD) to track constructive/destructive interference in shared caches
+  * Implement 2-level TLB hierarchy with Nehalem configuration
+  * New hooks HOOK_APPLICATION_ROI_{BEGIN,END}, called even when ROI markers are not used directly; these hooks can be used to trigger ROI from a script
+  * Improved stop-by-icount script to support ROI-relative warmup and detailed lengths
+  * Ondemand routine stack printer: configure routine_tracer/type=ondemand, then send a SIGUSR1 to Sniper to get a per-thread application backtrace
+  * Emulate leaf 11 of the cpuid instruction to pass topology information to runtimes (used by Intel OpenMP)
+  * Emulation of sched_* system calls, gettimeofday replacement, cpuid in SIFT mode
+  * Improve handling of LD_LIBRARY_PATH: use SNIPER_SIM_LD_LIBRARY_PATH for the simulator, SNIPER_APP_LD_LIBRARY_PATH for the application
+  * Re-implemented BigSmall scheduler to use thread affinity calls rather than the low-level (and error prone) moveThread API
+  * sim.thread Python interface to interact with threads (get num threads, get appid, get/set affinity)
+  * Use newest Pin version 2.13.61206
+  * Numerous bug fixes and improvements
+
+Version 5.1
+  * New Suggestions for Optimization visualization (--viz-aso)
+  * KCacheGrind-compatible output for profiling simulated applications (--profile)
+  * Roaming (equal-time) scheduler allowing for thread migrations (scheduler/type=roaming)
+  * Support for newest Pin version 2.12.58423
+  * Various bugfixes and improvements
+
+Version 5.0
+  * Periodic sampling infrastructure
+  * Extensible per-thread statistics infrastructure
+  * Routine tracing infrastructure and per-function statistics
+  * NUCA cache model
+  * Distributed tag directories
+  * sim.mem Python module for reading application memory
+  * Various other improvements and bugfixes
+
+Version 4.2
+  * Various accuracy fixes for Nehalem core model
+  * Add cache replacement policies: NRU, MRU, NMRU, PLRU, S-RRIP, Random
+  * Add statistical DRAM performance model
+  * Add syscall enter/exit hooks
+  * Add topology view to visualization
+  * Speed up McPAT by caching architecture-specific CACTI results
+  * Fixes to running multiple multi-threaded workloads
+  * Multi-programmed mode: end simulation at first/last program end, optional trace/application restart
+  * PinPlay support
+
+Version 4.1
+  * Visualization support (--viz)
+  * Minor cleanups and bug fixes
+
+Version 4.0
+  * Thread migration and scheduler support
+  * Pinned (round-robin), static, random thread schedulers
+  * Heterogeneous configuration files with tags
+  * Configurable address2set hash functions for non-power of two sized caches
+  * Various prefetcher improvements
+  * DRAM cache model
+  * One-IPC fast-forward model
+  * Fault injection framework
+  * New SQLite3-based statistics format
+  * ROI support for SIFT
+  * Support for MPI applications (shared-memory backend)
+  * Limited support for Jikes/DaCapo benchmarks
+  * Use newest Pin 2.12.53271
+  * Add script for generating topology images
+  * Preserve history in Git repository
+  * Many cleanups and bugfixes
+
+Version 3.07
+  * Prefetcher improvements, add global history buffer-based prefetcher
+  * HOOK_PERIODIC_INS: Instruction-based periodic callback
+  * Implement CLONE_CHILD_CLEARTID syscall interface
+  * Add example scripts for periodic statistics, periodic McPAT, simulating limited iteration counts
+  * Support for Pin 2.12
+  * Fixes to Python environment
+  * Various bugfixes
+
+Version 3.06
+  * Fix modeled size of network messages
+  * Build fixes for 32-bit, compiler overrides
+
+Version 3.05
+  * Scheduler: expose application ID
+  * Add example script roi-iter.py to dynamically select ROI based on SimMarkers
+  * CPI stacks: --aggregate and --partial support, fixes for heterogeneous configurations
+  * Traces: support for 32-bit executables
+  * Build fixes for older Linux versions
+
+Version 3.04
+  * Support for running multiple multi-threaded workloads in a single simulation
+  * McPAT fixes for heterogeneous configurations
+  * Build system fixes for newer Linux versions
+
+Version 3.03
+  * Bugfixes in configuration parser, starting of multi-program workloads
+
+Version 3.02
+  * Fixes for specifying heterogeneous configurations
+  * L2 prefetcher improvements
+  * Perfect cache modeling
+  * Self-modifying code support
+  * PyControl scripting interface
+  * GCC 4.7 support
+  * McPAT integration for area, power and energy predictions
+
+Version 3.01
+  * Add heterogeneous cache configuration support
+  * Emulate pause, sleep system calls
+  * Improve support for 32-bit applications
+  * Pin 2.11 support
+
+Version 3.0
+  * Support for heterogeneous core types
+  * Separate core microarchitectural characteristics into CoreModel class
+  * Improve CPI stack detail
+  * Add initial implementation for basic L2 prefetcher
+  * Optionally access DRAM directly in configurations with a single LLC
+  * Deprecate replacement of pthread_* synchronization calls
+  * Support more SYS_futex options
+  * Remove unused code for Graphite FULL mode
+  * Fixes to the build system, including parallel builds (make -j)
+  * Support for building on 32-bit hosts
+  * Remove configuration defaults from code, require everything to be specified in a configuration file
+
+Version 2.04
+  * Fix trace playback for non-predicated instructions
+
+Version 2.03
+  * Fix record-trace -d 0
+  * Fix keyboard interrupt behavior
+
+Version 2.02
+  * [sift_recorder] Add support for -f (number of instructions to fast-forward) and -d (number of instructions to trace in detail) command-line options
+
+Version 2.01
+  * Compilation fixes for GCC 4.6
+
+Version 2.0
+  * Multi-program mode
+  * Instruction trace collection tool
+  * New ROI-aware sim.out file generation
+  * CPI components for various SYS_futex system calls
+  * Improve accuracy of the core interval model
+  * GCC 4.6 support
+
+Version 1.06
+  * Fix queue overflow when many TLB misses occur in a single basic block
+
+Version 1.05
+  * [cpistack] Add --abstime command-line parameter to scale Y axis according to absolute time in seconds
+  * [interval] Fix branch resolution latency calculation
+
+Version 1.04
+  * Fix instruction dependencies for LEA and stores
+  * Support synchronous signal handling (when using the
+    -g --general/enable_signals=true command-line parameter)
+
+Version 1.03
+  * Build changes to improve compatibility with Fedora 16
+
+Version 1.02
+  * Remove unneeded warnings from CPI stack script
+
+Version 1.0
+  * Initial public release

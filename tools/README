@@ -1,0 +1,6 @@
+#Running export_line_from_file.py
+python export_line_from_file.py -d "location_to_outputs/outputs" -l "exact_line_from_output"
+
+#Getting full PTW stats
+./calculate_ptw_stats.sh "location_to_output/outputs" "frequency" "cores"
+>>>(In the background this will create files f1, f2, f3, f4, f5 for PTW stats and call python script combine_ptw_cycles.py for set frequency and number of cores"

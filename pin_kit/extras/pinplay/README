@@ -1,0 +1,82 @@
+To try out PinPlay: 
+------------------
+No installation should be necessry as pre-built tools (pinplay-driver.so and
+pinplay-branch-predictor.so) are included in the PinPlay kit.
+
+If the pre-built tools do not work for you:
+ cd examples
+ make instclean
+ make
+
+This will build the tools pinplay-driver.so and 
+pinplay-branch-predictor.so,  create and 
+build 'hello', run it with 'pinplay-driver.so -log' to 
+create a pinball, and run 'pinplay-driver.so -replay' 
+and 'pinplay-branch-predictor.so -replay' 
+to run off the pinball. 
+*******************************************************
+
+To make your Pin tool PinPlay-enabled, you need to modify 
+your tool's main() and link in libpinplay.a, libbz2.a, 
+and libzlib.a.
+
+Pre-requisites:
+ * Your Pin tool should not try to change control flow 
+   of the program.
+ 
+Pintool source changes:
+==========================
+#include "pinplay.H"
+PINPLAY_ENGINE pinplay_engine;
+KNOB<BOOL> KnobPinPlayLogger(KNOB_MODE_WRITEONCE, 
+                      "pintool", "log", "0",
+                      "Activate the pinplay logger");
+KNOB<BOOL> KnobPinPlayReplayer(KNOB_MODE_WRITEONCE, 
+                      "pintool", "replay", "0",
+                      "Activate the pinplay replayer");
+
+main()
+{
+..
+pinplay_engine.Activate(argc, argv, 
+    KnobPinPlayLogger, KnobPinPlayReplayer);
+..
+}
+
+Pintool build changes:
+======================
+Set shell variable PIN_KIT to point to the root of 
+the Pin kit.
+
+makefile:
+--------
+PINPLAY_HOME=$(PIN_KIT)/extras/pinplay/
+PINPLAY_INCLUDE_HOME=$(PINPLAY_HOME)/include
+PINPLAY_LIB_HOME=$(PINPLAY_HOME)/lib/$(TARGET_LONG)
+EXT_LIB_HOME=$(PINPLAY_HOME)/lib-ext/$(TARGET_LONG)
+
+CXXFLAGS += -I$(PINPLAY_INCLUDE_HOME)
+
+
+linking: link in $(PINPLAY_LIB_HOME)/libpinplay.a, 
+    $(EXT_LIB_HOME)/libbz2.a, $(EXT_LIB_HOME)/libzlib.a, $(CONTROLLERLIB) 
+
+where:
+$(CONTROLLERLIB):
+	$(MAKE) -C $(TOOLS_ROOT)/InstLib dir $(OBJDIR)controller$(LIB_SUFFIX)
+
+  
+
+Pintool run command changes:
+============================
+
+ pintool + pinplay logger:
+ -------------------------
+
+   % pin -t your-tool.so -log -log:basename pinball/foo -- test-app
+
+ pintool + pinplay replayer:
+ ---------------------------
+   % pin -xyzzy -reserve_memory pinball/foo.address -t your-tool.so -replay -replay:basename pinball/foo -- $PIN_KIT/extrans/pinplay/bin/intel64/nullapp  [for intel64 pinballs]
+
+   % pin -xyzzy -reserve_memory pinball/foo.address -t your-tool.so -replay -replay:basename pinball/foo -- $PIN_KIT/extrans/pinplay/bin/ia32/nullapp  [for ia32 pinballs]

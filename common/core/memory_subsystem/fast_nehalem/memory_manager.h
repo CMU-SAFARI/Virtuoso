@@ -1,0 +1,40 @@
+#ifndef __FAST_NEHALEM_H
+#define __FAST_NEHALEM_H
+
+#include "memory_manager_fast.h"
+#include "tlb.h"
+namespace FastNehalem
+{
+   class CacheBase
+   {
+   public:
+      virtual ~CacheBase() {}
+      virtual SubsecondTime access(Core::mem_op_t mem_op_type, IntPtr tag) = 0;
+   };
+
+   class MemoryManager : public MemoryManagerFast
+   {
+   private:
+      CacheBase *icache, *dcache, *l2cache;
+      static CacheBase *l3cache, *dram;
+
+   public:
+      MemoryManager(Core *core, Network *network, ShmemPerfModel *shmem_perf_model);
+      ~MemoryManager();
+
+      ParametricDramDirectoryMSI::TLB *getTLB() { return NULL; }
+      // ParametricDramDirectoryMSI::PageTableWalker* getPTW(){return NULL;}
+      NucaCache *getNucaCache() { return NULL; }
+      Cache *getCache(MemComponent::component_t mem_component) { return NULL; }
+      SubsecondTime coreInitiateMemoryAccessFast(
+          bool use_icache,
+          Core::mem_op_t mem_op_type,
+          IntPtr address)
+      {
+         IntPtr tag = address >> CACHE_LINE_BITS;
+         return (use_icache ? icache : dcache)->access(mem_op_type, tag);
+      }
+   };
+}
+
+#endif // __FAST_NEHALEM_H

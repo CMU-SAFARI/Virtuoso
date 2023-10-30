@@ -1,0 +1,42 @@
+#ifndef TLB_SUBSYSTEM_H
+#define TLB_SUBSYSTEM_H
+
+#include "tlb.h"
+#include "mmu.h"
+#include "tlb_prefetcher_base.h"
+#include "pagesize_predictor_base.h"
+
+namespace ParametricDramDirectoryMSI
+{
+
+	typedef std::vector<std::vector<TLB *>> TLBSubsystem;
+	class TLBHierarchy
+	{
+
+	private:
+		std::vector<std::vector<TLB *>> tlbLevels;
+		std::vector<std::vector<TLB *>> data_path;
+		std::vector<std::vector<TLB *>> instruction_path;
+		PageSizePredictorBase *page_size_predictor;
+		int numLevels;
+		int *page_size_list;
+		int page_sizes;
+		int numTLBsPerLevel;
+
+		std::vector<std::vector<ComponentLatency>> tlb_latencies;
+
+	public:
+		bool prefetch_enabled;
+		TLBHierarchy(String name, Core *core, MemoryManager *memory_manager, ShmemPerfModel *shmem_perf_model);
+		~TLBHierarchy();
+		TLBSubsystem getTLBSubsystem() { return tlbLevels; }
+		TLBSubsystem getDataPath() { return data_path; }
+		TLBSubsystem getInstructionPath() { return instruction_path; }
+		int getNumLevels() { return numLevels; }
+		int predictPagesize(IntPtr eip);
+		void predictionResult(IntPtr eip, bool success);
+	};
+
+}
+
+#endif

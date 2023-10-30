@@ -1,0 +1,27 @@
+#!/usr/bin/env python
+#
+# $Id: relog,v 1.1 2015/05/26 18:32:23 tmstall Exp tmstall $
+
+import sys
+import util
+"""
+@package runpy
+
+Add the file extension '.py' to the first argument (command to run) and execute
+the command line as a Python script.
+
+Ensure arguments which are quoted on the command line are also quoted when the
+command is run.
+"""
+
+cmd = sys.argv[0] + '.py'
+for arg in sys.argv[1:]:
+    # Quoted arguments on cmd line are in a single string in sys.argv.
+    # Thus length of list of words in this string will be > 1.
+    #
+    if len(arg.split()) > 1:
+        cmd += ' "%s" ' % (arg)
+    else:
+        cmd += ' %s ' % (arg)
+result = util.RunCmd(cmd, {}, '', print_time=False, print_cmd=False)
+sys.exit(result)

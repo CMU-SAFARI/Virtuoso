@@ -1,0 +1,35 @@
+import numpy as np
+import random
+from matplotlib import pyplot as plt
+import sys
+
+f1 = open(sys.argv[1]+"0")
+f2 = open(sys.argv[1]+"1")
+f3 = open(sys.argv[1]+"2")
+f4 = open(sys.argv[1]+"3")
+
+lines1 = f1.readlines()
+lines2 = f2.readlines()
+lines3 = f3.readlines()
+lines4 = f4.readlines()
+
+data = []
+bins = []
+
+last_non_zero = 0
+for i in range(0, len(lines1)):
+    bins.append(i)
+    val = int(lines1[i])+int(lines2[i])+int(lines3[i])+int(lines4[i])
+    data.append(val)
+    if val != 0:
+        last_non_zero = i
+
+print(data)
+print(last_non_zero)
+#plt.xlim([0, last_non_zero])
+
+plt.hist(data, bins=bins, alpha=0.5)
+plt.title('PTW Latency Heatmap')
+plt.ylabel('count')
+
+plt.show()

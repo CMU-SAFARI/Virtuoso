@@ -1,0 +1,108 @@
+DrDebug : Linux Command Line Usage
+[ See https://software.intel.com/en-us/articles/drdebug-linux-command-line-usage for the latest version of this document. ]
+
+
+A. Pre-requisites
+=================
+ GDB version 7.4 or higher
+ DrDebug kit (Linux)
+
+B. Setup 
+========
+tcsh/csh
+ setenv PIN_ROOT <path-to-DrDeubug-kit>
+ setenv PATH $PIN_ROOT/extras/pinplay/scripts/:$PATH
+bash/sh
+ export PIN_ROOT=<path-to-DrDeubug-kit>
+ export PATH=$PIN_ROOT/extras/pinplay/scripts/:$PATH
+
+Using DrDebug requires following two phases 
+1. recording and 
+2. replaying.
+
+Phase I: Recording
+================== 
+CAUTION: Recording causes a major (triple digit) slow-down, so it is highly recommended that you narrow down the execution region where the bug appears (both 'root cause' and 'symptom') and only record the 'buggy region'. Best alternative is to use 'gdb_record' to first go to the beginning of your region of interest and then turn on recording. Using the 'attach' mode (either 'record' or 'gdb_record') is another good alternative. You can also specify a region to 'record' using some 'controller switches' (e.g. '-log:start_address'/'-log:stop_address' etc.). (More documentation available in the online version of this document: https://software.intel.com/en-us/articles/drdebug-linux-command-line-usage) 
+
+With GDB
+--------
+Script to use: gdb_record
+
+% gdb_record --help
+Usage : gdb_record <options>  -- bin args
+OR gdb_record --pid=XXXX <options> -- bin #no args
+options:Type 'gdb_record --help' for a full list of options.  
+
+Example:
+% gdb_record --pinball=region.pb/log -- bread-demo
+(gdb) b 113
+Breakpoint 1 at 0x401908: file bread-demo.cpp, line 113.
+(gdb) c
+Continuing.
+Breakpoint 1, main (argc=1, argv=0x7fffffffd5b8) at bread-demo. cpp:113 
+113         Go = true;
+(gdb) pin record on 
+monitor record on
+Started recording region number 0
+(gdb) b 149
+Breakpoint 2 at 0x401b67: file bread-demo.cpp, line 149.
+(gdb) c
+Continuing.
+Breakpoint 2, main (argc=1, argv=0x7fffffffd5b8) at bread-demo.cpp:149 
+149         std::cout << "\n";
+(gdb) pin record off 
+monitor record off
+Stopped recording region number 0.
+ Move forward before turning recording on again.
+(gdb) c
+Continuing.
+
+From command line (without GDB)
+-------------------------------
+
+Script to use: record
+
+% record --help
+Usage : record <options> -- bin args
+OR record --pid=XXXX <options> -- bin #no args
+options:Type 'record --help' for a full list of options. 
+
+Example:
+% record --pinball=myregion.pb/log --pintool_options="-log:start_address 0x401908 -log:stop_address 0x401b67" -- bread-demo
+
+Phase II: Replaying
+=================== 
+
+With GDB
+--------
+
+Script to use: gdb_replay
+
+% gdb_replay --help
+Usage : gdb_replay <options>  -- pinball-basename program-binary
+options:Type 'gdb_replay --help' for a full list of options. 
+
+Example:
+% gdb_replay -- region.pb/log_0 bread-demo
+(gdb) b 141
+Breakpoint 1 at 0x401ae3: file bread-demo.cpp, line 141.
+(gdb) c
+Continuing.
+ Breakpoint 1, main (argc=1, argv=0x7fffffffd5b8) at bread-demo.cpp:141 
+141         std::cout << "Total revenue: $" << std::setprecision(2) << std::fix
+ed << revenue;
+(gdb) print revenue
+$1 = 21975.129998207092
+(gdb) c
+Continuing.
+
+From command line (without GDB)
+-------------------------------
+Script to use: replay
+
+% replay --help 
+Usage : replay <options> -- pinball-basename
+options:Type 'replay --help' for a full list of options.
+
+Example:
+% replay -- myregion.pb/log_0

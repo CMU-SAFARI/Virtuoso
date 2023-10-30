@@ -1,0 +1,135 @@
+#pragma once
+
+#include "simulator.h"
+#include "itostr.h"
+
+#include <cstring>
+#include <sqlite3.h>
+#include <iostream>
+class StatsMetricBase
+{
+   public:
+      String objectName;
+      UInt32 index;
+      String metricName;
+      bool special;
+      StatsMetricBase(String _objectName, UInt32 _index, String _metricName, bool _special = false) :
+         objectName(_objectName), index(_index), metricName(_metricName), special(_special)
+      {
+         //if(special)
+            //std::cout<<"REGISTERED SPECIAL METRIC KOSTAAAAAAAAAAAAA"<<std::endl;
+      }
+      virtual ~StatsMetricBase() {}
+      virtual UInt64 recordMetric() = 0;
+      virtual bool isDefault() { return false; } // Return true when value hasn't changed from its initialization value
+      bool isSpecial() { return special; }
+      virtual void* getRawMetric() const { return NULL; }
+};
+
+template <class T> UInt64 makeStatsValue(T t);
+
+template <class T> class StatsMetric : public StatsMetricBase
+{
+   public:
+      T *metric;
+      StatsMetric(String _objectName, UInt32 _index, String _metricName, T *_metric, bool _special) :
+         StatsMetricBase(_objectName, _index, _metricName, _special), metric(_metric)
+      {
+            if(special)
+               std::cout<<"Registered special metric: "<<_metricName<<std::endl;
+      }
+      virtual UInt64 recordMetric()
+      {
+         return makeStatsValue<T>(*metric);
+      }
+      virtual bool isDefault()
+      {
+         return recordMetric() == 0;
+      }
+
+      virtual void* getRawMetric() const
+      {
+         return metric;
+      }
+};
+
+typedef UInt64 (*StatsCallback)(String objectName, UInt32 index, String metricName, UInt64 arg);
+class StatsMetricCallback : public StatsMetricBase
+{
+   public:
+      StatsCallback func;
+      UInt64 arg;
+      StatsMetricCallback(String _objectName, UInt32 _index, String _metricName, StatsCallback _func, UInt64 _arg) :
+         StatsMetricBase(_objectName, _index, _metricName), func(_func), arg(_arg)
+      {}
+      virtual UInt64 recordMetric()
+      {
+         return func(objectName, index, metricName, arg);
+      }
+};
+
+
+class StatsManager
+{
+   public:
+      // Event type                 core              thread            arg0           arg1              description
+      typedef enum {
+         EVENT_MARKER = 1,       // calling core      calling thread    magic arg0     magic arg1        str (SimMarker/SimNamedMarker)
+         EVENT_THREAD_NAME,      // calling core      calling thread    0              0                 thread name (SimSetThreadName)
+         EVENT_APP_START,        // -1                -1                app id         0                 ""
+         EVENT_APP_EXIT,         // -1                -1                app id         0                 ""
+         EVENT_THREAD_CREATE,    // initial core      created thread    app id         creator thread    ""
+         EVENT_THREAD_EXIT,      // current core      exiting thread    0              0                 ""
+      } event_type_t;
+
+      StatsManager();
+      ~StatsManager();
+      void init();
+      void recordStats(String prefix);
+      void registerMetric(StatsMetricBase *metric);
+      StatsMetricBase *getMetricObject(String objectName, UInt32 index, String metricName);
+      void logTopology(String component, core_id_t core_id, core_id_t master_id);
+      void logMarker(SubsecondTime time, core_id_t core_id, thread_id_t thread_id, UInt64 value0, UInt64 value1, const char * description)
+      { logEvent(EVENT_MARKER, time, core_id, thread_id, value0, value1, description); }
+      void logEvent(event_type_t event, SubsecondTime time, core_id_t core_id, thread_id_t thread_id, UInt64 value0, UInt64 value1, const char * description);
+
+   private:
+      UInt64 m_keyid;
+      UInt64 m_prefixnum;
+
+      sqlite3 *m_db;
+      sqlite3_stmt *m_stmt_insert_name;
+      sqlite3_stmt *m_stmt_insert_prefix;
+      sqlite3_stmt *m_stmt_insert_value;
+
+      // Use std::string here because String (__versa_string) does not provide a hash function for STL containers with gcc < 4.6
+      typedef std::unordered_map<UInt64, StatsMetricBase *> StatsIndexList;
+      typedef std::pair<UInt64, StatsIndexList> StatsMetricWithKey;
+      typedef std::unordered_map<std::string, StatsMetricWithKey> StatsMetricList;
+      typedef std::unordered_map<std::string, StatsMetricList> StatsObjectList;
+      StatsObjectList m_objects;
+
+      static int __busy_handler(void* self, int count) { return ((StatsManager*)self)->busy_handler(count); }
+      int busy_handler(int count);
+
+      void recordMetricName(UInt64 keyId, std::string objectName, std::string metricName);
+};
+
+template <class T> void registerStatsMetric(String objectName, UInt32 index, String metricName, T *metric, bool special = false)
+{
+   Sim()->getStatsManager()->registerMetric(new StatsMetric<T>(objectName, index, metricName, metric, special));
+}
+
+
+class StatHist {
+  private:
+    static const int HIST_MAX = 20;
+    unsigned long n, s, s2, min, max;
+    unsigned long hist[HIST_MAX];
+    char dummy[64];
+  public:
+    StatHist() : n(0), s(0), s2(0), min(0), max(0) { bzero(hist, sizeof(hist)); }
+    StatHist & operator += (StatHist & stat);
+    void update(unsigned long v);
+    void print();
+};

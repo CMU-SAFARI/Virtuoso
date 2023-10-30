@@ -1,0 +1,18 @@
+[SNIPER] Warning: Unable to use physical addresses for shared memory simulation.
+[SNIPER] Start
+[MMU:UTR] Heuristic primary 3
+[MMU:UTR] Heuristic secondary 2
+[MMU:UTR] TLB threshold: 2
+[MMU:UTR] PTE threshold: 2
+[MMU] Creating UTR with sets : 65536 - page_size: 12 - assoc: 16
+[MMU:UTR:CoreID-0]Permission base: 0x5d33d80 Size(KB): 32
+[MMU:UTR:CoreID-0] Tag Base: 0x7ffff7ed2010
+[MMU:UTR:CoreID-0] Metadata Tag Size (KB): 128
+[MMU] Creating UTR with sets : 256 - page_size: 21 - assoc: 8
+[MMU:UTR:CoreID-0]Permission base: 0x5d6eef0 Size(KB): 0
+[MMU:UTR:CoreID-0] Tag Base: 0x5d6ef60
+[MMU:UTR:CoreID-0] Metadata Tag Size (KB): 0
+Supporting 2page sizes: 12, 21, [MMU:UTOPIA]Instantiating uperm with sets: 32
+[MMU:UTOPIA]Instantiating utag with sets: 32
+Registered special metric: ptw_latency_heatmap
+Opening output for thread: 0
