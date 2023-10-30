@@ -1,5 +1,7 @@
 # Virtuoso: An Open-Source, Comprehensive and Modular Simulation Framework for Virtual Memory Research
 
+
+This is an alpha versiom
 **Structure of the repo:**
 
 1. **Software Requirements**
@@ -43,6 +45,7 @@ su - $USER
 ## New components and techniques supported by Virtuoso
 
 
+[](https://github.com/CMU-SAFARI/Virtuoso/blob/main/virtuoso_components.png)https://github.com/CMU-SAFARI/Virtuoso/blob/main/virtuoso_components.png)
 
 
 
