@@ -44,8 +44,14 @@ Virtuoso is built on top of Sniper but can be plugged to multiple simulators. We
 
 ## New components and techniques supported by Virtuoso
 
-
 ![Overview](https://github.com/CMU-SAFARI/Virtuoso/blob/main/virtuoso_components.png)
+
+
+
+## Contact 
+
+Konstantinos Kanellopoulos <konkanello@gmail.com>  
+Konstantinos Sgouras <sgouraskon@gmail.com>
 
 
 
