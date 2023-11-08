@@ -95,14 +95,16 @@ namespace ParametricDramDirectoryMSI
 #endif
 			if (current_frame->entries[offset].is_pte)
 			{
-				if (count)
-					stats.page_size_discovery[level - 1]++;
+
 				if (current_frame->entries[offset].data.translation.valid == false)
 				{
 					page_fault_result = handlePageFault(address, count);
 					is_pagefault = true;
 					goto restart_walk;
 				}
+				if (count)
+					stats.page_size_discovery[level - 1]++;
+
 				ppn_result = current_frame->entries[offset].data.translation.ppn;
 				page_size_result = m_page_size_list[level - 1];
 				break;
