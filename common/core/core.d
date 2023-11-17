@@ -1,8 +1,4 @@
-/home/kanellok/hetra/virtuoso/common/core/memory_subsystem/fast_nehalem/memory_manager.o /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/fast_nehalem/memory_manager.d: $(wildcard \
- /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/fast_nehalem/memory_manager.cc \
- /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/fast_nehalem/memory_manager.h \
- /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/memory_manager_fast.h \
- /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/memory_manager_base.h \
+/home/kanellok/hetra/virtuoso/common/core/core.o /home/kanellok/hetra/virtuoso/common/core/core.d: $(wildcard /home/kanellok/hetra/virtuoso/common/core/core.cc \
  /home/kanellok/hetra/virtuoso/common/core/core.h \
  /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/mem_component.h \
  /home/kanellok/hetra/virtuoso/common/misc/fixed_types.h \
@@ -21,6 +17,10 @@
  /home/kanellok/hetra/virtuoso/common/misc/cond.h \
  /home/kanellok/hetra/virtuoso/common/transport/transport.h \
  /home/kanellok/hetra/virtuoso/common/network/network_model.h \
+ /home/kanellok/hetra/virtuoso/common/core/syscall_model.h \
+ /home/kanellok/hetra/virtuoso/common/performance_model/branch_predictor.h \
+ /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/memory_manager_base.h \
+ /home/kanellok/hetra/virtuoso/common/core/core.h \
  /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/mem_component.h \
  /home/kanellok/hetra/virtuoso/common/performance_model/performance_model.h \
  /home/kanellok/hetra/virtuoso/common/misc/mt_circular_queue.h \
@@ -65,4 +65,18 @@
  /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/cache/req_queue_list_template.h \
  /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/pr_l1_pr_l2_dram_directory_msi/shmem_perf.h \
  /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/parametric_dram_directory_msi/utopia_cache_template.h \
- /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/fast_nehalem/fast_cache.h)
+ /home/kanellok/hetra/virtuoso/common/performance_model/instruction.h \
+ /home/kanellok/hetra/virtuoso/common/performance_model/operand.h \
+ /home/kanellok/hetra/virtuoso/common/system/core_manager.h \
+ /home/kanellok/hetra/virtuoso/common/misc/tls.h \
+ /home/kanellok/hetra/virtuoso/common/system/dvfs_manager.h \
+ /home/kanellok/hetra/virtuoso/common/system/hooks_manager.h \
+ /home/kanellok/hetra/virtuoso/common/system/thread_manager.h \
+ /home/kanellok/hetra/virtuoso/common/trace_frontend/trace_manager.h \
+ /home/kanellok/hetra/virtuoso/common/misc/_thread.h \
+ /home/kanellok/hetra/virtuoso/common/config/config.hpp \
+ /home/kanellok/hetra/virtuoso/common/config/key.hpp \
+ /home/kanellok/hetra/virtuoso/common/config/section.hpp \
+ /home/kanellok/hetra/virtuoso/common/config/config_exceptions.hpp \
+ /home/kanellok/hetra/virtuoso/common/core/topology_info.h \
+ /home/kanellok/hetra/virtuoso/common/core/memory_subsystem/cheetah/cheetah_manager.h)
