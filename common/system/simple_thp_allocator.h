@@ -20,6 +20,7 @@ public:
     UInt64 getFreePages() const;
     UInt64 getTotalPages() const;
     double getAverageSizeRatio() const;
+    double getLargePageRatio() const;
     double getFragmentationPercentage() const;
 
     void perform_init_file(String input_file_name);

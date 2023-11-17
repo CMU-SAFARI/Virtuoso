@@ -22,7 +22,7 @@ SimpleTHPAllocator::SimpleTHPAllocator(int max_order) : m_max_order(max_order)
 {
 	for (int i = 0; i < m_max_order + 1; i++)
 	{
-		std::vector<std::tuple<UInt64, UInt64, bool, UInt64>> vec;
+		std::vector<std::tuple<UInt64, UInt64, bool, UInt64>> vec; // Block start, Block end
 		free_list.push_back(vec);
 	}
 	init();
@@ -49,6 +49,7 @@ void SimpleTHPAllocator::init()
 	UInt64 current_free = 0;
 
 	std::cout << "[VirtuOS:SimpleTHP] 4KB pages in memory: " << total_mem_in_pages << std::endl;
+	std::cout << "[VirtuOS:SimpleTHP] 2MB pages in memory: " << total_mem_in_pages / 512 << std::endl;
 
 	while (current_free < total_mem_in_pages)
 	{
@@ -143,8 +144,11 @@ UInt64 SimpleTHPAllocator::allocate(UInt64 bytes, UInt64 address, UInt64 core_id
 				}
 				if (i == m_max_order + 1)
 				{
+#ifdef DEBUG_SIMPLE_THP
+
 					std::cout << "[VirtuOS:SimpleTHP] No free 2MB region and no free blocks to demote - we need to go for 4KB page" << std::endl;
 					allocate_4KB = true;
+#endif
 				}
 				else
 				{
@@ -186,6 +190,10 @@ UInt64 SimpleTHPAllocator::allocate(UInt64 bytes, UInt64 address, UInt64 core_id
 
 				if (allocate_4KB)
 				{
+#ifdef DEBUG_SIMPLE_THP
+					std::cout << "[VirtuOS:SimpleTHP] No free 2MB region and no free blocks to demote - we need to go for smaller page size" << std::endl;
+#endif
+
 					int i;
 					int ind = 0;
 					for (i = ind; i <= m_max_order; i++)
@@ -241,7 +249,14 @@ UInt64 SimpleTHPAllocator::allocate(UInt64 bytes, UInt64 address, UInt64 core_id
 	{
 		int i;
 
-		int ind = ceil(log(bytes) / log(2));
+		// find the order of the allocation
+
+		int ind = ceil(log2(bytes / 4096));
+
+#ifdef DEBUG_SIMPLE_THP
+		std::cout << "[VirtuOS:SimpleTHP] Order of allocation: " << ind << " for " << bytes << " bytes" << std::endl;
+#endif
+
 		for (i = ind; i <= m_max_order; i++)
 		{
 			if (free_list[i].size() != 0)
@@ -381,11 +396,15 @@ void SimpleTHPAllocator::deallocate(UInt64 region_begin)
 {
 	if (allocated_map.find(region_begin) == allocated_map.end())
 	{
-		// std::cout<<"[ERROR] FAILED TO FIND A SimpleTHP TO DEALLOCATE AT RANGE "<<region_begin<<std::endl;
 		return;
 	}
 
-	int ind = ceil(log(allocated_map[region_begin]) / log(2));
+	int ind = ceil(log2(allocated_map[region_begin]));
+
+#ifdef DEBUG_SIMPLE_THP
+	std::cout << "[VirtuOS:SimpleTHP] Deallocating " << allocated_map[region_begin] << " pages at address: " << region_begin << std::endl;
+#endif
+
 	int i, SimpleTHPNumber, SimpleTHPAddress;
 
 	free_list[ind].push_back(std::make_tuple(region_begin, region_begin + pow(2, ind) - 1, false, -1));
@@ -451,18 +470,6 @@ void SimpleTHPAllocator::deallocate(UInt64 region_begin)
 
 void SimpleTHPAllocator::print_allocator()
 {
-	// std::cout << "Printing SimpleTHP data structures" << std::endl;
-	// std::cout << "Max order: " << m_max_order << std::endl;
-	// std::cout << "Free List:" << std::endl;
-	// for (int i = 0; i < m_max_order + 1; i++)
-	// {
-	// 	std::cout << "Order[" << i << "]" << std::endl;
-	// 	for (int j = 0; j < free_list[i].size(); j++)
-	// 		std::cout << free_list[i][j].first << " - " << free_list[i][j].second << std::endl;
-	// }
-
-	// std::cout << "Fragmentation?" << std::endl;
-	// std::cout << getFragmentationPercentage() << std::endl;
 }
 
 UInt64 SimpleTHPAllocator::getFreePages() const
@@ -504,64 +511,27 @@ double SimpleTHPAllocator::getAverageSizeRatio() const
 	return averageSize / (m_total_pages / 1000);
 }
 
-// void SimpleTHPAllocator::perform_init_file(String input_file_name)
-// {
-// 	std::ifstream file(input_file_name.c_str());
-// 	std::string line;
-// 	double frag = 0;
+double SimpleTHPAllocator::getLargePageRatio() const
+{
+	int numberOfLargePages = 0;
 
-// 	// Read Max Order, Total Pages, Free Pages
-// 	std::getline(file, line);
-// 	m_max_order = std::stoi(line);
+	// Collect number of 2MB pages based on the free list
+	for (const auto &list : free_list)
+	{
+		for (const auto &block : list)
+		{
+			if ((get<1>(block) - get<0>(block) + 1) >= 512)
+			{
+				numberOfLargePages += (get<1>(block) - get<0>(block) + 1) / 512;
+			}
+		}
+	}
+	std::cout << "Remaining 2MB pages: " << numberOfLargePages << std::endl;
 
-// 	std::getline(file, line);
-// 	m_total_pages = std::stoi(line);
-
-// 	std::getline(file, line);
-// 	m_free_pages = std::stoi(line);
-
-// 	// TODO add check if order is the same in the file and in the allocator
-// 	for (int p = 0; p < free_list.size(); p++)
-// 	{
-// 		std::getline(file, line);
-// 		// std::cout<<"Reading "<<line<<std::endl;
-// 		UInt64 i = std::stoi(line);
-// 		free_list[i].clear();
-
-// 		std::getline(file, line);
-// 		// std::cout<<"Reading "<<line<<std::endl;
-// 		UInt64 size = std::stoi(line);
-// 		for (int j = 0; j < size; j++)
-// 		{
-// 			std::getline(file, line);
-// 			UInt64 first = std::stoi(line);
-// 			// std::cout<<"Reading "<<line<<std::endl;
-
-// 			std::getline(file, line);
-// 			UInt64 second = std::stoi(line);
-// 			// std::cout<<"Reading "<<line<<std::endl;
-
-// 			auto pair = std::make_pair(first, second);
-// 			free_list[i].push_back(pair);
-// 		}
-// 	}
-
-// 	std::getline(file, line);
-// 	UInt64 size = std::stoi(line);
-// 	// std::cout<<"Read size for allocated list "<<size<<std::endl;
-// 	allocated_map.clear();
-// 	for (int i = 0; i < size; i++)
-// 	{
-// 		std::getline(file, line);
-// 		UInt64 first = std::stoi(line);
-
-// 		std::getline(file, line);
-// 		UInt64 second = std::stoi(line);
-
-// 		allocated_map[first] = second;
-// 		// std::cout<<"Added "<<first<<" and "<<second<<std::endl;
-// 	}
-// }
+	// calculate the ratio of available large pages to the total number of 2MB pages
+	double largePageRatio = (double)numberOfLargePages / (m_total_pages / 512);
+	return largePageRatio;
+}
 
 void SimpleTHPAllocator::perform_init_random(double target_fragmentation, double target_memory_percent, bool store_in_file)
 {
@@ -571,49 +541,86 @@ void SimpleTHPAllocator::perform_init_random(double target_fragmentation, double
 	std::vector<UInt64> used_pages;
 	UInt64 chunk = 1;
 	std::mt19937 gen(std::random_device{}()); // For generating random numbers
-	std::uniform_int_distribution<UInt64> dist(1, m_max_order);
+	std::uniform_int_distribution<UInt64> dist(0, m_max_order - 4);
 
 	int counter = 0;
 	while (getFreePages() > m_total_pages * (1.0 - target_memory_percent))
 	{
-		UInt64 randomSize = std::pow(2, dist(gen));
+		UInt64 randomSize = std::pow(2, dist(gen)) * 4096;
 		used_pages.push_back(allocate(randomSize));
-		// std::cout << "[Artificial Fragmentation Generator] Allocated: " << randomSize << " pages at " << used_pages[counter] << std::endl;
+#ifdef DEBUG_SIMPLE_THP
+		std::cout << "[Artificial Fragmentation Generator] Allocated: " << randomSize << " pages with new fragmentation: " << getLargePageRatio() << std::endl;
+#endif
 		counter++;
 	}
 
-	// 	int declining_frag = 0;
-	// 	bool prev_declining = false;
+	std::cout << "[Artificial Fragmentation Generator] This amount of memory is left: " << (double)(getFreePages() * 1.0 / m_total_pages * 1.0) << std::endl;
 
-	// 	double current_fragmentation = getAverageSizeRatio();
-	// 	double prev_fragmentation = 1;
+	int declining_frag = 0;
+	bool prev_declining = false;
 
-	// 	while (getAverageSizeRatio() > target_fragmentation)
-	// 	{
-	// 		// Randomly decide whether to allocate or deallocate
-	// 		bool isAllocate = (gen() % 2 == 0);
+	double current_fragmentation = getLargePageRatio();
+	double prev_fragmentation = 1;
+#ifdef DEBUG_SIMPLE_THP
+	std::cout << "[Artificial Fragmentation Generator] Current fragmentation: " << current_fragmentation << std::endl;
+#endif
+	bool randomized_fragmentation = false;
+	bool cherry_pick_two_mb = false;
+	while (current_fragmentation > target_fragmentation)
+	{
+		if (randomized_fragmentation)
+		{
+			// Randomly decide whether to allocate or deallocate
+			bool isAllocate = (gen() % 2 == 0);
 
-	// 		if (isAllocate)
-	// 		{
-	// 			UInt64 randomSize = std::pow(2, dist(gen));
-	// 			allocate(randomSize);
-	// 			// std::cout << "[Artificial Fragmentation Generator] Allocated: " << randomSize << " pages" << std::endl;
-	// 		}
-	// 		else
-	// 		{
-	// 			if (!allocated_map.empty())
-	// 			{
-	// 				UInt64 randomAddress = allocated_map.begin()->first;
-	// 				deallocate(randomAddress);
-	// 				// std::cout << "[Artificial Fragmentation Generator] Deallocated: " << randomAddress << std::endl;
-	// 			}
-	// 		}
-	// #ifdef DEBUG_SIMPLE_THP
-	// 		std::cout << "[Artificial Fragmentation Generator] Current fragmentation: " << getAverageSizeRatio() << std::endl;
-	// #endif
-	// 		current_fragmentation = getAverageSizeRatio();
-	// 	}
+			if (isAllocate)
+			{
+				UInt64 randomSize = std::pow(2, dist(gen)) * 4096;
+				allocate(randomSize);
+				// std::cout << "[Artificial Fragmentation Generator] Allocated: " << randomSize << " pages" << std::endl;
+			}
+			else
+			{
+				if (!allocated_map.empty())
+				{
+					UInt64 randomAddress = allocated_map.begin()->first;
+					deallocate(randomAddress);
+					// std::cout << "[Artificial Fragmentation Generator] Deallocated: " << randomAddress << std::endl;
+				}
+			}
+		}
+		else
+		{
 
+			// Check if there is any large page to demote
+			bool found = false;
+			for (int i = 9; i <= m_max_order; i++)
+			{
+				if (free_list[i].size() > 0)
+				{
+					found = true;
+					std::tuple<UInt64, UInt64, bool, UInt64> temp = free_list[i][0];
+					free_list[i].erase(free_list[i].begin());
+
+					UInt64 start = get<0>(temp);
+					UInt64 end = get<1>(temp);
+					UInt64 size = end - start + 1;
+					UInt64 chunk = size / 256;
+					for (int j = 0; j < chunk; i++)
+					{
+						free_list[8].push_back(std::make_tuple(start + i * 256, start + (i + 1) * 256 - 1, false, -1));
+						assert(get<0>(free_list[8].back()) == start + i * 256);
+					}
+				}
+			}
+			current_fragmentation = getLargePageRatio();
+
+#ifdef DEBUG_SIMPLE_THP
+			std::cout << "[Artificial Fragmentation Generator] Current fragmentation: " << current_fragmentation << std::endl;
+#endif
+		}
+	}
+	std::cout << "Initialized SimpleTHP with final fragmentation: " << current_fragmentation << "and this ratio of memory: " << (double)(getFreePages() * 1.0 / m_total_pages * 1.0) << std::endl;
 	// std::cout << " [Artificial Fragmentation Generator] Finished fragmenting with: " << current_fragmentation << ", " << current_fragmentation * m_total_pages / 1000 << " and " << m_free_pages << " / " << m_total_pages << " free pages " << std::endl;
 	// std::cout << "Saving to file...." << std::endl;
 	// if (store_in_file)
