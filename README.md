@@ -150,7 +150,7 @@ source reservethp.jobfile # This will run the experiments with Slurm
 
 - **Page Table Designs:**
     1. **Page Table Baseline:** Radix page table with configurable page sizes
-    2. **Range Table:** B++ Tree-like translation table for [virtual-to-physical address ranges] (https://scail.cs.wisc.edu/papers/isca15-rmm.pdf)
+    2. **Range Table:** B++ Tree-like translation table for [virtual-to-physical address ranges](https://scail.cs.wisc.edu/papers/isca15-rmm.pdf)
     3. **Hash Don't Cache:** [Open-addressing hash-based page table](https://dl.acm.org/doi/10.1145/2964791.2901456)
     4. **Conventional Hash-Based:** Chain-based hash table design
     5. **ECH:** [Cuckoo hashing-based organization of the page table](https://iacoma.cs.uiuc.edu/iacoma-papers/asplos20.pdf)
