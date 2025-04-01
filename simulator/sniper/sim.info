@@ -1,0 +1,60 @@
+{'cmdline': ['./run-sniper',
+             '-c',
+             './config/virtuoso_configs/virtuoso_baseline.cfg',
+             '--genstats',
+             '--',
+             'ls'],
+ 'git_revision': '',
+ 'host': 'kratos20',
+ 'pin_version': 'unknown',
+ 'rusage': (2.140235,
+            1.948633,
+            138608,
+            0,
+            0,
+            0,
+            38945,
+            592,
+            0,
+            348208,
+            39568,
+            0,
+            0,
+            0,
+            46585,
+            106),
+ 'snipercmd': ['bash',
+               '-c',
+               '/mnt/panzer/kanellok/Virtuoso/simulator/sniper/lib/sniper -c '
+               '/mnt/panzer/kanellok/Virtuoso/simulator/sniper/config/base.cfg '
+               '--general/total_cores=1 '
+               '--general/output_dir=/mnt/panzer/kanellok/Virtuoso/simulator/sniper '
+               '--config=/mnt/panzer/kanellok/Virtuoso/simulator/sniper/config/mmu_configs/mmu_base.cfg '
+               '--config=/mnt/panzer/kanellok/Virtuoso/simulator/sniper/config/pagetable_configs/4_level_radix.cfg '
+               '--config=/mnt/panzer/kanellok/Virtuoso/simulator/sniper/config/dram_configs/ddr4_2400.cfg '
+               '--config=/mnt/panzer/kanellok/Virtuoso/simulator/sniper/config/physical_memory_allocators/baseline_allocator.cfg '
+               '--config=/mnt/panzer/kanellok/Virtuoso/simulator/sniper/config/pagetable_configs/range_table.cfg '
+               '--config=/mnt/panzer/kanellok/Virtuoso/simulator/sniper/config/virtuoso_configs/virtuoso_baseline.cfg '
+               '-g --traceinput/stop_with_first_app=true -g '
+               '--traceinput/restart_apps=false -g '
+               '--traceinput/stop_with_first_app=false -g '
+               '--traceinput/enabled=true -g '
+               '--traceinput/emulate_syscalls=true -g --traceinput/num_apps=1 '
+               '-g --traceinput/trace_prefix=/tmp/tmpsi389hkq/run_benchmarks'],
+ 't_elapsed': 16.006317853927612,
+ 't_start': 1743522708.9180138,
+ 'tracecmds': [['/mnt/panzer/kanellok/Virtuoso/simulator/sniper/record-trace',
+                '-o',
+                '/tmp/tmpsi389hkq/run_benchmarks',
+                '-e',
+                '1',
+                '-s',
+                '0',
+                '-r',
+                '1',
+                '--follow',
+                '--routine-tracing',
+                '--',
+                'ls']],
+ 'user': 'kanellok',
+ 'vmem': 595120128}

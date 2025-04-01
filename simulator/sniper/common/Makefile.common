@@ -1,0 +1,102 @@
+SIM_ROOT ?= $(shell readlink -f "$(CURDIR)/../")
+
+include $(SIM_ROOT)/Makefile.config
+
+DIRECTORIES := ${shell find $(SIM_ROOT)/common -type d -print} \
+	$(SIM_ROOT)/include $(SIM_ROOT)/libtorch/include $(SIM_ROOT)/libtorch/include/torch/csrc/api/include
+
+LIBCARBON_SOURCES = $(foreach dir,$(DIRECTORIES),$(wildcard $(dir)/*.cc)) \
+	$(wildcard $(SIM_ROOT)/common/config/*.cpp)
+
+LIBCARBON_OBJECTS = $(patsubst %.cpp,%.o,$(patsubst %.c,%.o,$(patsubst %.cc,%.o,$(LIBCARBON_SOURCES) ) ) )
+
+INCLUDE_DIRECTORIES = $(DIRECTORIES) $(XED_HOME)/include/xed $(SIM_ROOT)/linux $(SIM_ROOT)/sift $(SIM_ROOT)/decoder_lib
+
+CLEAN=$(findstring clean,$(MAKECMDGOALS))
+
+ifeq ($(SNIPER_TARGET_ARCH),ia32)
+  # Add -march=i686 to enable some extra instructions that allow for implementation of 64-bit atomic adds
+  CXXFLAGS += -m32 -march=i686 -DTARGET_IA32
+  LD_FLAGS += -m32
+endif
+ifeq ($(SNIPER_TARGET_ARCH),intel64)
+  CXXFLAGS += -fPIC -DTARGET_INTEL64 -DTARGET_IA32E
+  LD_FLAGS +=
+endif
+
+CXXFLAGS += -DPIN_REV=$(shell $(SIM_ROOT)/tools/pinversion.py $(PIN_HOME) | cut -d. -f3)
+
+ifeq ($(BUILD_RISCV),0)
+CXXFLAGS += -DSNIPER_RISCV=0
+else
+CXXFLAGS += -DSNIPER_RISCV=1
+endif
+
+ifeq ($(BUILD_ARM),0)
+CXXFLAGS += -DSNIPER_ARM=0
+else
+CXXFLAGS += -DSNIPER_ARM=1
+endif
+
+include $(SIM_ROOT)/Makefile.config
+
+ifneq ($(BOOST_INCLUDE),)
+	CPPFLAGS += -I$(BOOST_INCLUDE)
+endif
+
+# Assuming python3 include dir is within the gcc search path
+PYTHON_LD_LIBS := $(shell python3-config --libs --embed)
+LD_LIBS += -ldecoder -lsift -lxed -lrt -lz -lsqlite3 -ltorch -ltorch_cpu -lc10 $(PYTHON_LD_LIBS)
+
+LD_FLAGS += -L$(SIM_ROOT)/lib -L$(SIM_ROOT)/decoder_lib/ -L$(SIM_ROOT)/sift -L$(XED_HOME)/lib -L$(SIM_ROOT)/libtorch/lib
+
+ifneq ($(SQLITE_PATH),)
+	CPPFLAGS += -I$(SQLITE_PATH)/include
+	LD_FLAGS += -L$(SQLITE_PATH)/lib
+endif
+
+export LD_LIBRARY_PATH := $(SIM_ROOT)/lib:$(LD_LIBRARY_PATH)
+
+# Include paths
+PYTHON_INCLUD_PATH := $(shell python3-config --includes)
+CPPFLAGS+=$(foreach dir,$(INCLUDE_DIRECTORIES),-I$(dir)) \
+	  $(PYTHON_INCLUD_PATH) \
+          -I$(SIM_ROOT)/capstone/include -I$(SIM_ROOT)/capstone/include/capstone 
+
+CXXFLAGS+=-c \
+          -Wall -Wextra -Wcast-align -Wno-unused-parameter -Wno-unknown-pragmas -std=c++20 -fno-strict-aliasing -D_GLIBCXX_USE_CXX11_ABI=0 $(OPT_CFLAGS) #-Werror
+#CXXFLAGS+=-I$(SIM_ROOT)/rv8/src
+#CXXFLAGS+=-I$(SIM_ROOT)/rv8
+
+%.h %.hh %.hpp:
+	@echo >&2
+	@echo "        Unable to find $@" >&2
+	@echo "        You may want to try running 'make empty_deps'" >&2
+	@echo >&2
+	@false
+
+# Build rules for dependency generation
+%.d: %.cpp
+	$(_MSG) '[DEP   ]' $(subst $(shell readlink -f $(SIM_ROOT))/,,$(shell readlink -f $@))
+	$(_CMD) $(CXX) -MM -MG $(CPPFLAGS) $(CXXFLAGS) $< | sed -n "H;$$ {g;s@.*:\(.*\)@$*.o $@: \$$\(wildcard\1\)@;p}" >$@
+
+%.d: %.cc
+	$(_MSG) '[DEP   ]' $(subst $(shell readlink -f $(SIM_ROOT))/,,$(shell readlink -f $@))
+	$(_CMD) $(CXX) -MM -MG $(CPPFLAGS) $(CXXFLAGS) $< | sed -n "H;$$ {g;s@.*:\(.*\)@$*.o $@: \$$\(wildcard\1\)@;p}" >$@
+
+%.d: %.c
+	$(_MSG) '[DEP   ]' $(subst $(shell readlink -f $(SIM_ROOT))/,,$(shell readlink -f $@))
+	$(_CMD) $(CC) -MM -MG $(CPPFLAGS) $(CFLAGS) $< | sed -n "H;$$ {g;s@.*:\(.*\)@$*.o $@: \$$\(wildcard\1\)@;p}" >$@
+
+# Build rules for object generation
+%.o: %.cpp
+	$(_MSG) '[CXX   ]' $(subst $(shell readlink -f $(SIM_ROOT))/,,$(shell readlink -f $@))
+	$(_CMD) $(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+
+%.o : %.cc
+	$(_MSG) '[CXX   ]' $(subst $(shell readlink -f $(SIM_ROOT))/,,$(shell readlink -f $@))
+	$(_CMD) $(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+
+%.o : %.c
+	$(_MSG) '[CC    ]' $(subst $(shell readlink -f $(SIM_ROOT))/,,$(shell readlink -f $@))
+	$(_CMD) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@

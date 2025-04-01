@@ -1,0 +1,75 @@
+sift/libsift.a
+
+
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+
+# Executables
+*.exe
+*.out
+*.app
+*.png
+*.csv
+*.pdf
+
+*.log
+
+# Ignore the directory "use_case_allocator"
+
+simulator/sniper/use_case_allocator/
+simulator/sniper/traces_sr/
+simulator/sniper/lib/
+simulator/sniper/aux_scripts/
+simulator/sniper/sde_kit/pinplay-tools
+simulator/sniper/sde_kit/
+simulator/sniper/xed_kit/
+simulator/sniper/xed/
+simulator/sniper/mbuild/
+simulator/sniper/validation/
+simulator/sniper/libtorch/
+simulator/sniper/results/
+simulator/sniper/tools/__pycache__/
+simulator/sniper/scripts/__pycache__/
+simulator/sniper/scripts/sim/__pycache__/
+simulator/sniper/sift/recorder/sift/*.cc
+simulator/sniper/sift/recorder/sift/*.h
+
+simulator/sniper/sift/recorder/sift/*.h
+simulator/sniper/sift/recorder/sift/*.cc
+
+lib/libcarbon_sim.a
+sift/libsift.a
+
+workloads/llama.cpp/models/mistral-7b-v0.1.Q2_K.gguf
+workloads/llama.cpp/models/llama-2-7b.gguf
+workloads/llama.cpp/models/ggml-bagel-2.8b-v0.2-f16.gguf
+workloads/llama.cpp/models/dolphin-2.9.3-mistral-nemo-12b-llamacppfixed.IQ3_M.gguf
+workloads/llama.cpp/perf.data
+workloads/graph_data_sets/graph500-scale23-ef16_adj/edge.csv
+workloads/graph_data_sets/CL-10M-1d8-L5/edge.csv

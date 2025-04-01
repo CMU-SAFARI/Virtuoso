@@ -1,0 +1,973 @@
+#!/usr/bin/env python3
+
+import sys, os, time, getopt, tempfile, subprocess, threading, platform, pprint, queue, shlex
+sys.path.append(os.path.join(os.path.dirname(__file__), 'tools'))
+import sniper_lib, sniper_config, gen_simout, debugpin, env_setup, run_sniper
+
+HOME = env_setup.sim_root()
+
+
+def usage():
+  print('Run program under the Sniper simulator')
+  print('Usage:')
+  print('  %s' % sys.argv[0] + \
+        '  [-n <ncores (1)>]' + \
+        '  [-d <outputdir (.)>]' + \
+        '  [-c <sniper-config>]' + \
+        '  [-c [objname:]<name[.cfg]>,<name2[.cfg]>,...]' + \
+        '  [-c <sniper-options: section/key=value>]' + \
+        '  [-s <script>]' + \
+        '  [--roi]' + \
+        '  [--roi-script]' + \
+        '  [--viz]' + \
+        '  [--viz-aso]' + \
+        '  [--profile]' + \
+        '  [--memory-profile]' + \
+        '  [--cheetah]' + \
+        '  [--perf]' + \
+        '  [--gdb]' + \
+        '  [--gdb-wait]' + \
+        '  [--gdb-quit]' + \
+        '  [--appdebug]' + \
+        '  [--appdebug-manual]' + \
+        '  [--appdebug-enable]' + \
+        '  [--follow-execv=1]' + \
+        '  [--power]' + \
+        '  [--cache-only]' + \
+        '  [--fast-forward]' + \
+        '  [--genstats]' + \
+        '  [--no-cache-warming]' + \
+        '  [--save-output]' + \
+        '  [--save-patch]' + \
+        '  [--pin-stats]' + \
+        '  [--wrap-sim=]' + \
+        '  [--sde-arch=]' + \
+        '  [--mpi [--mpi-ranks=<ranks>] [--mpi-exec="<mpiexec -mpiarg...>"] ]' + \
+        '  {--traces=<trace0>,<trace1>,... [--sim-end=<first|last|last-restart (default: first)>]' + \
+        '  |  --pinballs=<pinball-basename>,*' + \
+        '  |  --pid=<process-pid>' + \
+        '  |  [--sift]' + \
+        '  |  [--frontend=]' + \
+        '  -- <cmdline> }')
+  print()
+  print('Example: $ ./run-sniper -- /bin/ls')
+  print()
+  print('Note: To get started quickly with our integrated benchmarks distribution (supports SPLASH-2 and PARSEC 2.1),')
+  print(' see http://snipersim.org/w/Download_Benchmarks')
+  print()
+  sys.exit(2)
+
+standalone = False
+ncores = 1
+outputdir = '.'
+configfiles = []
+sniperoptions = []
+roi_only = False
+roi_script = False
+sim_end = 'first'
+sim_end_valid = ('first', 'last', 'last-restart')
+use_viz = False
+use_viz_profile = ''
+use_viz_aso = ''
+use_viz_mcpat = ''
+use_profile = False
+use_memory_profile = False
+use_cheetah = False
+use_perf = False
+use_wrap_sim = None
+use_gdb = False
+gdb_wait = False
+gdb_quit = False
+use_appdebug = False
+appdebug_manual = False
+appdebug_nowait = False
+follow_execv = False
+run_power = False
+save_output = False
+save_patch = False
+pin_stats = False
+curdir = os.getcwd()
+scripts = []
+use_mpi = False
+mpi_ranks = 0
+use_mpiexec = False
+mpiexec_cmd = None
+traces = []
+resptraces = []
+trace_manual = False
+heteroconfig = None
+pinballs = None
+pinball_sift = True
+pinplay_addrtrans = False
+use_sift = True
+frontend = None
+use_pid = None
+tracegen = None
+trace_extra_args = []
+verbose = False
+use_pa = True
+use_pinplay = False
+sde_arch = ''
+genstats = True
+
+if not sys.argv[1:]:
+  usage()
+
+
+def findfile(filename, extension, paths, subpaths = ('.')):
+  for dirname in paths:
+    for subpath in subpaths:
+      for ext in ('', extension):
+        fullname = os.path.realpath(os.path.join(dirname, subpath, filename + ext))
+        if os.path.exists(fullname):
+          return fullname
+  return False
+
+def findconfig(filename, extension = '.cfg'):
+  global curdir
+  return findfile(filename, extension, (curdir, os.path.join(HOME, 'config')))
+
+def findtrace(trace, suffix = '.sift'):
+  global curdir
+  dirnames = (curdir, os.getenv('BENCHMARKS_TRACES', '.'), os.getenv('BENCHMARKS_ROOT', '.'), os.getenv('BENCHMARKS_ROOT_ORIG', '.'))
+  return findfile(trace, suffix, dirnames, ('.', 'traces'))
+
+def findscript(script):
+  global curdir
+  return findfile(script, '.py', (curdir, os.path.join(HOME, 'scripts')))
+
+
+def add_config_file(filename, extension='.cfg'):
+  config_files = []
+  configfile = findconfig(filename, extension)
+  if not configfile:
+    print('Cannot find config file', filename, file=sys.stderr)
+    sys.exit(1)
+  # Handle #include
+  for line in open(configfile, 'r'):
+    if line.startswith('#include'):
+      config_files += add_config_file(line.split()[1], extension)
+  config_files.append(configfile)
+  return config_files
+
+def make_hetero_config(confignames, objname='core', extension='.cfg'):
+  configfiles = [findconfig(x) for x in confignames]
+  if not all(configfiles):
+    notfound = [ name for name, found in zip(confignames, configfiles) if not found ]
+    print('Config file not found:', ', '.join(notfound), file=sys.stderr)
+    sys.exit(1)
+  configfiledata = [open(x).read() for x in configfiles]
+  configs = list(map(sniper_config.parse_config, configfiledata))
+
+  # Generate a set of all config options
+  opts = set()
+  for config in configs:
+    for key in config.keys():
+      opts.add(key)
+
+  # Combine all of the heterogeneous configurations
+  newconfig = ''
+  newconfig += '# Generated from ' + ', '.join(set(configfiles)) + '\n'
+  for opt in opts:
+    title, _, key = opt.rpartition('/')
+    newconfig += '[%s]\n%s=' % (title,key)
+    heteroopts = []
+    for config in configs:
+      if opt in config:
+        heteroopts.append(config[opt])
+      else:
+        heteroopts.append('')
+    newconfig += ','.join(heteroopts)+'\n'
+
+  # Create initial tags for the heterogeneous configurations
+  # The tags are the basename without the extension.
+  # config/big.cfg with have the tag 'big'
+  tags = [os.path.splitext(os.path.split(x)[1])[0] for x in configfiles]
+  for tag in set(tags):
+    enabled = [(x == tag) and '1' or '0' for x in tags]
+    newconfig += '[tags/%s]\n' % objname
+    newconfig += '%s=%s\n' % (tag,','.join(enabled))
+
+  return newconfig
+
+def va2pa_valid():
+  # If the Linux version is 4.0 or greater, and we don't have the CAP_SYS_ADMIN capability (bit 21), report an error
+  process = subprocess.Popen("echo -n $(( $(uname -r | cut -d . -f 2) >= 4 && ((0x$(grep CapEff /proc/self/status | cut -f 2) >> 20) & 1) ))", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+  process.wait()
+  process.terminate()
+  if 0 == process.returncode:
+    return False
+  else:
+    return True
+
+record_trace_passthrough = [ 'pid-continue', 'stop-address=', 'frontend-option=', 'maxthreads=' ]
+
+try:
+  opts, cmdline = getopt.getopt(
+    sys.argv[1:],
+    "hvn:m:d:c:g:s:",
+    [
+      "roi", "roi-script",
+      "viz", "viz-aso",
+      "profile", "memory-profile", "cheetah",
+      "perf", "valgrind", "wrap-sim=",
+      "gdb", "gdb-wait", "gdb-quit",
+      "genstats",
+      "appdebug", "appdebug-manual", "appdebug-enable",
+      "follow-execv=",
+      "power",
+      "cache-only", "fast-forward", "no-cache-warming",
+      "save-output", "save-patch",
+      "curdir=",
+      "pin-stats",
+      "traces=", "response-traces=", "trace-manual", "trace-args=", "trace-pin-args=",
+      "sim-end=",
+      "mpi", "mpi-ranks=", "mpi-exec=",
+      "pinballs=", "pinball-non-sift", "pinplay-addr-trans",
+      "sift",
+      "pid=",
+      "frontend=",
+      "sde-arch=",
+      "record-trace-option=",
+    ] + record_trace_passthrough
+  )
+except getopt.GetoptError as e:
+  # print help information and exit:
+  print(e, file=sys.stderr)
+  usage()
+for o, a in opts:
+  if o == '-h':
+    usage()
+    sys.exit()
+  if o == '-v':
+    verbose = True
+  if o == '-n':
+    ncores = int(a)
+  if o == '-d':
+    outputdir = a
+  if o == '-c':
+    if '=' in a:
+      if not a.startswith('-'):
+        a = '--'+a
+      sniperoptions.append(shlex.quote(a))
+    elif ':' in a or ',' in a:
+      obj, _, cfg = a.rpartition(':')
+      if not obj:
+        obj = 'core'
+      heteroconfig = make_hetero_config(cfg.split(','), objname=obj)
+    else:
+      configfiles.extend(add_config_file(a))
+  if o == '-g':
+    if not a.startswith('-'):
+      a = '--'+a
+    sniperoptions.append(shlex.quote(a))
+  if o == '--roi':
+    roi_only = True
+  if o == '--roi-script':
+    roi_script = True
+  if o == '--sim-end':
+    if a not in sim_end_valid:
+      print('--sim-end value', a, 'invalid, need one of', sim_end_valid, file=sys.stderr)
+      sys.exit(1)
+    sim_end = a
+  if o == '-s':
+    scripts.append(a)
+  if o == '--viz':
+    use_viz = True
+  if o == '--viz-aso':
+    use_viz_aso = '--add-level=aso'
+  if o == '--profile':
+    use_profile = True
+    use_viz_profile = '--add-level=profile'
+  if o == '--memory-profile':
+    use_memory_profile = True
+  if o == '--cheetah':
+    use_cheetah = True
+    sniperoptions.append('-g --core/cheetah/enabled=true')
+  if o == '--perf':
+    use_perf = True
+  if o == '--valgrind':
+    use_wrap_sim = 'valgrind'
+  if o == '--wrap-sim':
+    use_wrap_sim = a
+  if o == '--gdb':
+    use_gdb = True
+  if o == '--gdb-wait':
+    use_gdb = True
+    gdb_wait = True
+  if o == '--gdb-quit':
+    use_gdb = True
+    gdb_wait = False
+    gdb_quit = True
+  if o == '--appdebug':
+    use_appdebug = True
+  if o == '--appdebug-manual':
+    use_appdebug = True
+    appdebug_manual = True
+  if o == '--appdebug-enable':
+    use_appdebug = True
+    appdebug_nowait = True
+  if o == '--follow-execv':
+    if a != '1':
+      # TODO: implement system where a path through an arbitrary execv() tree can be specified
+      print('Please use --follow-execv=1 to ensure future compatibility', file=sys.stderr)
+      sys.exit(-1)
+    follow_execv = True
+  if o == '--power':
+    run_power = True
+    use_viz_mcpat = '--mcpat'
+  if o == '--cache-only':
+    sniperoptions.append('-g --general/inst_mode_roi=cache_only')
+  if o == '--fast-forward':
+    sniperoptions.append('-g --general/inst_mode_init=fast_forward')
+    sniperoptions.append('-g --general/inst_mode_roi=fast_forward')
+  if o == '--no-cache-warming':
+    sniperoptions.append('-g --general/inst_mode_init=fast_forward')
+  if o == '--save-output':
+    save_output = True
+  if o == '--save-patch':
+    save_patch = True
+  if o == '--pin-stats':
+    pin_stats = True
+  if o == '--curdir':
+    curdir = a
+  if o == '--traces':
+    traces.extend(a.split(','))
+  if o == '--response-traces':
+    resptraces.extend(a.split(','))
+  if o == '--trace-manual':
+    trace_manual = True
+  if o == '--trace-args':
+    trace_extra_args.extend(['-X', a])
+  if o == '--trace-pin-args':
+    trace_extra_args.extend(['-x', a])
+  if o == '--record-trace-option':
+    trace_extra_args.extend([a])
+  if o == '--mpi':
+    use_mpi = True
+  if o == '--mpi-ranks':
+    mpi_ranks = int(a)
+  if o == '--mpi-exec':
+    use_mpi = True
+    mpiexec_cmd = a
+  if o == '--pinballs':
+    pinballs = a.split(',')
+  if o == '--pinball-non-sift':
+    pinball_sift = False
+  if o == '--pinplay-addr-trans':
+    pinplay_addrtrans = True
+  if o == '--sift':
+    use_sift = True
+  if o == '--pid':
+    use_pid = a
+    use_sift = True
+  if o == '--frontend':
+    frontend = a
+    use_sift = True
+  if o == '--sde-arch':
+    sde_arch = a
+  if o == '--genstats':
+    genstats = True
+  if o.startswith('--') and o[2:] in record_trace_passthrough:
+    trace_extra_args.append(o)
+  if o.startswith('--') and o[2:]+'=' in record_trace_passthrough:
+    trace_extra_args += [o, a]
+
+
+if cmdline:
+  if use_mpi or use_sift:
+    standalone = True
+  else:
+    standalone = False
+  if traces or trace_manual:
+    print('Cannot combine traces with running a benchmark', file=sys.stderr)
+    usage()
+  if pinballs:
+    print('Cannot combine pinball use with running a benchmark', file=sys.stderr)
+    usage()
+elif pinballs:
+  if len(pinballs) > 1 and not pinball_sift:
+    print('Cannot run multiple non-SIFT pinballs', file=sys.stderr)
+    usage()
+  if sim_end.endswith('-restart'):
+    print('Restart not supported in PinPlay mode', file=sys.stderr)
+    usage()
+  standalone = pinball_sift
+  if traces or trace_manual:
+    print('Cannot combine a pinball with tracing (--traces= or --trace-manual)', file=sys.stderr)
+    usage()
+  for idx, pinball in enumerate(pinballs[:]):
+    pinball_found = findtrace(pinball, suffix='.address')
+    if not pinball_found:
+      print('Unable to locate a pinball at (%s), make sure that (%s.address) exists.' % (pinball, pinball), file=sys.stderr)
+      usage()
+    else:
+      pinballs[idx] = pinball_found.rpartition('.')[0]
+else:
+  standalone = True
+  opt_count = 0
+  if traces:
+    opt_count+=1
+  if trace_manual:
+    opt_count+=1
+  if use_pid:
+    opt_count+=1
+  if opt_count == 0:
+    print('Need either a set of traces (--traces= or --trace-manual), a pinball, an application pid or a benchmark command line', file=sys.stderr)
+    usage()
+  if opt_count > 1:
+    print('Can only use one of --traces=, --trace-manual, --pid=  or --pinballs= when not using a command line argument', file=sys.stderr)
+    usage()
+
+if roi_only and roi_script:
+  print('Use either --roi or --roi-script but not both', file=sys.stderr)
+  sys.exit(-1)
+
+if standalone:
+  if use_appdebug:
+    print('--appdebug not supported in standalone mode', file=sys.stderr)
+    sys.exit(-1)
+  if use_wrap_sim and use_gdb:
+    print('Cannot use both --wrap-sim and --gdb at the same time [wrap-cmd="%(use_wrap_sim)s"]' % locals(), file=sys.stderr)
+    sys.exit(-1)
+  if follow_execv:
+    print('--follow-execv not supported in standalone mode', file=sys.stderr)
+    sys.exit(-1)
+else:
+  if use_wrap_sim:
+    print('--wrap-sim only supported in standalone mode [wrap-cmd="%(use_wrap_sim)s"]' % locals(), file=sys.stderr)
+    sys.exit(-1)
+  if follow_execv and use_gdb:
+    print('Cannot use both --follow-execv and --gdb at the same time', file=sys.stderr)
+    sys.exit(-1)
+
+if use_profile and use_memory_profile:
+  print('Cannot use both --profile and --memory-profile at the same time', file=sys.stderr)
+  sys.exit(-1)
+
+yama_ptrace_file = '/proc/sys/kernel/yama/ptrace_scope'
+if use_gdb and os.path.isfile(yama_ptrace_file):
+  y_pt = int(open(yama_ptrace_file).readline())
+  if y_pt != 0:
+    print('\nError: Unable to enable debugging via gdb when the yama ptrace_scope protection is enabled.', file=sys.stderr)
+    print(' Disable ptrace_scope by setting /proc/sys/kernel/yama/ptrace_scope to 0', file=sys.stderr)
+    print(' or by updating the value in /etc/sysctl.d/10-ptrace.conf.', file=sys.stderr)
+    print(' === GDB permission error ===\n', file=sys.stderr)
+    sys.exit(-1)
+
+outputdir = os.path.realpath(outputdir)
+if not os.path.exists(outputdir):
+  try:
+    os.makedirs(outputdir)
+  except OSError:
+    print('Failed to create output directory', outputdir, file=sys.stderr)
+    sys.exit(-1)
+
+if save_output:
+  prefix_fd = run_sniper.Tee(os.path.join(outputdir, 'sim.stdout'))
+  os.dup2(prefix_fd, sys.stdout.fileno())
+  os.dup2(prefix_fd, sys.stderr.fileno())
+
+if heteroconfig:
+  hcfgfile = os.path.join(outputdir,'sim.hetero.cfg')
+  fp = open(hcfgfile, 'w')
+  fp.write(heteroconfig)
+  fp.close()
+  configfiles.append(hcfgfile)
+
+if not configfiles:
+  # No config file(s) specified: prepend default Xeon X5550 Gainestown
+  configfiles = add_config_file('gainestown')
+  configfiles.extend(add_config_file('rob'))
+# Prepend config files to options, so -g options are always later on the command line and override config files
+sniperoptions = [ '--config=%s' % cfgfile for cfgfile in configfiles ] + sniperoptions
+
+if roi_only or use_mpi:
+  sniperoptions.append('-g --general/magic=true')
+if roi_script:
+  sniperoptions.append('-g --general/roi_script=true')
+
+if sim_end == 'first':
+  sniperoptions.append('-g --traceinput/stop_with_first_app=true')
+  sniperoptions.append('-g --traceinput/restart_apps=false')
+elif sim_end == 'last':
+  sniperoptions.append('-g --traceinput/stop_with_first_app=false')
+  sniperoptions.append('-g --traceinput/restart_apps=false')
+elif sim_end == 'last-restart':
+  sniperoptions.append('-g --traceinput/stop_with_first_app=false')
+  sniperoptions.append('-g --traceinput/restart_apps=true')
+
+if use_viz:
+  scripts.append('periodic-stats:1000:2000')
+  scripts.append('markers:markers')
+if use_viz_aso or use_profile:
+  sniperoptions.append('-g --instruction_tracer/type=fpstats')
+  sniperoptions.append('-g --routine_tracer/type=funcstats')
+if use_memory_profile:
+  sniperoptions.append('-g --routine_tracer/type=memory_tracker')
+
+if scripts:
+  scriptname = os.path.join(outputdir, 'sim.scripts.py')
+  scriptfileobj = open(scriptname, 'w')
+  # Generate a Python script that executes all user scripts with their arguments
+  scriptfileobj.write("""
+import sys
+from importlib import util
+def load_file_as_module(name, location):
+    sys.path.insert(0,location.rsplit('/', 1)[0])
+    spec = util.spec_from_file_location(name, location)
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+""")
+  for i, script in enumerate(scripts):
+    if ':' in script:
+      filename, args = script.split(':', 1)
+    else:
+      filename, args = script, ''
+    scriptfile = findscript(filename)
+    if not scriptfile:
+      print('Cannot find script file', filename, file=sys.stderr)
+      sys.exit(-1)
+    scriptfileobj.write('sys.argv = [ "%s", "%s" ]\n' % (scriptfile, args.replace('"', r'\"')))
+    scriptfileobj.write('load_file_as_module("%s","%s")\n\n' % (filename, scriptfile))
+  scriptfileobj.close()
+  # Pass our generated script as a single, argument-less script
+  sniperoptions.append('-g --hooks/numscripts=1')
+  sniperoptions.append('-g --hooks/script0name=%s' % scriptname)
+  sniperoptions.append('-g --hooks/script0args=')
+
+# If using traces via this front-end, support either multi-program workloads or a single multi-threaded application
+if traces:
+  sniperoptions.append('-g --traceinput/enabled=true')
+  if resptraces:
+    sniperoptions.append('-g --traceinput/emulate_syscalls=true')
+    sniperoptions.append('-g --traceinput/num_apps=1')
+  else:
+    sniperoptions.append('-g --traceinput/emulate_syscalls=false')
+    sniperoptions = ['-g --traceinput/mirror_output=true'] + sniperoptions # Stored traces: mirror output by default, overridable on command line
+    sniperoptions.append('-g --traceinput/num_apps=%u' % len(traces))
+  for thread_id, trace in enumerate(traces):
+    filename = findtrace(trace, suffix='.sift')
+    if filename:
+      print('[SNIPER] (%u) Using trace file %s' % (thread_id, filename))
+      sniperoptions.append('-g --traceinput/thread_%u=%s' % (thread_id, filename))
+    else:
+      print('Cannot find trace', trace, file=sys.stderr)
+      sys.exit(-1)
+  for thread_id, trace in enumerate(resptraces):
+    filename = findtrace(trace, suffix='.sift')
+    if filename:
+      print('[SNIPER] (%u) Using response-trace file %s' % (thread_id, filename))
+      sniperoptions.append('-g --traceinput/thread_response_%u=%s' % (thread_id, filename))
+    else:
+      print('Cannot find trace', trace, file=sys.stderr)
+      sys.exit(-1)
+elif use_mpi:
+  tracegen = {}
+  if not mpi_ranks:
+    mpi_ranks = ncores
+  tracegen['enabled'] = 'true'
+  tracegen['emulate_syscalls'] = 'true'
+  tracegen['num_apps'] = mpi_ranks
+  tracegen['redirect'] = False
+  sniperoptions.append('-g --traceinput/stop_with_first_app=false') # Only stop once all MPI ranks have completed
+  # Set trace recorder options
+  if mpiexec_cmd:
+    mpiexec = mpiexec_cmd.split(' ')
+  else:
+    mpiexec = ['mpiexec']
+  mpiexec.extend(['-np', str(mpi_ranks)])
+  # Set trace recorder options
+  other_options = []
+  if use_pa:
+    if va2pa_valid():
+      other_options += [ '--pa' ]
+    else:
+      # Only print a warning if we are attempting to use multiple ranks (apps) that could share memory.
+      if tracegen['num_apps'] > 1:
+        print('[SNIPER] Warning: Unable to use physical addresses for shared memory simulation.', file=sys.stderr)
+  applications = [
+    (mpiexec, other_options + [ roi_only and '--roi' or '--roi-mpi', '-e', '1', '-s', '-1', '-r', '1', '--follow', '--routine-tracing', '--' ] + cmdline)
+  ]
+elif pinballs and pinball_sift:
+  tracegen = {}
+  tracegen['enabled'] = 'true'
+  tracegen['emulate_syscalls'] = 'false'
+  tracegen['num_apps'] = len(pinballs)
+  tracegen['redirect'] = True
+  # Set trace recorder options
+  applications = []
+  for app_id, pinball in enumerate(pinballs):
+    applications.append(([], [ '-e', '0', '-s', str(app_id), '-r', '1', '--pinball', pinball, '--outputdir', outputdir ]))
+elif trace_manual:
+  # Let's not start a frontend if it is being handled manually
+  pass
+elif use_sift:
+  tracegen = {}
+  tracegen['enabled'] = 'true'
+  tracegen['emulate_syscalls'] = 'true'
+  tracegen['num_apps'] = 1
+  tracegen['redirect'] = False
+  sniperoptions.append('-g --traceinput/stop_with_first_app=false') # Only stop once all processes have completed
+  # Set trace recorder options
+  other_options = []
+  if roi_only:
+    other_options += [ '--roi' ]
+  if use_pid:
+    other_options += [ '--pid', use_pid ]
+  if use_pa:
+    if va2pa_valid():
+      other_options += [ '--pa' ]
+  applications = [
+    ([], other_options + ['-e', '1', '-s', '0', '-r', '1', '--follow', '--routine-tracing', '--' ] + cmdline)
+  ]
+
+# Setup common generated trace files
+tracecmds = []
+if tracegen:
+  tracegen['enabled'] = 'true'
+  sniperoptions.append('-g --traceinput/enabled=%s' % tracegen['enabled'])
+  sniperoptions.append('-g --traceinput/emulate_syscalls=%s' % tracegen['emulate_syscalls'])
+  sniperoptions.append('-g --traceinput/num_apps=%d' % tracegen['num_apps'])
+  tracegen['tracefiles_created'] = [] # FIFOs to be cleaned up
+  basefname = 'run_benchmarks'
+  tracegen['tracetempdir'] = tempfile.mkdtemp()
+  traceprefix = os.path.join(tracegen['tracetempdir'], basefname)
+  sniperoptions.append('-g --traceinput/trace_prefix=%s' % traceprefix)
+  # Create FIFOs for first thread of each application
+  for r in range(tracegen['num_apps']):
+    for f in ('','_response'):
+      filename = '%s%s.app%d.th%d.sift' % (traceprefix, f, r, 0)
+      os.mkfifo(filename)
+      tracegen['tracefiles_created'].append(filename)
+  # Start app(s) with trace recorder in a thread
+  def run_sift_recorder(tracecmd):
+    if verbose:
+      print('[SNIPER] Running', tracecmd)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    time.sleep(1)
+    subprocess.Popen(tracecmd).communicate()
+  if pinplay_addrtrans:
+    trace_extra_args += [ '--pinplay-addr-trans' ]
+  if frontend:
+    trace_extra_args += [ '--frontend=%(frontend)s' % locals()]
+  if sde_arch:
+    trace_extra_args += [ '--sde-arch=%(sde_arch)s' % locals() ]
+  for app_id, (pre_cmd, app_cmd) in enumerate(applications):
+    tracecmd = pre_cmd + [ os.path.join(HOME, 'record-trace'), '-o', traceprefix ] + (['-v'] if verbose else []) + trace_extra_args + app_cmd
+    tracecmds.append(tracecmd)
+    if tracegen['redirect']: # redirect output
+      threading.Thread(target = run_sniper.run_program_redirect, args = (app_id, run_sift_recorder, tracecmd, outputdir)).start()
+    else:                    # inline output
+      threading.Thread(target = run_sift_recorder, args = (tracecmd,)).start()
+
+sniperoptions = ' '.join(sniperoptions)
+
+configfile = os.path.join(HOME, 'config/sniper.py')
+config = {}
+exec(compile(open(configfile, "rb").read(), configfile, 'exec'), {}, config)
+
+# convert paths in config to absolute paths
+for d in ('pin_home','xed_home', 'torch_home'):
+  absdir = os.path.join(HOME, config[d])
+  if not os.path.isdir(absdir):
+    sys.stderr.write('Cannot find %s %s, please check %s\n' % (d, absdir, configfile))
+    sys.exit(-1)
+  exec("%s = '%s'" % (d, absdir))
+sim_root = HOME
+arch = config.get('target', 'intel64')
+
+env = run_sniper.setup_env(sim_root, pin_home, arch, standalone, xed_home, torch_home)
+
+optcmd = ''
+pin_version = 'unknown'
+pinoptions = ''
+if not standalone:
+  try:
+    pin_version = subprocess.Popen(['%(HOME)s/tools/pinversion.py' % locals(), pin_home], stdout = subprocess.PIPE).communicate()[0]
+    pin_version = int(pin_version.split('.')[2])
+    assert 10000 < pin_version < 1000000
+  except Exception as e:
+    print('Cannot get Pin version', file=sys.stderr)
+    print(file=sys.stderr)
+    print(e, file=sys.stderr)
+    print(pin_version, file=sys.stderr)
+    sys.exit(-1)
+
+  pinoptions = '-mt -injection child -ifeellucky'
+  if pin_version >= 49303:
+    pinoptions += ' -xyzzy' # TODO: Enable vsm once OpenMP thread exit is solved (Redmine #148)
+
+  if arch == 'ia32':
+    # Running Jikes (which is 32-bit) on Sandy Bridge machines sometimes seem to suffer from data corruption,
+    # leading to weird application crashes. This problem is gone when disabling AVX support.
+    # Note that this was on Pin 2.12.55942, later versions (up to 2.12.58423) have even worse problems
+    # (broken SMC or something, see http://groups.yahoo.com/neo/groups/pinheads/conversations/topics/9147 )
+    pinoptions += ' -xyzzy -allow_AVX_support 0'
+
+  if pin_stats:
+    pinoptions += ' -xyzzy -profile -statistic -log_inline'
+
+  if use_gdb:
+    pinoptions += ' -pause_tool 1'
+
+  if use_appdebug:
+    if appdebug_nowait:
+      pinoptions += ' -appdebug_enable -appdebug_silent'
+    else:
+      pinoptions += ' -appdebug'
+
+  if follow_execv:
+    pinoptions += ' -follow_execv 1'
+
+if pinballs and not pinball_sift:
+  optcmd += ' -replay -replay:basename "%s" -pinplay:msgfile "%s" -replay:resultfile "%s" --general/enable_pinplay=true' % (pinballs[0], os.path.join(outputdir,'pinball_replay'), os.path.join(outputdir,'pinball_result'))
+  if pinplay_addrtrans:
+    optcmd += " -replay:addr_trans"
+  else:
+    pinoptions += ' -xyzzy -reserve_memory "%s.address"' % (pinballs[0])
+  # Overwrite the cmdline with the nullapp, as the pinball will handle the appropriate processing
+  nullapp_path = '%(sde_home)s/%(arch)s/nullapp' % locals()
+  if use_pinplay:
+    nullapp_path = '%(pin_home)s/extras/pinplay/bin/%(arch)s/nullapp' % locals()
+  if not os.path.exists(nullapp_path):
+    print("Error: Unable to locate PinPlay's nullapp to play back a pinball", file=sys.stderr)
+    sys.exit(1)
+  cmdline = [nullapp_path]
+
+optcmd += ' -c %(sim_root)s/config/base.cfg --general/total_cores=%(ncores)u --general/output_dir=%(outputdir)s %(sniperoptions)s' % locals()
+if standalone:
+  if use_gdb:
+    fh, fn = tempfile.mkstemp()
+    f = open(fn, 'w')
+    # When using GDB in standalone mode, do not set the LD_LIBRARY_PATH for GDB, but instead set the shared library path inside GDB for debugging Sniper-standalone
+    f.write("set environment LD_LIBRARY_PATH = %s\n" % env['LD_LIBRARY_PATH'])
+    del env['LD_LIBRARY_PATH']
+    # Create a GDB command file to handle --gdb, --gdb-wait and --gdb-quit for standalone mode
+    if not gdb_wait:
+      f.write('run\n')
+    # Only quit GDB when we have not seen a signal
+    if gdb_quit:
+      f.write('if ($_siginfo)\n')
+      f.write('else \n')
+      f.write(' quit\n')
+      f.write('end\n')
+    f.close()
+    gdbcmd = 'gdb -quiet --command=%(fn)s %(HOME)s/lib/sniper --args ' % locals()
+  elif use_wrap_sim:
+    gdbcmd = '%(use_wrap_sim)s ' % locals()
+  else:
+    gdbcmd = ''
+  cmd = gdbcmd + '%(HOME)s/lib/sniper' % locals() + optcmd
+else:
+  if follow_execv:
+    pintool = 'follow_execv'
+  else:
+    pintool = 'pin_sim'
+  cmd = '%(pin_home)s/%(arch)s/bin/pinbin %(pinoptions)s -t %(sim_root)s/lib/%(pintool)s' % locals() + optcmd + ' -- ' + ' '.join(cmdline)
+
+queue = queue.Queue()
+
+
+memusage = 0; stopping = False
+usage = None
+
+def log_memory(pid):
+  def do_log_memory():
+    global memusage
+    while not stopping:
+      # find children of all known pid's
+      pids = sniper_lib.find_children(pid)
+      # sum memory usage of all children
+      _memusage = 0
+      for _pid in pids:
+        try:
+          proc = open('/proc/%u/statm' % int(_pid), "r").read()
+          _memusage += int(proc.split()[0]) * 4096
+        except:
+          # process already dead, or something
+          pass
+      memusage = max(memusage, _memusage)
+      # sleep 10 seconds, in an interruptable way so we delay completion by only 1 second rather than up to 10 seconds
+      for i in range(10):
+        time.sleep(1)
+        if stopping: break
+  threading.Thread(target = do_log_memory).start()
+
+
+def execute():
+  global cmd, usage
+
+  cmd = [ 'bash', '-c', cmd ]
+  if use_perf:
+    cmd = [ 'perf', 'record', '--force', '--output', os.path.join(outputdir, 'perf.data'), '--' ] + cmd
+
+  if verbose:
+    print('[SNIPER] Running', cmd)
+  sys.stdout.flush()
+  sys.stderr.flush()
+  subproc = subprocess.Popen(cmd, env = env)
+
+  log_memory(subproc.pid)
+
+  try:
+    try:
+      pid, rc, usage = os.wait4(subproc.pid, 0)
+    except AttributeError:
+      pid, rc = os.waitpid(subproc.pid, 0)
+  except KeyboardInterrupt:
+    try:
+      os.kill(subproc.pid, 9)
+    except OSError:
+      # Already dead, never mind
+      pass
+    return 9
+
+  rc >>= 8
+  return rc
+
+def execute_appdebug():
+  if verbose:
+    print('[SNIPER] Running', cmd)
+  sys.stdout.flush()
+  sys.stderr.flush()
+
+  p_sniper = subprocess.Popen([ 'bash', '-c', cmd ], bufsize = 1, stdout = subprocess.PIPE, env = env)
+  while True:
+    line = p_sniper.stdout.readline()
+    if line.startswith('  target remote :'):
+      info = open(os.path.join(outputdir, 'appdebug_port.out'), "r").read()
+      g_pid, g_remote = list(map(int, info.split()))
+      break
+
+  print()
+  print("To interrupt the application, use: kill -INT %s" % g_pid)
+  print()
+
+  def output_sniper():
+    while True:
+      line = p_sniper.stdout.readline()
+      if not line: break
+      print(line, end=' ')
+  threading.Thread(target = output_sniper).start()
+
+  fh, fn = tempfile.mkstemp()
+  f = open(fn, 'w')
+  f.write('target remote :%s\n' % g_remote)
+  f.close()
+
+  rc = os.system('gdb -quiet -command=%s %s' % (fn, '/proc/%s/exe' % g_pid)) # /proc/<pid>/exe is a symlink to the actual binary
+  rc >>= 8
+
+  return rc
+
+
+if save_patch:
+  sniperrootdir = HOME
+  gitdir = os.path.join(sniperrootdir, '.git')
+  patchfile = os.path.join(outputdir, 'sim.patch')
+  os.system("git --work-tree='%(sniperrootdir)s' --git-dir='%(gitdir)s' log --max-count=1 --pretty=%%H > '%(patchfile)s'" % locals())
+  os.system("git --work-tree='%(sniperrootdir)s' --git-dir='%(gitdir)s' diff >> '%(patchfile)s'" % locals())
+
+backtracefile = os.path.join(outputdir, 'debug_backtrace.out')
+for filetodelete in (backtracefile, 'sim.out', 'sim.cfg', 'sim.info', 'sim.stats.sqlite3', 'pin.log'):
+  filetodelete = os.path.join(outputdir, filetodelete)
+  try: os.unlink(filetodelete)
+  except OSError: pass
+# Pin creates a pin.log file in os.getcwd() when there is a crash. Delete the old version as to not copy it to the outputdir
+try: os.unlink('pin.log')
+except OSError: pass
+t_start = time.time()
+print('[SNIPER] Start')
+
+try:
+  if use_gdb and not standalone:
+    rc = debugpin.execute_gdb(cmd = cmd, env = env, pin_home = pin_home, arch = arch, wait = gdb_wait, quit = gdb_quit)
+  elif use_appdebug and not (appdebug_manual or appdebug_nowait):
+    rc = execute_appdebug()
+  else:
+    rc = execute()
+
+except KeyboardInterrupt:
+  # Make sure Sniper itself is stopped, even if it didn't respond to the SIGINT
+  print('\n[SNIPER] Ctrl-C detected: Killing all child processes')
+  time.sleep(1)
+  sniper_lib.kill_children()
+  sys.exit(-1)
+
+
+stopping = True
+t_end = time.time()
+t_elapsed = t_end - t_start
+print('[SNIPER] End')
+print('[SNIPER] Elapsed time:', '%.02f' % t_elapsed, 'seconds')
+
+if tracegen:
+  # If we get here, there might still be some front-end processes running (maybe a deadlocked sift recorder trace?). If so, kill those processes
+  sniper_lib.kill_children()
+  # Cleanup the pipes and temporary directory
+  try:
+    for f in tracegen['tracefiles_created']:
+      os.unlink(f)
+    os.rmdir(tracegen['tracetempdir'])
+  except OSError:
+    pass
+
+
+if os.path.exists(backtracefile) and os.path.getsize(backtracefile) > 0:
+  os.system('%(sim_root)s/tools/gen_backtrace.py "%(backtracefile)s"' % locals())
+
+elif os.path.exists(os.path.join(outputdir, 'sim.cfg')):
+
+  if use_profile:
+    os.system('%(sim_root)s/tools/gen_profile.py -d %(outputdir)s -o %(outputdir)s' % locals())
+
+  if use_memory_profile:
+    os.system('%(sim_root)s/tools/gen_memory_profile.py -d %(outputdir)s -o %(outputdir)s' % locals())
+
+  if use_cheetah:
+    os.system('%(sim_root)s/tools/gen_cheetah.py -d %(outputdir)s -o %(outputdir)s/cheetah' % locals())
+
+  if run_power:
+    print('[SNIPER] Running McPAT')
+    os.system('%(sim_root)s/tools/mcpat.py -d %(outputdir)s -o %(outputdir)s/power' % locals())
+
+  if use_viz:
+    print('[SNIPER] Generating visualization in viz/')
+    os.system('%(sim_root)s/tools/viz/viz.py %(use_viz_mcpat)s %(use_viz_profile)s %(use_viz_aso)s -d %(outputdir)s -o %(outputdir)s/viz >/dev/null' % locals())
+
+  if genstats:
+    print('[SNIPER] Generating statistics')
+    os.system('%(sim_root)s/tools/dumpstats.py -d %(outputdir)s > %(outputdir)s/sim.stats' % locals())
+
+  if use_viz_aso and not use_viz:
+    print('[SNIPER] Generating ASO visualization in viz/levels/functionbased/')
+    os.system('%(sim_root)s/tools/viz/functionbased.py -d %(outputdir)s -o %(outputdir)s/viz >/dev/null' % locals())
+
+  gen_simout.generate_simout(resultsdir = outputdir, output = open(os.path.join(outputdir, 'sim.out'), 'w'), silent = True)
+
+
+stats = dict(
+  host = platform.node(),
+  user = os.getenv('USER') or os.getenv('USERNAME'),
+  git_revision = config.get('git_revision', ''),
+  pin_version = pin_version,
+  cmdline = sys.argv,
+  snipercmd = cmd,
+  tracecmds = tracecmds,
+  vmem = memusage,
+  rusage = usage and tuple(usage) or None,
+  t_start = t_start,
+  t_elapsed = t_elapsed,
+)
+if 'BENCHMARKS_ROOT' in os.environ:
+  stats['benchmarks_root'] = os.getenv('BENCHMARKS_ROOT'),
+  stats['benchmarks_revision'] = subprocess.getoutput('cd $BENCHMARKS_ROOT && (if [ -e .git ]; then git rev-parse HEAD; else cat .gitid; fi)'),
+open(os.path.join(outputdir, 'sim.info'), 'w').write(pprint.pformat(stats)+'\n')
+
+if os.path.exists('pin.log') and os.path.realpath(os.getcwd()) != os.path.realpath(outputdir):
+  os.system('cp pin.log %s' % outputdir)
+
+sys.exit(rc)
