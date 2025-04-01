@@ -1,4 +1,4 @@
-<img width="176" alt="image" src="https://github.com/user-attachments/assets/153997f5-e79e-44b9-aa3d-b3089e35ed05" /># Virtuoso: Enabling Fast and Accurate Virtual Memory Research via an Imitation-based Operating System Simulation Methodology
+# Virtuoso: Enabling Fast and Accurate Virtual Memory Research via an Imitation-based Operating System Simulation Methodology
 
 This repository provides all the necessary files and instructions to reproduce the results of our ASPLOS 2025 paper.
 
