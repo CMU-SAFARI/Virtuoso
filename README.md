@@ -2,7 +2,7 @@
 
 This repository provides all the necessary files and instructions to reproduce the results of our ASPLOS 2025 paper.
 
-> Konstantinos Kanellopoulos, Konstantinos Sgouras, F. Nisa Bostanci, Andreas Kosmas Kakolyris, Berkin K. Konar, Rahul Bera, Mohammad Sadrosadati, Rakesh Kumar, Nandita Vijaykumar, and Onur Mutlu, "Virtuoso: Enabling fast and accurate virtual memory research via an imitation-based OS simulation methodology," ASPLOS'25. [Paper PDF](https://arxiv.org/pdf/2310.04158.pdf)
+> Konstantinos Kanellopoulos, Konstantinos Sgouras, F. Nisa Bostanci, Andreas Kosmas Kakolyris, Berkin K. Konar, Rahul Bera, Mohammad Sadrosadati, Rakesh Kumar, Nandita Vijaykumar, and Onur Mutlu, "Virtuoso: Enabling fast and accurate virtual memory research via an imitation-based OS simulation methodology," ASPLOS'25. [Paper PDF](https://arxiv.org/pdf/2403.04635v2)
 
 Please use the following citation if this repository is useful for your work:
 
