@@ -161,11 +161,5 @@ source reservethp.jobfile # This will run the experiments with Slurm
     2. **Eager-Paging:** Implements the contiguity-based allocation described in [RMM](https://scail.cs.wisc.edu/papers/isca15-rmm.pdf)
     3. **Utopia:** Implements the allocation mechanism described in [Utopia](https://arxiv.org/abs/2211.12205)
 
-- **Workloads Released:**
-    - Serverless
-    - llama.cpp
-    - GraphBIG
-    - XSBench
-    - HPCC
 
 
