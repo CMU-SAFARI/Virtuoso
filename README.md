@@ -17,7 +17,7 @@ Please use the following citation if this repository is useful for your work:
 
 ## Website & Documentation
 
-- Please visit our [website](cmu-safari.github.io/Virtuoso) to find tutorials and documentation on how to use Virtuoso.
+- Please visit our [website](https://cmu-safari.github.io/Virtuoso) to find tutorials and documentation on how to use Virtuoso.
 
 ## Structure of the Repository
 
