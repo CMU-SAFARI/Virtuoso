@@ -162,4 +162,8 @@ source reservethp.jobfile # This will run the experiments with Slurm
     3. **Utopia:** Implements the allocation mechanism described in [Utopia](https://arxiv.org/abs/2211.12205)
 
 
+## Contributing
+We welcome contributions! Please open an issue on GitHub to discuss potential changes or report bugs.
 
+## Contact 
+For questions please contact Konstantinos Kanellopoulos (<konkanello@gmail.com>) and Konstantinos Sgouras (<sgouraskon@gmail.com>).
