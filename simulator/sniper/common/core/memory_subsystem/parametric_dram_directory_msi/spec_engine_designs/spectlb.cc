@@ -53,7 +53,6 @@ namespace ParametricDramDirectoryMSI
             page_size_list[i] = Sim()->getCfg()->getIntArray("perf_model/spec_tlb/page_size_list", i); // Get each page size from the config
         }
 
-    
         // Create a new TLB object using the retrieved configuration values
         spec_tlb = new TLB(
             "spec_tlb",               // Name of the TLB
@@ -69,19 +68,21 @@ namespace ParametricDramDirectoryMSI
         );
     }
 
-    void SpecTLB::invokeSpecEngine(IntPtr address, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled)
+    void SpecTLB::invokeSpecEngine(IntPtr address, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled, SubsecondTime invoke_start_time, IntPtr physical_address, bool page_table_speculation)
     {
+        if (page_table_speculation)
+            return;
 #ifdef DEBUG_SPEC_TLB
         log_file << std::endl;
         log_file << "[SpecTLB] Invoking Speculative TLB Engine for address: " << address << std::endl;
 #endif
         // Initialize variables for speculative TLB access
-        spec_hit = false;                               // Flag indicating whether the TLB access resulted in a hit
-        spec_access_time = SubsecondTime::Zero();       // Initialize the access time to zero
-        spec_tlb_block_info = NULL;                     // Pointer to hold block info on TLB lookup, initially null
+        spec_hit = false;                         // Flag indicating whether the TLB access resulted in a hit
+        spec_access_time = SubsecondTime::Zero(); // Initialize the access time to zero
+        spec_tlb_block_info = NULL;               // Pointer to hold block info on TLB lookup, initially null
 
         // Speculative TLB access
-        spec_access_time = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+        spec_access_time = invoke_start_time;
         // Get the current elapsed time for the user thread (for speculative access timing)
 
         // Perform a lookup in the speculative TLB to check if the address is already cached
@@ -97,18 +98,17 @@ namespace ParametricDramDirectoryMSI
             log_file << "[SpecTLB] TLB Block Page Size: " << spec_tlb_block_info->getPageSize() << std::endl;
             log_file << "[SpecTLB] TLB Block Valid: " << spec_tlb_block_info->isValid() << std::endl;
 #endif
-            spec_hit = true;                               // Set the hit flag to true
+            spec_hit = true; // Set the hit flag to true
         }
-        else {
-            spec_hit = false;                              // Set the hit flag to false
+        else
+        {
+            spec_hit = false; // Set the hit flag to false
         }
-        // Update the speculative access time by adding the TLB latency (access time after lookup)
-        shmem_perf_model->setElapsedTime(ShmemPerfModel::_USER_THREAD, spec_access_time + spec_tlb->getLatency());
 
         // If we had a TLB hit, prefetch data based on the TLB information
         if (spec_hit) // If TLB hit was successful
-        {   
-            int base_page_size = 1 << 12; // Base page size is 4KB
+        {
+            int base_page_size = 1 << 12;  // Base page size is 4KB
             int large_page_size = 1 << 21; // Large page size is 2MB
 
             IntPtr address_to_prefetch = (spec_tlb_block_info->getPPN() * base_page_size + address % large_page_size) & (~((64 - 1)));
@@ -116,10 +116,10 @@ namespace ParametricDramDirectoryMSI
 #ifdef DEBUG_SPEC_TLB
             log_file << "[SpecTLB] Final Address to Prefetch: " << address_to_prefetch << std::endl;
 #endif
-            memory_manager->getCacheCntlrAt(core->getId(), MemComponent::component_t::L2_CACHE)->doPrefetch(eip,                                                                  // The instruction pointer (address) from which to prefetch
-                                                                                                            address_to_prefetch,                                                  // Calculated address for prefetch
-                                                                                                            spec_access_time,                                                     // Time of the access for prefetching
-                                                                                                            CacheBlockInfo::block_type_t::NON_PAGE_TABLE                          // Type of block (indicating it's not a page table)
+            memory_manager->getCacheCntlrAt(core->getId(), MemComponent::component_t::L2_CACHE)->doPrefetch(eip,                                         // The instruction pointer (address) from which to prefetch
+                                                                                                            address_to_prefetch,                         // Calculated address for prefetch
+                                                                                                            spec_access_time + spec_tlb->getLatency(),   // Time of the access for prefetching
+                                                                                                            CacheBlockInfo::block_type_t::NON_PAGE_TABLE // Type of block (indicating it's not a page table)
             );
         }
     }
@@ -131,31 +131,32 @@ namespace ParametricDramDirectoryMSI
 #endif
         if (!spec_hit)
         {
-            
+
 #ifdef DEBUG_SPEC_TLB
             log_file << "[SpecTLB] TLB Miss & SpecTLB Miss for address: " << address << std::endl;
 #endif
-            ReservationTHPAllocator *res_allocator = (ReservationTHPAllocator*) (Sim()->getMimicOS()->getMemoryAllocator());
-            
+            ReservationTHPAllocator *res_allocator = (ReservationTHPAllocator *)(Sim()->getMimicOS()->getMemoryAllocator());
 
-            bool is_reserved = res_allocator->isLargePageReserved(address);
+            IntPtr is_reserved = res_allocator->isLargePageReserved(address);
+
 
 #ifdef DEBUG_SPEC_TLB
             log_file << "[SpecTLB] Is Large Page Reserved: " << is_reserved << std::endl;
 #endif
             // Allocate a new entry in the speculative TLB since there was a miss
             // Call the 'allocate' method of the spec_tlb object to handle allocation
-            if (is_reserved)
+            if (is_reserved != static_cast<IntPtr>(-1))
             {
+
                 spec_tlb->allocate(
                     address,          // The address for which we need to allocate a new TLB entry
                     spec_access_time, // The time at which this access happens (used for updating the access time)
                     count,            // The count or the access frequency; might be used for tracking or updating access stats
                     lock,             // The lock status; could indicate if the TLB access should be locked or not
                     21,               // Page size (hardcoded to 21, which is the maximum page size)
-                    ppn               // The physical page number (PPN) associated with the address, used for allocation in the TLB
+                    is_reserved              // The physical page number (PPN) associated with the address, used for allocation in the TLB
                 );
-             }
+            }
         }
     }
 }

@@ -23,10 +23,10 @@ public:
     std::pair<UInt64,bool> checkFor2MBAllocation(UInt64 address, UInt64 core_id);
     bool demote_page();
 
-    bool isLargePageReserved(IntPtr address){
+    IntPtr isLargePageReserved(IntPtr address){
         if (two_mb_map.find(address >> 21) != two_mb_map.end())
-            return true;
-        return false;
+            return get<0>(two_mb_map[address >> 21]);
+        return -1;
     }
 
     virtual UInt64 handle_page_table_allocations(UInt64 bytes)
@@ -34,6 +34,8 @@ public:
         stats.kernel_pages_used += 1;
         UInt64 temp = kernel_start_address;
         kernel_start_address += bytes; // This function is useful mainly for the page table allocation in the HDC, HT and Elastic Cuckoo Hash Table; For Radix we can invoke the conventional allocator directly
+       // std::cout << "Kernel pages allocated" << stats.kernel_pages_used << std::endl;
+
         return temp/4096;
     }
 
@@ -41,6 +43,8 @@ public:
     {
         stats.kernel_pages_used -= 1;
         kernel_start_address -= bytes;
+        //std::cout << "Kernel pages after deallocation: " << stats.kernel_pages_used << std::endl;
+
     }
 
     UInt64 getFreePages() const;

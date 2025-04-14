@@ -2,9 +2,11 @@
 
 #include "mmu.h"
 #include "mmu_base.h"
+#include "mmu_midgard.h"
 #include "mmu_pomtlb.h"
 #include "mmu_range.h"
 #include "mmu_utopia.h"
+#include "iommu.h"
 #include "nested_mmu.h"
 #include "config.hpp"
 #include "mmu_spec.h"
@@ -37,7 +39,7 @@ namespace ParametricDramDirectoryMSI
         CacheBlockInfo *spec_tlb_block_info; ///< Pointer to the cache block info retrieved from the TLB lookup.
         std::ofstream log_file;              ///< Log file for the speculative TLB.
         std::string log_file_name;           ///< Name of the log file for the speculative TLB.
-        
+
     public:
         /**
          * @brief Constructor for SpecTLB.
@@ -60,7 +62,7 @@ namespace ParametricDramDirectoryMSI
          * @param eip Instruction pointer address.
          * @param modeled Boolean flag indicating whether the access is modeled.
          */
-        void invokeSpecEngine(IntPtr address, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled);
+        void invokeSpecEngine(IntPtr address, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled, SubsecondTime invoke_start_time, IntPtr physical_address, bool page_table_speculation = false);
 
         /**
          * @brief Allocates an entry in the speculative TLB.

@@ -17,7 +17,7 @@
 #include <tuple>
 #include <cassert>
 
-//#define DEBUG_RESERVATION_THP
+#define DEBUG_RESERVATION_THP
 
 using namespace std;
 
@@ -283,16 +283,16 @@ std::pair<UInt64, bool> ReservationTHPAllocator::checkFor2MBAllocation(UInt64 ad
 			         << stats.two_mb_promoted << std::endl;
 #endif
 			// Return the physical address for the offset_in_2MB, but note that we "just promoted"
-			return std::make_pair(std::get<0>(region) + (offset_in_2MB * 4096), true);
+			return std::make_pair(std::get<0>(region) + offset_in_2MB, true);
 		}
 		else
 		{
 			// If not promoted, just return the 4KB offset within the 2MB region
 #ifdef DEBUG_RESERVATION_THP
 			log_file << "Debug: Page is not promoted, returning physical address "
-			         << std::get<0>(region) + (offset_in_2MB * 4096) << std::endl;
+			         << std::get<0>(region) + offset_in_2MB  << std::endl;
 #endif
-			return std::make_pair(std::get<0>(region) + (offset_in_2MB * 4096), false);
+			return std::make_pair(std::get<0>(region) + offset_in_2MB, false);
 		}
 	}
 
