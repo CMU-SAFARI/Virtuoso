@@ -2,7 +2,7 @@
 
 This repository provides all the necessary files and instructions to reproduce the results of our ASPLOS 2025 paper.
 
-> Konstantinos Kanellopoulos, Konstantinos Sgouras, F. Nisa Bostanci, Andreas Kosmas Kakolyris, Berkin K. Konar, Rahul Bera, Mohammad Sadrosadati, Rakesh Kumar, Nandita Vijaykumar, and Onur Mutlu, "Virtuoso: Enabling fast and accurate virtual memory research via an imitation-based OS simulation methodology," ASPLOS'25. [Paper PDF](https://arxiv.org/pdf/2310.04158.pdf)
+> Konstantinos Kanellopoulos, Konstantinos Sgouras, F. Nisa Bostanci, Andreas Kosmas Kakolyris, Berkin K. Konar, Rahul Bera, Mohammad Sadrosadati, Rakesh Kumar, Nandita Vijaykumar, and Onur Mutlu, "Virtuoso: Enabling fast and accurate virtual memory research via an imitation-based OS simulation methodology," ASPLOS'25. [Paper PDF](https://arxiv.org/pdf/2403.04635v2)
 
 Please use the following citation if this repository is useful for your work:
 
@@ -22,13 +22,13 @@ Please use the following citation if this repository is useful for your work:
 ## Structure of the Repository
 
 1. **Introduction**
-     - Describes the motivation of this work and introduces Virtuoso.
+     - Describes the motivation of this work and introduces Virtuoso
 2. **Prerequisites**
-     - Describes the prerequisites for running the experiments.
+     - Describes the prerequisites for running the experiments
 3. **Running Experiments**
-     - Provides instructions on how to run a test experiment using the provided scripts.
+     - Provides instructions on how to run a test experiment using the provided scripts
 4. **Datasets**
-     - Provides information on the datasets.
+     - Provides information on the datasets
 
 ## Introduction
 
@@ -75,6 +75,7 @@ make -j # build Sniper
 ```
 
 Make sure the simulator is working by running the following command:
+
 ```bash
 sh run_example.sh 
 ```
@@ -90,7 +91,6 @@ To run the experiments efficiently, we will use the Slurm job scheduler.
 If you do not have Slurm installed, you can run the experiments by modifying the `create_jobfile_virtuoso_reservethp.py` script to run the experiments sequentially without `sbatch` and `srun`.
 
 ```bash
-
 cd Virtuoso/scripts/virtuoso_sniper
 python3 create_jobfile_virtuoso_reservethp.py ../../Virtuoso/ ../jobfiles/reservethp.jobfile
 cd ../jobfiles
@@ -102,7 +102,7 @@ source reservethp.jobfile # This will run the experiments with Slurm
 
 ### **2025-07: Planned 3rd Major Update**
 - **New Features:**
-    - Integration of MimicOS with a CXL simulator.
+    - Integration of MimicOS with a [CXL simulator](https://github.com/Amit-P89/-DRackSim/)
     - Integration of MimicOS with a GPU simulator.
     - Virtuoso+Sniper with support for IOMMU.
     - MimicOS with network stack support.
@@ -113,57 +113,53 @@ source reservethp.jobfile # This will run the experiments with Slurm
 - **New Features:**
     - Release of all MimicOS modules, including:
         - hugetlbfs
-        - page cache
-        - swap cache
+        - Page cache
+        - Swap cache
+          
     - Integration of MimicOS with:
-        - gem5
-        - ramulator
-        - Sniper
-        - ChampSim
+        - [gem5-SE](http://gem5.org/)
+        - [Ramulator](https://github.com/CMU-SAFARI/ramulator2)
+        - [Sniper](https://github.com/snipersim/)
+        - [ChampSim](https://github.com/ChampSim/ChampSim)
+          
     - New traces/workloads with address translation overheads:
         - MemCached
         - Redis
         - Stockfish
-        - Additional workloads to be announced.
-    - Release of memory tagging schemes.
+          
+    - Release of memory tagging schemes
 
 ---
 
 ### **2025-04-02: Initial Release**
 - **Virtuoso Integration:**
-    - Sniper Multi-Core Simulator.
+    - [Sniper Multi-Core Simulator] (https://github.com/snipersim/)
 
 - **MMU Models:**
     1. **MMU Baseline:**
-         - Page Walk Caches.
+         - Page Walk Caches
          - Configurable TLB hierarchy.
-         - Configurable Page Walk Cache (PWC) hierarchy.
-         - Large page prediction.
-    2. **MMU Speculation:** Speculative address translation.
-    3. **MMU Software-Managed TLB:** Software-managed L3 TLB.
-    4. **MMU Utopia:** Implements advanced functionality (details forthcoming).
-    5. **MMU Midgard:** Implements advanced functionality (details forthcoming).
-    6. **MMU RMM (and Direct Segments):** Implements advanced functionality (details forthcoming).
-    7. **MMU Virtualized:** Nested Paging and Nested Page Tables (NPT) for modern hypervisors.
+         - Configurable Page Walk Cache (PWC) hierarchy
+         - Large page prediction based on [Papadopoulou et al.](https://ieeexplore.ieee.org/document/7056034)
+    2. **MMU Speculation:** Speculative address translation as described in [SpecTLB](https://ieeexplore.ieee.org/document/6307767)
+    3. **MMU Software-Managed TLB:** Software-managed L3 TLB as described in [POM-TLB](https://ieeexplore.ieee.org/document/8192494)
+    4. **MMU Utopia:** Implements [Utopia](https://arxiv.org/abs/2211.12205)
+    5. **MMU Midgard:** Implements [Midgard](https://dl.acm.org/doi/10.1109/ISCA52012.2021.00047)
+    6. **MMU RMM (and Direct Segments):** Implements [RMM](https://scail.cs.wisc.edu/papers/isca15-rmm.pdf)
+    7. **MMU Virtualized:** Nested Paging and Nested Page Tables (NPT) for modern hypervisors
 
 - **Page Table Designs:**
-    1. **Page Table Baseline:** Radix page table with configurable page sizes.
-    2. **Range Table:** B++ Tree-like translation table for virtual-to-physical address ranges.
-    3. **Hash Don't Cache:** Open-addressing hash-based page table.
-    4. **Conventional Hash-Based:** Chain-based hash table design.
-    5. **ECH:** Cuckoo hashing for page table entries.
-    6. **RobinHood:** Open-addressing with element re-ordering.
+    1. **Page Table Baseline:** Radix page table with configurable page sizes
+    2. **Range Table:** B++ Tree-like translation table for [virtual-to-physical address ranges](https://scail.cs.wisc.edu/papers/isca15-rmm.pdf)
+    3. **Hash Don't Cache:** [Open-addressing hash-based page table](https://dl.acm.org/doi/10.1145/2964791.2901456)
+    4. **Conventional Hash-Based:** Chain-based hash table design
+    5. **ECH:** [Cuckoo hashing-based organization of the page table](https://iacoma.cs.uiuc.edu/iacoma-papers/asplos20.pdf)
+    6. **RobinHood:** Open-addressing with element re-ordering
 
 - **Memory Allocation Policies:**
-    1. **Reservation-Based THP:** Implements advanced functionality (details forthcoming).
-    2. **Eager-Paging:** Implements advanced functionality (details forthcoming).
-    3. **Utopia:** Implements advanced functionality (details forthcoming).
+    1. **Reservation-Based THP:** Implements reservation-based Transparent Huge Pages
+    2. **Eager-Paging:** Implements the contiguity-based allocation described in [RMM](https://scail.cs.wisc.edu/papers/isca15-rmm.pdf)
+    3. **Utopia:** Implements the allocation mechanism described in [Utopia](https://arxiv.org/abs/2211.12205)
 
-- **Workloads Released:**
-    - Serverless
-    - llama.cpp
-    - GraphBIG
-    - XSBench
-    - HPCC
 
 
