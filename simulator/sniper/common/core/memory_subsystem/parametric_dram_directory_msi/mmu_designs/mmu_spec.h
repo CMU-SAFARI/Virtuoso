@@ -80,5 +80,8 @@ namespace ParametricDramDirectoryMSI
 
         // Returns a pointer to the page table managed by this MMU.
         PageTable *getPageTable();
+
+        // We overrid this function. We want to have access to the physical addresses of the pt frames
+        tuple<SubsecondTime, bool, IntPtr, int> performPTW(IntPtr address, bool modeled, bool count, bool is_prefetch, IntPtr eip, Core::lock_signal_t lock, PageTable *page_table, bool restart_walk) override;
     };
 }

@@ -5,7 +5,6 @@
 #include "mmu_pomtlb.h"
 #include "mmu_range.h"
 #include "mmu_utopia.h"
-#include "iommu.h"
 #include "nested_mmu.h"
 #include "config.hpp"
 #include "mmu_spec.h"
