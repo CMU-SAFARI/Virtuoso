@@ -23,7 +23,6 @@
 //#define DEBUG_MMU
 
 using namespace std;
-
 namespace ParametricDramDirectoryMSI
 {
 
@@ -32,7 +31,7 @@ namespace ParametricDramDirectoryMSI
     {
         std::cout << std::endl;
         std::cout << "[MMU] Initializing MMU for core " << core->getId() << std::endl;
-        // mmu_N.log is the log file for the MMU of core N
+
         log_file = std::ofstream();
         log_file_name = "mmu_spec.log." + std::to_string(core->getId());
         log_file_name = std::string(Sim()->getConfig()->getOutputDirectory().c_str()) + "/" + log_file_name;
@@ -59,6 +58,7 @@ namespace ParametricDramDirectoryMSI
      */
     void MemoryManagementUnitSpec::instantiateMetadataTable()
     {
+
     }
 
     void MemoryManagementUnitSpec::instantiatePageTableWalker()
@@ -143,6 +143,10 @@ namespace ParametricDramDirectoryMSI
 
     IntPtr MemoryManagementUnitSpec::performAddressTranslation(IntPtr eip, IntPtr address, bool instruction, Core::lock_signal_t lock, bool modeled, bool count)
     {
+
+        
+
+        dram_accesses_during_last_walk = 0;
 
 #ifdef DEBUG_MMU
         log_file << std::endl;
@@ -320,11 +324,7 @@ namespace ParametricDramDirectoryMSI
         // We only trigger the PTW if there was a TLB miss
         if (!hit)
         {
-            // Here we invoke the spec engine andc count its latency
-            SubsecondTime spec_engine_start = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD);
-            spec_engine->invokeSpecEngine(address, count, lock, eip, modeled);
-            SubsecondTime spec_engine_end = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD);
-            spec_engine_latency = spec_engine_end - spec_engine_start;
+
             // std::cout << spec_engine_latency << std::endl;
 
             //    Keep track of the time before the PTW starts
@@ -348,7 +348,10 @@ namespace ParametricDramDirectoryMSI
             int app_id = core->getThread()->getAppId();
             PageTable *page_table = Sim()->getMimicOS()->getPageTable(app_id);
 
-            auto ptw_result = performPTW(address, modeled, count, false, eip, lock, page_table, true);
+            auto ptw_result = performPTW(address, modeled, count, false, eip, lock, page_table, false);
+
+            // spec_engine_latency = spec_engine_end - spec_engine_start;
+
             total_walk_latency = get<0>(ptw_result); // Total walk latency is only the time it takes to walk the page table (excluding page faults)
 
             if (count)
@@ -369,6 +372,14 @@ namespace ParametricDramDirectoryMSI
                     translation_stats.total_fault_latency += m_page_fault_latency;
                 }
                 total_fault_latency = m_page_fault_latency;
+                int app_id = core->getThread()->getAppId();
+                int max_level = Sim()->getMimicOS()->getPageTable(app_id)->getMaxLevel();
+                Sim()->getMimicOS()->handle_page_fault(address, app_id, max_level);
+
+                // We need to restart the walk after the page fault is handled
+                ptw_result = performPTW(address, modeled, count, false, eip, lock, page_table, false);
+
+                total_walk_latency += get<0>(ptw_result);
             }
 
             /*
@@ -385,10 +396,15 @@ namespace ParametricDramDirectoryMSI
             ppn_result = get<2>(ptw_result);
             page_size = get<3>(ptw_result);
 
-            /*
-            We need to set the time to the time after the PTW is completed.
-            This is done so that the memory manager sends the request to the cache hierarchy after the PTW is completed
-            */
+            // Here we invoke the spec engine andc count its latency
+            IntPtr physical_addr=(ppn_result << 12) | (address & ((1 << page_size) - 1));
+            // if(page_size==21)
+            //     std::cout<<"PPN result: "<<std::hex<<ppn_result<<" final "<<physical_addr<< " page size "<<std::dec<<page_size<<"\n";
+            if (!caused_page_fault)
+            {
+                spec_engine->invokeSpecEngine(address, count, lock, eip, modeled, time_for_pt, physical_addr);
+            }
+            /*We need to set the time to the time after the PTW is completed.This is done so that the memory manager sends the request to the cache hierarchy after the PTW is completed */
             if (caused_page_fault)
             {
                 PseudoInstruction *i = new PageFaultRoutineInstruction(total_fault_latency);
@@ -399,7 +415,6 @@ namespace ParametricDramDirectoryMSI
             {
                 shmem_perf_model->setElapsedTime(ShmemPerfModel::_USER_THREAD, pt_walker_entry.completion_time);
             }
-
 #ifdef DEBUG_MMU
             log_file << "[MMU] New time after charging the PT walker completion time: " << shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
 #endif
@@ -502,12 +517,13 @@ namespace ParametricDramDirectoryMSI
             }
         }
         // here we update the specTLB engine only if there was a TLB miss
-        if(!hit){
+        if (!hit)
+        {
             spec_engine->allocateInSpecEngine(address, ppn_result, count, lock, eip, modeled);
         }
 
-        translation_stats.total_spec_latency += spec_engine_latency;
-        translation_stats.total_translation_latency += charged_tlb_latency + total_walk_latency + spec_engine_latency;
+        // translation_stats.total_spec_latency += spec_engine_latency;
+        translation_stats.total_translation_latency += charged_tlb_latency + total_walk_latency;
 
         // We need to calculate the physical address
         // The physical address is the PPN * page size + offset: the PTW always returns the PPN at the page granularity (e.g. 4KB)
@@ -521,6 +537,7 @@ namespace ParametricDramDirectoryMSI
 
 #ifdef DEBUG_MMU
         log_file << "[MMU] Offset: " << (address % page_size_in_bytes) << std::endl;
+        log_file << "[MMU] PPN: " << ppn_result << std::endl;
         log_file << "[MMU] Physical Address: " << physical_address << " PPN: " << ppn_result * base_page_size_in_bytes << " Page Size: " << page_size << std::endl;
         log_file << "[MMU] Physical Address: " << bitset<64>(physical_address) << " PPN:" << bitset<64>(ppn_result * base_page_size_in_bytes) << " Offset: " << bitset<64>(address % page_size_in_bytes) << std::endl;
         log_file << "[MMU] Total translation latency: " << charged_tlb_latency + total_walk_latency << std::endl;
@@ -586,5 +603,92 @@ namespace ParametricDramDirectoryMSI
     {
         return;
     }
+    /**
+     * @brief Perform a Page Table Walk (PTW) for a given address.
+     *
+     * This function initiates a page table walk for the specified address and returns the result
+     * as a tuple containing the time taken for the PTW, the time taken for page fault handling (if any),
+     * the physical page number (PPN) resulting from the PTW, and the page size.
+     *
+     * @param address The virtual address for which the PTW is performed.
+     * @param modeled A boolean indicating whether the PTW should be modeled.
+     * @param count A boolean indicating whether the PTW should be counted.
+     * @param is_prefetch A boolean indicating whether the PTW is for a prefetch operation.
+     * @param eip The instruction pointer (EIP) at the time of the PTW.
+     * @param lock The lock signal for the core.
+     * @return A tuple containing:
+     *         - The time taken for the PTW (SubsecondTime).
+     *         - Whether a page fault occurred (bool).
+     *         - The physical page number (IntPtr) resulting from the PTW (at the 4KB granularity).
+     *         - The page size (int).
+     */
+    tuple<SubsecondTime, bool, IntPtr, int> MemoryManagementUnitSpec::performPTW(IntPtr address, bool modeled, bool count, bool is_prefetch, IntPtr eip, Core::lock_signal_t lock, PageTable *page_table, bool restart_walk)
+    {
+        SubsecondTime time_for_pt = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD);
 
+#ifdef DEBUG_MMU
+        log_file_mmu << std::endl;
+        log_file_mmu << "[MMU_BASE]-------------- Starting PTW for address: " << address << std::endl;
+#endif
+        auto ptw_result = page_table->initializeWalk(address, count, is_prefetch, restart_walk);
+        // We will filter out the re-walked addresses which anyways either hit in the PWC or are redundant
+        accessedAddresses visited_pts = get<1>(ptw_result);
+
+        // for (int i = 0; i < visited_pts.size(); i++)
+        // {
+        //     //std::cout << i << " " << get<0>(visited_pts[i]) << " " << get<1>(visited_pts[i]) << " " << get<2>(visited_pts[i]) << " " << get<3>(visited_pts[i]) << std::endl;
+
+        // }
+        std::sort(visited_pts.begin(), visited_pts.end());
+        visited_pts.erase(std::unique(visited_pts.begin(), visited_pts.end()), visited_pts.end());
+
+        /*Spec code*/
+        IntPtr physical_result_last_level = get<2>(visited_pts[visited_pts.size() - 1]);
+#ifdef DEBUG_MMU
+        for (int i = 0; i < visited_pts.size(); i++)
+        {
+
+            log_file_mmu << "Visited PTs: id=" << i << " level=" << get<0>(visited_pts[i]) << " depth=" << get<1>(visited_pts[i]) << " physical address=" << std::hex << get<2>(visited_pts[i]) << " " << get<3>(visited_pts[i]) << std::endl;
+        }
+#endif
+        // invoking the spec engine again to predict intra-pt dependencies
+        if (get<4>(ptw_result) && page_table->getType() == "radix")
+            spec_engine->invokeSpecEngine(address, count, lock, eip, modeled, time_for_pt, physical_result_last_level, true);
+        /*Spec code end*/
+
+        ptw_result = make_tuple(get<0>(ptw_result), visited_pts, get<2>(ptw_result), get<3>(ptw_result), get<4>(ptw_result));
+
+        // Filter the PTW result based on the page table type
+        // This filtering is necessary to remove any redundant accesses that may hit in the PWC
+
+        if (page_table->getType() == "radix")
+        {
+            ptw_result = filterPTWResult(ptw_result, page_table, count);
+        }
+
+#ifdef DEBUG_MMU
+        log_file_mmu << "[MMU_BASE] We accessed " << get<1>(ptw_result).size() << " addresses" << std::endl;
+        visited_pts = get<1>(ptw_result);
+        for (UInt32 i = 0; i < visited_pts.size(); i++)
+        {
+            log_file_mmu << "[MMU_BASE] Address: " << get<2>(visited_pts[i]) << " Level: " << get<1>(visited_pts[i]) << " Table: " << get<0>(visited_pts[i]) << " Correct Translation: " << get<3>(visited_pts[i]) << std::endl;
+        }
+#endif
+
+        int page_size = get<0>(ptw_result);
+        IntPtr ppn_result = get<2>(ptw_result);
+        bool is_pagefault = get<4>(ptw_result);
+
+        SubsecondTime ptw_cycles = calculatePTWCycles(ptw_result, count, modeled, eip, lock);
+
+#ifdef DEBUG_MMU
+        log_file_mmu << "[MMU_BASE] Finished PTW for address: " << address << std::endl;
+        log_file_mmu << "[MMU_BASE] PTW latency: " << ptw_cycles << std::endl;
+        log_file_mmu << "[MMU_BASE] Physical Page Number: " << ppn_result << std::endl;
+        log_file_mmu << "[MMU_BASE] Page Size: " << page_size << std::endl;
+        log_file_mmu << "[MMU_BASE] -------------- End of PTW" << std::endl;
+#endif
+
+        return make_tuple(ptw_cycles, is_pagefault, ppn_result, page_size);
+    }
 }

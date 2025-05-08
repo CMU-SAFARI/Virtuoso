@@ -24,16 +24,14 @@ namespace ParametricDramDirectoryMSI
     {
 
     protected:
-
         // Core instance associated with the speculative engine
         Core *core;
-        
+
         // The memory manager to handle memory-related operations
         MemoryManager *memory_manager;
 
         // The name of the speculative engine
         String name;
-
 
         // Shared memory performance model instance used for time tracking
         ShmemPerfModel *shmem_perf_model;
@@ -66,7 +64,7 @@ namespace ParametricDramDirectoryMSI
          * @param eip The instruction pointer at the time of access (useful for certain types of speculation).
          * @param modeled A boolean flag that indicates whether the access is part of a modeled simulation.
          */
-        virtual void invokeSpecEngine(IntPtr address, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled) = 0;
+        virtual void invokeSpecEngine(IntPtr address, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled, SubsecondTime invoke_start_time, IntPtr physical_address, bool page_table_speculation = false) = 0;
 
         /**
          * @brief Abstract method to allocate entries in the speculative engine, typically in speculative TLB.

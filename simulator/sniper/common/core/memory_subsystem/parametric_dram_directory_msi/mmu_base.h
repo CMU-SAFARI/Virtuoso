@@ -83,7 +83,7 @@ namespace ParametricDramDirectoryMSI
 		virtual void discoverVMAs() = 0;
 
 		int getDramAccessesDuringLastWalk() { return dram_accesses_during_last_walk; }
-		tuple<SubsecondTime, bool, IntPtr, int> performPTW(IntPtr address, bool modeled, bool count, bool is_prefetch, IntPtr eip, Core::lock_signal_t lock, PageTable *page_table, bool restart_walk);
+		virtual tuple<SubsecondTime, bool, IntPtr, int> performPTW(IntPtr address, bool modeled, bool count, bool is_prefetch, IntPtr eip, Core::lock_signal_t lock, PageTable *page_table, bool restart_walk);
 		pair<SubsecondTime, SubsecondTime> calculatePFCycles(PTWResult ptw_result, bool count, bool modeled, IntPtr eip, Core::lock_signal_t lock);
 		SubsecondTime calculatePTWCycles(PTWResult ptw_result, bool count, bool modeled, IntPtr eip, Core::lock_signal_t lock);
 		Core* getCore() { return core; }
