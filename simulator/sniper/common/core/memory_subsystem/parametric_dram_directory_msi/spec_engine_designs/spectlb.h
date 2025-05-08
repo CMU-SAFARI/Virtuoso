@@ -2,7 +2,6 @@
 
 #include "mmu.h"
 #include "mmu_base.h"
-#include "mmu_midgard.h"
 #include "mmu_pomtlb.h"
 #include "mmu_range.h"
 #include "mmu_utopia.h"

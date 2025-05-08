@@ -28,7 +28,6 @@ namespace ParametricDramDirectoryMSI
 	typedef std::map<CoreComponentType, CacheCntlr *> CacheCntlrMap;
 	
 	class MemoryManagementUnitBase;
-	class MemoryManagementUnitMidgard;
 	class MemoryManagementUnitPOMTLB;
 	class MemoryManagementUnitUtopia;
 	class MemoryManagementUnitNested;
