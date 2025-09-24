@@ -648,7 +648,8 @@ namespace ParametricDramDirectoryMSI
 		else
 			tlbs = tlb_subsystem->getDataPath();
 
-		std::map<int, vector<tuple<IntPtr, int>>> evicted_translations;
+		std::map<int, vector<tuple<IntPtr,IntPtr,int>>> evicted_translations;
+
 		int tlb_levels = tlbs.size();
 
 		// Some TLB hierarchies might have a "prefetch" TLB, skipping the last level for 
@@ -665,62 +666,66 @@ namespace ParametricDramDirectoryMSI
 		// if "allocate on miss" is set and if it supports our page size.
 		for (int i = 0; i < tlb_levels; i++)
 		{
+			// We will check where we need to allocate the page
+
 			for (UInt32 j = 0; j < tlbs[i].size(); j++)
 			{
-				// If there's any "evicted" translation from the previous level, we attempt to place it here
-				if ((i > 0) && (!evicted_translations[i - 1].empty()))
+				// We need to check if there are any evicted translations from the previous level and allocate them
+				if ((i > 0) && (evicted_translations[i - 1].size() != 0))
 				{
-					tuple<bool, IntPtr, int> result;
 
 #ifdef DEBUG_MMU
-					log_file << "[MMU] There are evicted translations from level: " << (i - 1) << std::endl;
+					log_file << "[MMU] There are evicted translations from level: " << i - 1 << std::endl;
 #endif
-					for (auto &evicted : evicted_translations[i - 1])
+					// iterate through the evicted translations and allocate them in the current TLB
+					for (UInt32 k = 0; k < evicted_translations[i - 1].size(); k++)
 					{
 #ifdef DEBUG_MMU
-						log_file << "[MMU] Evicted Translation: " << get<0>(evicted) << std::endl;
+						log_file << "[MMU] Evicted Translation: " << get<0>(evicted_translations[i - 1][k]) << std::endl;
 #endif
-						if (tlbs[i][j]->supportsPageSize(page_size_result))
+						// We need to check if the TLB supports the page size of the evicted translation
+						if (tlbs[i][j]->supportsPageSize(get<2>(evicted_translations[i - 1][k])))
 						{
 #ifdef DEBUG_MMU
-							log_file << "[MMU] Allocating evicted entry in TLB: Level = "
-							         << i << " Index =  " << j << std::endl;
+							log_file << "[MMU] Allocating evicted entry in TLB: Level = " << i << " Index =  " << j << std::endl;
 #endif
-							result = tlbs[i][j]->allocate(get<0>(evicted), time, count, lock,
-							                              get<1>(evicted), ppn_result);
+
+							auto result = tlbs[i][j]->allocate(get<0>(evicted_translations[i - 1][k]), time, count, lock, get<2>(evicted_translations[i - 1][k]), get<1>(evicted_translations[i - 1][k]));
+
+							// If the allocation was successful and we have an evicted translation, 
+							// we need to add it to the evicted translations vector for
 
 							if (get<0>(result) == true)
 							{
-								evicted_translations[i].push_back(
-									make_tuple(get<1>(result), get<2>(result)));
+								evicted_translations[i].push_back(make_tuple(get<1>(result), get<2>(result), get<3>(result)));
 							}
 						}
 					}
 				}
 
-				// If the TLB can store this page size, is "allocate on miss," and we either missed 
-				// or want to replicate the translation in lower levels:
-				if (tlbs[i][j]->supportsPageSize(page_size_result)
-				    && tlbs[i][j]->getAllocateOnMiss()
-				    && (!tlb_hit || (tlb_hit && hit_level > i)))
+				// We need to allocate the current translation in the TLB if:
+				// 1) The TLB supports the page size of the translation
+				// 2) The TLB is an "allocate on miss" TLB
+				// 3) There was a TLB miss or the TLB hit was at a higher level and you need to allocate the translation in the current level
+				
+				if (tlbs[i][j]->supportsPageSize(page_size_result) && tlbs[i][j]->getAllocateOnMiss() && (!tlb_hit || (tlb_hit && hit_level > i)))
 				{
+					
 #ifdef DEBUG_MMU
-					log_file << "[MMU] " << tlbs[i][j]->getName()
-					         << " supports page size: " << page_size_result << std::endl;
-					log_file << "[MMU] Allocating in TLB: Level = " << i
-					         << " Index = " << j
-					         << " with page size: " << page_size_result
-					         << " and VPN: " << (address >> page_size_result) << std::endl;
+					log_file << "[MMU] " << tlbs[i][j]->getName() << " supports page size: " << page_size_result << std::endl;
+					log_file << "[MMU] Allocating in TLB: Level = " << i << " Index = " << j << " with page size: " << page_size_result << " and VPN: " << (address >> page_size_result) << std::endl;
 #endif
+
 					auto result = tlbs[i][j]->allocate(address, time, count, lock, page_size_result, ppn_result);
 					if (get<0>(result) == true)
 					{
-						evicted_translations[i].push_back(
-							make_tuple(get<1>(result), get<2>(result)));
+						evicted_translations[i].push_back(make_tuple(get<1>(result), get<2>(result), get<3>(result)));
 					}
 				}
+
 			}
 		}
+
 
 		/*
 		 * 6) Allocate the translation in the software TLB if we had a miss there. 
