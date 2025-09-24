@@ -104,11 +104,11 @@ namespace ParametricDramDirectoryMSI
         return NULL;
     }
 
-    std::tuple<bool, IntPtr, int> TLB::allocate(IntPtr address, SubsecondTime now, bool count, Core::lock_signal_t lock_signal, int page_size, IntPtr ppn, bool self_alloc)
+    std::tuple<bool, IntPtr, IntPtr, int> TLB::allocate(IntPtr address, SubsecondTime now, bool count, Core::lock_signal_t lock_signal, int page_size, IntPtr ppn, bool self_alloc)
     {
         if (getPrefetch() && !self_alloc)
         {
-            return std::make_tuple(false, 0, 0);
+            return std::make_tuple(false, 0, 0, 0);
         }
         IntPtr evict_addr;
         CacheBlockInfo evict_block_info;
@@ -124,7 +124,7 @@ namespace ParametricDramDirectoryMSI
 
         bool eviction = false;
         m_cache.insertSingleLineTLB(address, NULL, &eviction, &evict_addr, &evict_block_info, NULL, now, NULL, CacheBlockInfo::block_type_t::NON_PAGE_TABLE, page_size, ppn);
-
+        
         if (eviction && count)
             tlb_stats.m_eviction++;
 
@@ -133,7 +133,7 @@ namespace ParametricDramDirectoryMSI
             std::cout << " Evicted " << evict_addr << " from level: " << m_name << " with page_size" << page_size << std::endl;
 #endif
 
-        return std::make_tuple(eviction, evict_addr, evict_block_info.getPageSize());
+        return std::make_tuple(eviction, evict_addr, evict_block_info.getPPN(), evict_block_info.getPageSize());
     }
 
 }

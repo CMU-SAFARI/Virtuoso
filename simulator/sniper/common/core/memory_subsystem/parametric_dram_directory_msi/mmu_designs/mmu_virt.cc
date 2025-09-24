@@ -332,15 +332,12 @@ namespace ParametricDramDirectoryMSI
 		log_file << "[MMU] Total Walk Latency: " << total_walk_latency << std::endl;
 #endif
 
-		// @hsongara: TLB allocate on miss
-		// instruction path: follows the instruction TLB path
-		// data path: follows the data TLB path
 		if (instruction)
 			tlbs = tlb_subsystem->getInstructionPath();
 		else
 			tlbs = tlb_subsystem->getDataPath();
 
-		std::map<int, vector<tuple<IntPtr, int>>> evicted_translations;
+		std::map<int, vector<tuple<IntPtr,IntPtr,int>>> evicted_translations;
 
 		// We need to allocate the entry in every "allocate on miss" TLB
 
@@ -363,8 +360,8 @@ namespace ParametricDramDirectoryMSI
 				// We need to check if there are any evicted translations from the previous level and allocate them
 				if ((i > 0) && (evicted_translations[i - 1].size() != 0))
 				{
-					tuple<bool, IntPtr, int> result;
 
+					
 #ifdef DEBUG_MMU
 					log_file << "[MMU] There are evicted translations from level: " << i - 1 << std::endl;
 #endif
@@ -375,20 +372,20 @@ namespace ParametricDramDirectoryMSI
 						log_file << "[MMU] Evicted Translation: " << get<0>(evicted_translations[i - 1][k]) << std::endl;
 #endif
 						// We need to check if the TLB supports the page size of the evicted translation
-						if (tlbs[i][j]->supportsPageSize(page_size))
+						if (tlbs[i][j]->supportsPageSize(get<2>(evicted_translations[i - 1][k])))
 						{
 #ifdef DEBUG_MMU
 							log_file << "[MMU] Allocating evicted entry in TLB: Level = " << i << " Index =  " << j << std::endl;
 #endif
 
-							result = tlbs[i][j]->allocate(get<0>(evicted_translations[i - 1][k]), time, count, lock, get<1>(evicted_translations[i - 1][k]), ppn_result);
+							auto result = tlbs[i][j]->allocate(get<0>(evicted_translations[i - 1][k]), time, count, lock, get<2>(evicted_translations[i - 1][k]), get<1>(evicted_translations[i - 1][k]));
 
 							// If the allocation was successful and we have an evicted translation, 
 							// we need to add it to the evicted translations vector for
 
 							if (get<0>(result) == true)
 							{
-								evicted_translations[i].push_back(make_tuple(get<1>(result), get<2>(result)));
+								evicted_translations[i].push_back(make_tuple(get<1>(result), get<2>(result), get<3>(result)));
 							}
 						}
 					}
@@ -406,17 +403,17 @@ namespace ParametricDramDirectoryMSI
 					log_file << "[MMU] " << tlbs[i][j]->getName() << " supports page size: " << page_size << std::endl;
 					log_file << "[MMU] Allocating in TLB: Level = " << i << " Index = " << j << " with page size: " << page_size << " and VPN: " << (address >> page_size) << std::endl;
 #endif
-					tuple<bool, IntPtr, int> result;
 
-					result = tlbs[i][j]->allocate(address, time, count, lock, page_size, ppn_result);
+					auto result = tlbs[i][j]->allocate(address, time, count, lock, page_size, ppn_result);
 					if (get<0>(result) == true)
 					{
-						evicted_translations[i].push_back(make_tuple(get<1>(result), get<2>(result)));
+						evicted_translations[i].push_back(make_tuple(get<1>(result), get<2>(result), get<3>(result)));
 					}
 				}
 
 			}
 		}
+
 
 		// @hsongara: Finalize stats
 		SubsecondTime total_translation_latency = charged_tlb_latency + total_walk_latency;
