@@ -100,36 +100,6 @@ source reservethp.jobfile # This will run the experiments with Slurm
 
 ## Release Notes
 
-### **2025-07: Planned 3rd Major Update**
-- **New Features:**
-    - Integration of MimicOS with a [CXL simulator](https://github.com/Amit-P89/-DRackSim/)
-    - Integration of MimicOS with a GPU simulator.
-    - Virtuoso+Sniper with support for IOMMU.
-    - MimicOS with network stack support.
-
----
-
-### **2025-05: Planned 2nd Major Update**
-- **New Features:**
-    - Release of all MimicOS modules, including:
-        - hugetlbfs
-        - Page cache
-        - Swap cache
-          
-    - Integration of MimicOS with:
-        - [gem5-SE](http://gem5.org/)
-        - [Ramulator](https://github.com/CMU-SAFARI/ramulator2)
-        - [Sniper](https://github.com/snipersim/)
-        - [ChampSim](https://github.com/ChampSim/ChampSim)
-          
-    - New traces/workloads with address translation overheads:
-        - MemCached
-        - Redis
-        - Stockfish
-          
-    - Release of memory tagging schemes
-
----
 
 ### **2025-04-02: Initial Release**
 - **Virtuoso Integration:**
