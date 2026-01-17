@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtuoso Workshop | ASPLOS 2026</title>
+    <meta name="description" content="Full-day workshop and tutorial on hardware/OS co-design for memory management using Virtuoso at ASPLOS 2026.">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        /* --- Basic Setup & Variables --- */
+        :root {
+            --primary-color: #475569;
+            --secondary-color: #f1f5f9;
+            --text-color: #333;
+            --heading-color: #1a1a1a;
+            --border-color: #e0e0e0;
+            --white-color: #fff;
+            --shadow: 0 4px 12px rgba(0,0,0,0.08);
+            --badge-bg: #e2e8f0;
+            --accent-color: #64748b;
+        }
+
+        html { scroll-behavior: smooth; font-size: 16px; }
+        body { font-family: 'Poppins', sans-serif; margin: 0; padding: 0; background-color: var(--secondary-color); color: var(--text-color); line-height: 1.7; }
+        .container { max-width: 960px; margin: 0 auto; padding: 0 1rem; }
+
+        h1, h2, h3 { font-weight: 700; color: var(--heading-color); line-height: 1.2; margin-top: 0; }
+        h1 { font-size: 2.8rem; text-align: center; }
+        h2 { font-size: 2rem; border-bottom: 2px solid var(--primary-color); padding-bottom: 0.5rem; margin-bottom: 2rem; }
+        h3 { font-size: 1.25rem; color: var(--primary-color); }
+        p { margin-bottom: 1rem; }
+        a { color: var(--primary-color); text-decoration: none; transition: color 0.2s; }
+        a:hover { text-decoration: underline; }
+        strong { font-weight: 600; }
+        ul { padding-left: 20px; }
+
+        .site-header { background-color: var(--white-color); padding: 1rem 0; position: sticky; top: 0; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border-bottom: 1px solid var(--border-color); }
+        .nav-container { display: flex; justify-content: space-between; align-items: center; max-width: 960px; margin: 0 auto; padding: 0 1rem; }
+        .nav-logo { font-weight: 700; font-size: 1.2rem; color: var(--heading-color); }
+        .nav-logo:hover { text-decoration: none; }
+        .main-nav ul { margin: 0; padding: 0; list-style: none; display: flex; gap: 1.5rem; }
+        .main-nav a { font-weight: 600; font-size: 0.95rem; }
+
+        .hero { background: #ffffff; padding: 5rem 1rem; text-align: center; }
+        .hero p { font-size: 1.2rem; color: #555; max-width: 700px; margin: 1rem auto 0; }
+        .hero .date-location { font-size: 1.1rem; font-weight: 600; color: var(--primary-color); margin-top: 1.5rem; }
+        .hero .edition-badge { display: inline-block; background: var(--primary-color); color: #fff; padding: 0.4rem 1rem; border-radius: 999px; font-size: 0.9rem; font-weight: 600; margin-bottom: 1rem; }
+
+        main section { padding: 4rem 0; border-bottom: 1px solid var(--border-color); }
+        main section:last-of-type { border-bottom: none; }
+
+        .bio-grid { display: grid; grid-template-columns: 1fr; gap: 2.5rem; }
+        .bio-card { display: flex; flex-direction: column; gap: 1.5rem; background-color: var(--white-color); padding: 2rem; border-radius: 8px; box-shadow: var(--shadow); transition: transform 0.2s, box-shadow 0.2s; }
+        .bio-card:hover { transform: translateY(-5px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
+        .bio-info { display: flex; align-items: center; gap: 1.5rem; }
+        .bio-photo { width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 3px solid var(--border-color); flex-shrink: 0; }
+        .bio-details h3 { margin: 0 0 0.25rem 0; }
+        .bio-details p { margin: 0; font-style: italic; }
+        .bio-description p { margin: 0; }
+        .bio-description a { font-weight: 600; }
+
+        .talks-intro { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:1.5rem; }
+        .badge { display:inline-block; background: var(--badge-bg); color: var(--primary-color); border:1px solid var(--primary-color); padding: 0.35rem 0.6rem; border-radius: 999px; font-size: 0.85rem; font-weight: 600; }
+        .talks-grid { display:grid; grid-template-columns: 1fr; gap: 2rem; }
+        .talk-card { background: var(--white-color); border-radius: 12px; box-shadow: var(--shadow); padding: 1.5rem; border: 1px solid var(--border-color); transition: transform .2s, box-shadow .2s; }
+        .talk-card:hover { transform: translateY(-4px); box-shadow: 0 10px 24px rgba(0,0,0,0.1); }
+        .talk-header { display:flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .75rem; }
+        .talk-title { margin: 0; font-size: 1.15rem; color: var(--heading-color); }
+        .talk-meta { font-size: .95rem; color:#555; }
+        .talk-section { margin-top: .75rem; }
+        .talk-section h4 { margin: 0 0 .25rem 0; font-size: 1rem; color: var(--primary-color); }
+        .talk-speaker { display:flex; align-items:center; gap:.75rem; margin-top:.25rem; flex-wrap: wrap; }
+        .talk-speaker span { font-weight:600; }
+
+        .demo-list { display: flex; flex-direction: column; gap: 2rem; }
+        .demo-item { background-color: var(--white-color); padding: 1.5rem 2rem; border-radius: 8px; border-left: 5px solid var(--primary-color); }
+        .demo-item h3 { margin-top: 0; }
+
+        .callout { background-color: var(--white-color); border: 1px solid var(--primary-color); border-left-width: 5px; padding: 1.5rem 2rem; border-radius: 8px; margin-bottom: 2rem; }
+        .callout h3 { margin-top: 0; }
+        .cta-row { display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-top:1rem; }
+        .btn { display:inline-block; padding:.7rem 1rem; border-radius:10px; border:1px solid var(--primary-color); background: var(--primary-color); color:#fff; font-weight:700; text-decoration:none; }
+        .btn:hover { filter: brightness(0.95); text-decoration:none; }
+        .btn-outline { background: #fff; color: var(--primary-color); }
+
+        .tbd-card { background: linear-gradient(135deg, var(--badge-bg) 0%, #f1f5f9 100%); border: 2px dashed var(--primary-color); border-radius: 12px; padding: 3rem 2rem; text-align: center; }
+        .tbd-card h3 { color: var(--primary-color); margin-bottom: 0.5rem; }
+        .tbd-card p { color: #666; margin: 0; }
+        .tbd-icon { font-size: 3rem; margin-bottom: 1rem; }
+
+        .past-workshop { background: var(--white-color); border-radius: 12px; padding: 1.5rem; border: 1px solid var(--border-color); display: flex; align-items: center; gap: 1.5rem; margin-top: 2rem; }
+        .past-workshop-icon { font-size: 2.5rem; }
+        .past-workshop-info h4 { margin: 0 0 0.25rem 0; color: var(--heading-color); }
+        .past-workshop-info p { margin: 0; color: #666; font-size: 0.95rem; }
+
+        .site-footer { background-color: var(--heading-color); color: var(--secondary-color); text-align: center; padding: 2rem 1rem; font-size: 0.9rem; }
+        .site-footer p { margin: 0; }
+        .site-footer a { color: var(--white-color); }
+
+        @media (min-width: 768px) { .bio-card { flex-direction: row; align-items: flex-start; } }
+        @media (max-width: 600px) {
+            h1 { font-size: 2.2rem; }
+            .nav-container { flex-direction: column; gap: 0.5rem; }
+            .bio-card, .bio-info { flex-direction: column; align-items: center; text-align: center; }
+            .past-workshop { flex-direction: column; text-align: center; }
+        }
+    </style>
+</head>
+<body>
+
+    <header class="site-header">
+        <div class="nav-container">
+            <span class="nav-logo">Virtuoso Workshop</span>
+            <nav class="main-nav">
+                <ul>
+                    <li><a href="#about">About</a></li>
+                    <li><a href="#organizers">Organizers</a></li>
+                    <li><a href="#speakers">Speakers</a></li>
+                    <li><a href="#demos">Demos</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 1rem; margin-bottom: 1rem;">
+                <img src="../img/virtuoso-logo.png" alt="Virtuoso Logo" style="height: 100px; width: auto;">
+            </div>
+            <span class="edition-badge">2nd Edition</span>
+            <h1>Infrastructure for Evaluating <br> Novel HW/OS Interfaces</h1>
+            <p>A full-day workshop and tutorial on the principles, methodologies, and practical aspects of hardware/OS co-design for memory management</p>
+            <div class="date-location">
+                Date: <strong>TBD, 2026</strong> 
+                <br>
+                Location: ASPLOS 2026 (Location TBD)
+            </div>
+            <p style="margin-top: 1rem;">
+                More information coming soon on the <a href="https://www.asplos-conference.org/" target="_blank" rel="noopener">ASPLOS 2026 website</a>.
+            </p>
+        </section>
+
+        <section id="about">
+            <div class="container">
+                <h2>About the Workshop & Tutorial</h2>
+                <p>Building on the success of our first workshop at MICRO 2025, we are excited to bring the Virtuoso Workshop to ASPLOS 2026! This second edition will continue to explore the frontier of hardware/OS co-design for memory management, featuring new talks, updated demos, and fresh perspectives from leading researchers.</p>
+                <p>Traditional computing systems face significant challenges due to rigid interfaces between hardware and operating systems (OS). These interfaces struggle to meet the performance, efficiency, and security demands of modern applications. For example, the growth in data requirements has turned virtual memory (VM) into a major performance bottleneck.</p>
+                <p>This has led to a paradigm shift towards hardware/OS co-design, where hardware components and OS mechanisms are designed in tandem to optimize the system. This tutorial and workshop will provide a comprehensive introduction to this area, focusing on memory management.</p>
+                <p>A core component will be a hands-on exploration of <strong>Virtuoso</strong>, a simulation framework that enables rapid prototyping and evaluation of HW/OS co-designs. Published at ASPLOS 2025, Virtuoso provides a practical environment for attendees to experiment with co-design strategies and gain practical skills. The workshop is designed for students, engineers, and researchers in computer architecture and operating systems.</p>
+                <div class="cta-row" style="margin-top: 2rem;">
+                    <a class="btn" href="https://arxiv.org/abs/2403.04635" target="_blank" rel="noopener">📄 Read the Paper</a>
+                    <a class="btn btn-outline" href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener">💻 View on GitHub</a>
+                </div>
+
+            </div>
+        </section>
+
+        <section id="organizers" style="background-color: var(--white-color);">
+            <div class="container">
+                <h2>Organizers</h2>
+                <div class="bio-grid">
+                    <div class="bio-card">
+                        <div class="bio-info">
+                            <img src="../img/organizers/kon_image.jpeg" alt="Photo of Konstantinos Kanellopoulos" class="bio-photo">
+                            <div class="bio-details">
+                                <h3>Konstantinos Kanellopoulos</h3>
+                                <p>ETH Zürich</p>
+                            </div>
+                        </div>
+                        <div class="bio-description">
+                            <p>Konstantinos Kanellopoulos is a PhD candidate at ETH Zurich, advised by Prof. Onur Mutlu. His research interests are at the intersection of hardware, software, and operating systems, focusing on performance, programmability, and security. More info on his <a href="https://konkanello.github.io/" target="_blank" rel="noopener">webpage</a>.</p>
+                        </div>
+                    </div>
+
+                    <div class="bio-card">
+                        <div class="bio-info">
+                            <img src="../img/organizers/onur_image.jpeg" alt="Photo of Prof. Onur Mutlu" class="bio-photo">
+                            <div class="bio-details">
+                                <h3>Prof. Onur Mutlu</h3>
+                                <p>ETH Zürich</p>
+                            </div>
+                        </div>
+                        <div class="bio-description">
+                            <p>Onur Mutlu is a Professor of Computer Science at ETH Zürich. His research focuses on designing fundamentally energy-efficient, high-performance, and robust computing systems, with an emphasis on computer architecture, hardware security, and memory systems. He is an ACM Fellow, IEEE Fellow, and has received numerous honors and awards. He is passionate about making research and education widely accessible. More info on his <a href="https://people.inf.ethz.ch/omutlu/" target="_blank" rel="noopener">webpage</a>.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section id="speakers">
+            <div class="container">
+                <h2>Talks Schedule &amp; Invited Speakers</h2>   
+                
+                <div class="talks-intro">
+                    <p style="margin:0">Speaker lineup and schedule will be announced closer to the event.</p>
+                    <span class="badge">Coming Soon</span>
+                </div>
+
+                <div class="tbd-card">
+                    <div class="tbd-icon">🎤</div>
+                    <h3>Speakers To Be Announced</h3>
+                    <p>We are currently finalizing our lineup of distinguished speakers from academia and industry.<br>Check back soon for updates!</p>
+                </div>
+
+                <div class="callout" style="margin-top: 2rem;">
+                    <h3>Interested in Speaking?</h3>
+                    <p>We welcome proposals from researchers working on hardware/OS co-design, virtual memory systems, memory management, and related topics. If you would like to present your work at the workshop, please reach out to the organizers.</p>
+                    <div class="cta-row">
+                        <a class="btn btn-outline" href="mailto:konkanello@gmail.com">Contact Us</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="demos" style="background-color: var(--white-color);">
+            <div class="container">
+                <h2>Hands-On Demonstration Plan</h2>
+                <p>The goal of the demo is to provide attendees with a practical, hands-on experience using Virtuoso to prototype and evaluate hardware/OS co-design techniques for memory management.</p>
+                
+                <div class="tbd-card" style="margin-bottom: 2rem;">
+                    <div class="tbd-icon">🛠️</div>
+                    <h3>Demo Content To Be Decided</h3>
+                    <p>We are preparing new and improved hands-on demonstrations for ASPLOS 2026.<br>The demo plan will be published as the workshop date approaches.</p>
+                </div>
+
+                <div class="callout">
+                    <h3>What to Expect</h3>
+                    <p>Based on our MICRO 2025 experience, attendees can expect:</p>
+                    <ul style="margin-bottom: 0;">
+                        <li>Environment setup and Virtuoso quickstart</li>
+                        <li>Guided implementation of hardware/OS co-design techniques</li>
+                        <li>Exploration of Virtuoso's flexibility with different simulators</li>
+                        <li>New demos showcasing latest Virtuoso features</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section id="prerequisites">
+            <div class="container">
+                <h2>Prerequisites for Attendees</h2>
+                <p>Detailed prerequisites will be announced closer to the event. In general, attendees should have:</p>
+                <div class="demo-list">
+                    <div class="demo-item">
+                        <h3>Basic Requirements</h3>
+                        <ul>
+                            <li>Laptop with admin/root access (macOS, Linux, or Windows with WSL2)</li>
+                            <li>A terminal application and text editor (we recommend VSCode)</li>
+                            <li>Basic familiarity with C/C++ and command-line tools</li>
+                            <li>Interest in computer architecture and/or operating systems</li>
+                        </ul>
+                    </div>
+                    <div class="demo-item">
+                        <h3>Options for Participation</h3>
+                        <ul>
+                            <li><strong>Cloud VMs:</strong> We will provide access to pre-configured VMs (details closer to the event)</li>
+                            <li><strong>Local Setup:</strong> At least 8GB RAM and 40GB free disk space, with Git and Docker installed</li>
+                            <li><strong>Remote Participation:</strong> Follow along via livestream if you cannot meet the requirements</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="container">
+            <p>For questions, please contact the organizers: <a href="mailto:konkanello@gmail.com">K. Kanellopoulos</a> and <a href="mailto:omutlu@gmail.com">O. Mutlu</a>.</p>
+        </div>
+    </footer>
