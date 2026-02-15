@@ -45,10 +45,36 @@
         .main-nav ul { margin: 0; padding: 0; list-style: none; display: flex; gap: 1.5rem; }
         .main-nav a { font-weight: 600; font-size: 0.95rem; }
 
-        .hero { background: #ffffff; padding: 5rem 1rem; text-align: center; }
+        /* --- Animated Hero --- */
+        .hero { background: #ffffff; padding: 5rem 1rem; text-align: center; position: relative; overflow: hidden; }
+        .hero::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle at 30% 40%, rgba(71,85,105,0.03) 0%, transparent 50%), radial-gradient(circle at 70% 60%, rgba(100,116,139,0.04) 0%, transparent 50%); animation: heroShimmer 12s ease-in-out infinite alternate; pointer-events: none; }
+        @keyframes heroShimmer { 0% { transform: translate(0,0) rotate(0deg); } 100% { transform: translate(2%,-2%) rotate(1deg); } }
         .hero p { font-size: 1.2rem; color: #555; max-width: 700px; margin: 1rem auto 0; }
         .hero .date-location { font-size: 1.1rem; font-weight: 600; color: var(--primary-color); margin-top: 1.5rem; }
-        .hero .edition-badge { display: inline-block; background: var(--primary-color); color: #fff; padding: 0.4rem 1rem; border-radius: 999px; font-size: 0.9rem; font-weight: 600; margin-bottom: 1rem; }
+        .hero .edition-badge { display: inline-block; background: var(--primary-color); color: #fff; padding: 0.4rem 1rem; border-radius: 999px; font-size: 0.9rem; font-weight: 600; margin-bottom: 1rem; animation: badgePulse 3s ease-in-out infinite; }
+        @keyframes badgePulse { 0%,100% { box-shadow: 0 0 0 0 rgba(71,85,105,0.4); } 50% { box-shadow: 0 0 0 8px rgba(71,85,105,0); } }
+
+        /* --- Countdown --- */
+        .countdown { display: flex; justify-content: center; gap: 1.5rem; margin-top: 1.5rem; flex-wrap: wrap; }
+        .countdown-item { display: flex; flex-direction: column; align-items: center; }
+        .countdown-number { font-size: 2.2rem; font-weight: 700; color: var(--heading-color); background: var(--secondary-color); width: 70px; height: 70px; border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow); transition: transform 0.3s; }
+        .countdown-number:hover { transform: scale(1.1); }
+        .countdown-label { font-size: 0.75rem; font-weight: 600; color: var(--accent-color); margin-top: 0.4rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+        /* --- Nav link hover animation --- */
+        .main-nav a { position: relative; }
+        .main-nav a::after { content: ''; position: absolute; bottom: -3px; left: 0; width: 0; height: 2px; background: var(--primary-color); border-radius: 1px; transition: width 0.3s ease; }
+        .main-nav a:hover::after { width: 100%; }
+        .main-nav a:hover { text-decoration: none; }
+
+        /* --- Scroll fade-in --- */
+        .fade-in { opacity: 0; transform: translateY(30px); transition: opacity 0.7s ease-out, transform 0.7s ease-out; }
+        .fade-in.visible { opacity: 1; transform: translateY(0); }
+
+        /* --- Back to top button --- */
+        .back-to-top { position: fixed; bottom: 2rem; right: 2rem; width: 44px; height: 44px; border-radius: 50%; background: var(--primary-color); color: #fff; border: none; font-size: 1.2rem; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.2); opacity: 0; visibility: hidden; transition: opacity 0.3s, visibility 0.3s, transform 0.3s; z-index: 999; display: flex; align-items: center; justify-content: center; }
+        .back-to-top.show { opacity: 1; visibility: visible; }
+        .back-to-top:hover { transform: scale(1.1); }
 
         main section { padding: 4rem 0; border-bottom: 1px solid var(--border-color); }
         main section:last-of-type { border-bottom: none; }
@@ -120,6 +146,7 @@
                     <li><a href="#about">About</a></li>
                     <li><a href="#organizers">Organizers</a></li>
                     <li><a href="#speakers">Speakers</a></li>
+                    <li><a href="#cfp">Submit</a></li>
                     <li><a href="#demos">Demos</a></li>
                 </ul>
             </nav>
@@ -131,20 +158,26 @@
             <div style="display: flex; align-items: center; justify-content: center; gap: 1rem; margin-bottom: 1rem;">
                 <img src="../img/virtuoso-logo.png" alt="Virtuoso Logo" style="height: 100px; width: auto;">
             </div>
-            <span class="edition-badge">2nd Edition</span>
+            <span class="edition-badge">✨ 2nd Edition</span>
             <h1>Infrastructure for Evaluating <br> Novel HW/OS Interfaces</h1>
             <p>A full-day workshop and tutorial on the principles, methodologies, and practical aspects of hardware/OS co-design for memory management</p>
             <div class="date-location">
-                Date: <strong>TBD, 2026</strong> 
+                📅 Date: <strong>Monday, March 23, 2026</strong> (Full Day)
                 <br>
-                Location: ASPLOS 2026 (Location TBD)
+                📍 Location: <strong>Room Ft. Duquesne</strong>, ASPLOS 2026, Pittsburgh, PA
+            </div>
+            <div class="countdown" id="countdown">
+                <div class="countdown-item"><span class="countdown-number" id="cd-days">--</span><span class="countdown-label">Days</span></div>
+                <div class="countdown-item"><span class="countdown-number" id="cd-hours">--</span><span class="countdown-label">Hours</span></div>
+                <div class="countdown-item"><span class="countdown-number" id="cd-mins">--</span><span class="countdown-label">Minutes</span></div>
+                <div class="countdown-item"><span class="countdown-number" id="cd-secs">--</span><span class="countdown-label">Seconds</span></div>
             </div>
             <p style="margin-top: 1rem;">
-                More information coming soon on the <a href="https://www.asplos-conference.org/" target="_blank" rel="noopener">ASPLOS 2026 website</a>.
+                More information on the <a href="https://www.asplos-conference.org/" target="_blank" rel="noopener">ASPLOS 2026 website</a>.
             </p>
         </section>
 
-        <section id="about">
+        <section id="about" class="fade-in">
             <div class="container">
                 <h2>About the Workshop & Tutorial</h2>
                 <p>Building on the success of our first workshop at MICRO 2025, we are excited to bring the Virtuoso Workshop to ASPLOS 2026! This second edition will continue to explore the frontier of hardware/OS co-design for memory management, featuring new talks, updated demos, and fresh perspectives from leading researchers.</p>
@@ -159,7 +192,7 @@
             </div>
         </section>
 
-        <section id="organizers" style="background-color: var(--white-color);">
+        <section id="organizers" class="fade-in" style="background-color: var(--white-color);">
             <div class="container">
                 <h2>Organizers</h2>
                 <div class="bio-grid">
@@ -192,7 +225,7 @@
             </div>
         </section>
         
-        <section id="speakers">
+        <section id="speakers" class="fade-in">
             <div class="container">
                 <h2>Talks Schedule &amp; Invited Speakers</h2>   
                 
@@ -217,31 +250,56 @@
             </div>
         </section>
 
-        <section id="demos" style="background-color: var(--white-color);">
+        <section id="cfp" class="fade-in">
+            <div class="container">
+                <h2>Call for Submissions</h2>
+                <div class="callout" style="border-color: #c2410c; background: #fff7ed;">
+                    <h3>📢 Submit Your Abstract</h3>
+                    <p>We invite researchers, engineers, and students to submit abstracts describing their work related to hardware/OS co-design, virtual memory, memory management, simulation infrastructure, and related topics. Accepted abstracts will be presented as short talks during the workshop.</p>
+                    <ul>
+                        <li><strong>What to submit:</strong> An abstract describing your work, key contributions, and relevance to the workshop themes.</li>
+                        <li><strong>Topics of interest:</strong> Hardware/OS co-design, virtual memory optimization, memory management techniques, simulation frameworks, address translation, TLB design, page table management, memory security, and related areas.</li>
+                        <li><strong>Submission deadline:</strong> <strong style="color: #c2410c;">March 1, 2026</strong></li>
+                        <li><strong>Notification:</strong> Within one week of submission</li>
+                    </ul>
+                    <p style="margin-bottom: 0;">Please send your abstract via email to the organizers. We look forward to your contributions!</p>
+                    <div class="cta-row">
+                        <a class="btn" href="mailto:konkanello@gmail.com,omutlu@gmail.com?subject=Virtuoso Workshop ASPLOS 2026 - Abstract Submission" style="background: #c2410c; border-color: #c2410c;">📩 Submit Your Abstract</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="demos" class="fade-in" style="background-color: var(--white-color);">
             <div class="container">
                 <h2>Hands-On Demonstration Plan</h2>
                 <p>The goal of the demo is to provide attendees with a practical, hands-on experience using Virtuoso to prototype and evaluate hardware/OS co-design techniques for memory management.</p>
                 
-                <div class="tbd-card" style="margin-bottom: 2rem;">
-                    <div class="tbd-icon">🛠️</div>
-                    <h3>Demo Content To Be Decided</h3>
-                    <p>We are preparing new and improved hands-on demonstrations for ASPLOS 2026.<br>The demo plan will be published as the workshop date approaches.</p>
+                <div class="demo-list">
+                    <div class="demo-item">
+                        <h3>Part 1: Measuring Memory Management Overheads with eBPF</h3>
+                        <p>In this hands-on demo, attendees will use <strong>eBPF</strong> (extended Berkeley Packet Filter) to instrument and measure the overheads of memory management operations at the OS level. This software-based approach provides a lightweight, production-safe way to observe page faults and other memory management events in real time, without modifying the kernel. Participants will learn how to write and deploy eBPF programs to collect fine-grained performance data and identify bottlenecks in virtual memory management.</p>
+                    </div>
+                    <div class="demo-item">
+                        <h3>Part 2: Accelerating Page Faults in Hardware with Virtuoso</h3>
+                        <p>Building on the insights from Part 1, this demo will explore a <strong>hardware-accelerated approach to page fault handling</strong>. Attendees will use the Virtuoso simulation framework to prototype and evaluate a hardware mechanism that offloads page fault processing from the OS, significantly reducing the overhead identified in the first part. This hands-on session will demonstrate Virtuoso's full workflow, from defining a hardware/OS co-design to running simulations and analyzing performance results.</p>
+                    </div>
                 </div>
 
-                <div class="callout">
+                <div class="callout" style="margin-top: 2rem;">
                     <h3>What to Expect</h3>
                     <p>Based on our MICRO 2025 experience, attendees can expect:</p>
                     <ul style="margin-bottom: 0;">
-                        <li>Environment setup and Virtuoso quickstart</li>
-                        <li>Guided implementation of hardware/OS co-design techniques</li>
-                        <li>Exploration of Virtuoso's flexibility with different simulators</li>
-                        <li>New demos showcasing latest Virtuoso features</li>
+                        <li>Environment setup and quickstart for both eBPF tools and Virtuoso</li>
+                        <li>Guided, step-by-step implementation of each demo</li>
+                        <li>A complete journey from measuring real-system overheads to prototyping hardware solutions</li>
+                        <li>Practical skills in both software instrumentation and hardware/OS co-design simulation</li>
                     </ul>
                 </div>
             </div>
         </section>
 
-        <section id="prerequisites">
+        <section id="prerequisites" class="fade-in">
             <div class="container">
                 <h2>Prerequisites for Attendees</h2>
                 <p>Detailed prerequisites will be announced closer to the event. In general, attendees should have:</p>
@@ -270,6 +328,49 @@
 
     <footer class="site-footer">
         <div class="container">
+            <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 1.5rem;">
+                <a href="https://safari.ethz.ch/" target="_blank" rel="noopener" style="display: inline-block; background: #fff; padding: 0.5rem 1rem; border-radius: 8px;">
+                    <img src="../img/safari-eth-logo.jpg" alt="SAFARI Research Group – ETH Zürich" style="height: 50px; width: auto;">
+                </a>
+            </div>
             <p>For questions, please contact the organizers: <a href="mailto:konkanello@gmail.com">K. Kanellopoulos</a> and <a href="mailto:omutlu@gmail.com">O. Mutlu</a>.</p>
         </div>
     </footer>
+
+    <button class="back-to-top" id="backToTop" aria-label="Back to top">↑</button>
+
+    <script>
+        // --- Countdown Timer ---
+        (function() {
+            const target = new Date('2026-03-23T09:00:00-04:00').getTime(); // Pittsburgh EDT
+            function update() {
+                const now = Date.now();
+                const diff = target - now;
+                if (diff <= 0) {
+                    document.getElementById('countdown').innerHTML = '<p style="font-weight:700;color:var(--primary-color);font-size:1.1rem;">🎉 The workshop is happening now!</p>';
+                    return;
+                }
+                const d = Math.floor(diff / 86400000);
+                const h = Math.floor((diff % 86400000) / 3600000);
+                const m = Math.floor((diff % 3600000) / 60000);
+                const s = Math.floor((diff % 60000) / 1000);
+                document.getElementById('cd-days').textContent = d;
+                document.getElementById('cd-hours').textContent = h;
+                document.getElementById('cd-mins').textContent = m;
+                document.getElementById('cd-secs').textContent = s;
+            }
+            update();
+            setInterval(update, 1000);
+        })();
+
+        // --- Scroll fade-in ---
+        const observer = new IntersectionObserver(entries => {
+            entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); observer.unobserve(e.target); } });
+        }, { threshold: 0.1 });
+        document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+        // --- Back to top ---
+        const btn = document.getElementById('backToTop');
+        window.addEventListener('scroll', () => { btn.classList.toggle('show', window.scrollY > 400); });
+        btn.addEventListener('click', () => { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+    </script>
