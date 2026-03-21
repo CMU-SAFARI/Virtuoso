@@ -61,6 +61,9 @@
         .countdown-number:hover { transform: scale(1.1); }
         .countdown-label { font-size: 0.75rem; font-weight: 600; color: var(--accent-color); margin-top: 0.4rem; text-transform: uppercase; letter-spacing: 0.05em; }
 
+        /* --- Anchor offset for sticky header --- */
+        .bio-card[id] { scroll-margin-top: 80px; }
+
         /* --- Nav link hover animation --- */
         .main-nav a { position: relative; }
         .main-nav a::after { content: ''; position: absolute; bottom: -3px; left: 0; width: 0; height: 2px; background: var(--primary-color); border-radius: 1px; transition: width 0.3s ease; }
@@ -118,6 +121,24 @@
         .tbd-card p { color: #666; margin: 0; }
         .tbd-icon { font-size: 3rem; margin-bottom: 1rem; }
 
+        /* --- Schedule Table --- */
+        .schedule-table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; background: var(--white-color); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+        .schedule-table td { padding: 0.85rem 1.1rem; text-align: left; border-bottom: 1px solid var(--border-color); font-size: 0.95rem; vertical-align: top; }
+        .schedule-table tr:last-child td { border-bottom: none; }
+        .schedule-table tbody tr:hover { background: #f8fafc; }
+        .schedule-table .break-row { background: var(--badge-bg); font-weight: 600; color: var(--primary-color); }
+        .schedule-table .break-row:hover { background: var(--badge-bg); }
+        .schedule-table .section-row { background: var(--primary-color); color: #fff; font-weight: 700; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.03em; }
+        .schedule-table .section-row:hover { background: var(--primary-color); }
+        .schedule-table .time-col { white-space: nowrap; font-weight: 600; width: 130px; color: var(--accent-color); }
+        .schedule-table .speaker-col { width: 220px; }
+        .schedule-table details { margin-top: 0.4rem; }
+        .schedule-table summary { font-size: 0.85rem; color: var(--primary-color); cursor: pointer; font-weight: 600; user-select: none; }
+        .schedule-table summary:hover { text-decoration: underline; }
+        .schedule-table details[open] summary { margin-bottom: 0.4rem; }
+        .schedule-table details p { font-size: 0.85rem; color: #555; line-height: 1.6; margin: 0; }
+        @media (max-width: 600px) { .schedule-table td { padding: 0.5rem; font-size: 0.85rem; } .schedule-table .time-col { width: auto; } .schedule-table .speaker-col { width: auto; } }
+
         .past-workshop { background: var(--white-color); border-radius: 12px; padding: 1.5rem; border: 1px solid var(--border-color); display: flex; align-items: center; gap: 1.5rem; margin-top: 2rem; }
         .past-workshop-icon { font-size: 2.5rem; }
         .past-workshop-info h4 { margin: 0 0 0.25rem 0; color: var(--heading-color); }
@@ -144,9 +165,9 @@
             <nav class="main-nav">
                 <ul>
                     <li><a href="#about">About</a></li>
+                    <li><a href="#livestream">Livestream</a></li>
                     <li><a href="#organizers">Organizers</a></li>
                     <li><a href="#speakers">Speakers</a></li>
-                    <li><a href="#cfp">Submit</a></li>
                     <li><a href="#demos">Demos</a></li>
                 </ul>
             </nav>
@@ -192,6 +213,20 @@
             </div>
         </section>
 
+        <section id="livestream" class="fade-in" style="background-color: var(--white-color);">
+            <div class="container">
+                <h2>📺 Livestream</h2>
+                <h3>🔴 Can't attend in person? Join us live!</h3>
+                <p>The workshop will be livestreamed on YouTube. A replay will also be available afterwards.</p>
+                <a href="https://youtube.com/live/giP8NaZp3JA" target="_blank" rel="noopener" style="display: block; position: relative; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); margin: 1.5rem auto; max-width: 560px;">
+                    <img src="https://img.youtube.com/vi/giP8NaZp3JA/maxresdefault.jpg" alt="Virtuoso Workshop @ ASPLOS 2026 – Livestream thumbnail" style="width: 100%; display: block;">
+                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 68px; height: 48px; background: rgba(255,0,0,0.85); border-radius: 12px; display: flex; align-items: center; justify-content: center;">
+                        <div style="width: 0; height: 0; border-style: solid; border-width: 10px 0 10px 18px; border-color: transparent transparent transparent #fff; margin-left: 3px;"></div>
+                    </div>
+                </a>
+            </div>
+        </section>
+
         <section id="organizers" class="fade-in" style="background-color: var(--white-color);">
             <div class="container">
                 <h2>Organizers</h2>
@@ -206,6 +241,19 @@
                         </div>
                         <div class="bio-description">
                             <p>Konstantinos Kanellopoulos is a PhD candidate at ETH Zurich, advised by Prof. Onur Mutlu. His research interests are at the intersection of hardware, software, and operating systems, focusing on performance, programmability, and security. More info on his <a href="https://konkanello.github.io/" target="_blank" rel="noopener">webpage</a>.</p>
+                        </div>
+                    </div>
+
+                    <div class="bio-card">
+                        <div class="bio-info">
+                            <img src="../img/organizers/andreas.png" alt="Photo of Andreas Kosmas Kakolyris" class="bio-photo">
+                            <div class="bio-details">
+                                <h3>Andreas Kosmas Kakolyris</h3>
+                                <p>ETH Zürich</p>
+                            </div>
+                        </div>
+                        <div class="bio-description">
+                            <p>Andreas Kosmas Kakolyris is a PhD student at ETH Zurich in the SAFARI Research Group, working with Prof. Onur Mutlu. His research focuses on hardware/software co-design solutions for high-performance and robust memory systems.</p>
                         </div>
                     </div>
 
@@ -227,44 +275,120 @@
         
         <section id="speakers" class="fade-in">
             <div class="container">
-                <h2>Talks Schedule &amp; Invited Speakers</h2>   
-                
-                <div class="talks-intro">
-                    <p style="margin:0">Speaker lineup and schedule will be announced closer to the event.</p>
-                    <span class="badge">Coming Soon</span>
-                </div>
+                <h2>Talks Schedule &amp; Invited Speakers</h2>
 
-                <div class="tbd-card">
-                    <div class="tbd-icon">🎤</div>
-                    <h3>Speakers To Be Announced</h3>
-                    <p>We are currently finalizing our lineup of distinguished speakers from academia and industry.<br>Check back soon for updates!</p>
-                </div>
+                <table class="schedule-table">
+                    <tbody>
+                        <tr class="section-row"><td colspan="3">Morning Session — Invited Talks</td></tr>
+                        <tr><td class="time-col">08:00 – 08:30</td><td class="speaker-col">Konstantinos Kanellopoulos &amp; Andreas Kosmas Kakolyris (ETH Zürich)</td><td>Introduction &amp; Welcome</td></tr>
+                        <tr><td class="time-col">08:30 – 09:00</td><td class="speaker-col"><a href="#bio-nick">Nick Lindsay</a> (Yale University)</td><td>Understanding Address Translation Scaling Behaviors Using Hardware Event Counters<details><summary>View Abstract</summary><p>To stress-test the virtual memory system, computer architecture researchers are combining standard benchmark programs with synthetically generated inputs that induce large memory footprints. However, for these workloads the relationship between memory footprint and address translation overhead is poorly understood. Using hardware event counters, we characterize the performance of the Intel Haswell microarchitecture MMU across a range of benchmarks, memory footprints, and page sizes. We analyze these measurements using our Walk Cycles Per Instruction (WCPI) framework, which attributes address translation overhead to the program, TLB, MMU cache, and hardware page table walker. We find that address translation overhead often scales with the logarithm of memory footprint, with large pages increasing the footprint at which overhead becomes significant, and that up to 57% of all page table walks are either aborted or lie on the wrong path of speculative execution.</p></details></td></tr>
+                        <tr><td class="time-col">09:00 – 09:30</td><td class="speaker-col"><a href="#bio-kaiyang">Kaiyang Zhao</a> (Carnegie Mellon University)</td><td>Scaling Memory in Data Centers: From Learned Page Tables to CXL-Attached Tiered Memory<details><summary>View Abstract</summary><p>Memory in data centers has run into a scaling problem. With the unrelenting increase in memory capacity, virtual memory does not scale and causes frequent stalls in the processor. On the other hand, the cost of DRAM has skyrocketed as capacity increases, and DRAM now constitutes around half the server TCO in data centers. This talk presents LVM (MICRO '25), which introduces a learning-based approach to the page tables that drastically reduces the cost of page walks, followed by learnings and insights from ongoing work on CXL-attached memory that enables tiered memory in multi-tenant and multi-tier environments, lowering the cost of DRAM in data centers.</p></details></td></tr>
+                        <tr><td class="time-col">09:30 – 10:00</td><td class="speaker-col">Konstantinos Kanellopoulos (ETH Zürich)</td><td>Victima: Drastically Increasing Address Translation Reach by Leveraging Underutilized Cache Resources<details><summary>View Abstract</summary><p>Address translation is a performance bottleneck in data-intensive workloads due to large datasets and irregular access patterns that lead to frequent high-latency page table walks (PTWs). We present Victima, a new software-transparent mechanism that drastically increases the translation reach of the processor by leveraging the underutilized resources of the cache hierarchy. The key idea of Victima is to repurpose L2 cache blocks to store clusters of TLB entries, thereby providing an additional low-latency and high-capacity component that backs up the last-level TLB and thus reduces PTWs. Victima has two main components: a PTW cost predictor that identifies costly-to-translate addresses, and a TLB-aware cache replacement policy that prioritizes keeping TLB entries in the cache hierarchy. In native (virtualized) execution environments, Victima improves average end-to-end application performance by 7.4% (28.7%) over the baseline four-level radix-tree-based page table design, is completely transparent to application and system software, and incurs very small area and power overheads.</p></details></td></tr>
+                        <tr class="break-row"><td class="time-col">10:00 – 10:30</td><td colspan="2">☕ Coffee Break</td></tr>
+                        <tr><td class="time-col">10:30 – 11:00</td><td class="speaker-col"><a href="#bio-deepanjali">Deepanjali Mishra</a> (Carnegie Mellon University)</td><td>I-Fuse: Profile-Guided Speculative Load Fusion for Memory-Intensive Data Centers<details><summary>View Abstract</summary><p>Modern processors make thousands of fine-grained decisions about memory every microsecond, guided by implicit, hardware-only models. For modern data center applications, these isolated hardware mechanisms leave significant performance on the table. Data center applications are heavily memory-intensive and frequently backend-bound, with a substantial fraction of stalls arising from load operations that access the same cache line but are executed independently. I-Fuse is a profile-guided and speculative load micro-op pair fusion mechanism that rethinks the traditional interface between software and microarchitecture. It combines Profile-Guided Fusion, which identifies high-confidence fusible load pairs using dynamic execution characteristics, with Speculative Fusion, which predicts and reserves resources for a partner micro-op early. Across backend-bound data center applications, I-Fuse achieves substantial IPC improvements and significantly outperforms prior hardware-only approaches.</p></details></td></tr>
+                        <tr><td class="time-col">11:00 – 11:30</td><td class="speaker-col"><a href="#bio-stratos">Stratos Psomadakis</a> (NTUA)</td><td>Elastic Translations: A Hardware-Tailored OS Framework for Efficient TLB Coalescing<details><summary>View Abstract</summary><p>As the ever-increasing memory footprints of modern workloads strain virtual memory hardware, address translation has become a critical performance bottleneck. Modern architectures, such as ARMv8-A and RISC-V, support OS-assisted TLB coalescing to help alleviate this overhead, yet OS support remains lacking. This talk presents Elastic Translations, a hardware-tailored OS memory management framework that enables the OS to effectively and efficiently drive TLB coalescing hardware to tame the address translation overhead.</p></details></td></tr>
+                        <tr><td class="time-col">11:30 – 12:00</td><td class="speaker-col"><a href="#bio-ataberk">Ataberk Olgun</a> (ETH Zürich)</td><td>MetaSys: A Practical Open-Source Metadata Management System to Implement and Evaluate Cross-Layer Optimizations<details><summary>View Abstract</summary><p>Hardware-software cooperative techniques are powerful approaches to improve the performance, quality of service, and security of general-purpose processors. They are however typically challenging to rapidly implement and evaluate in real hardware as they require full-stack changes to the hardware, OS, system software, and ISA. MetaSys is the first open-source FPGA-based infrastructure, with a prototype in a RISC-V core, to enable the rapid implementation and evaluation of a wide range of cross-layer techniques in real hardware. MetaSys implements a rich hardware-software interface and lightweight metadata support that can be used as a common basis to rapidly implement and evaluate new cross-layer techniques. We demonstrate MetaSys's versatility by implementing three cross-layer techniques for prefetching, bounds checking, and return address protection, each requiring only ~100 lines of Chisel code.</p></details></td></tr>
+                        <tr class="break-row"><td class="time-col">12:00 – 13:30</td><td colspan="2">🍽️ Lunch</td></tr>
 
-                <div class="callout" style="margin-top: 2rem;">
-                    <h3>Interested in Speaking?</h3>
-                    <p>We welcome proposals from researchers working on hardware/OS co-design, virtual memory systems, memory management, and related topics. If you would like to present your work at the workshop, please reach out to the organizers.</p>
-                    <div class="cta-row">
-                        <a class="btn btn-outline" href="mailto:konkanello@gmail.com">Contact Us</a>
+                        <tr class="section-row"><td colspan="3">Afternoon Session — Virtuoso Deep Dive</td></tr>
+                        <tr><td class="time-col">13:30 – 14:00</td><td class="speaker-col">Konstantinos Kanellopoulos &amp; Konstantinos Sgouras (ETH Zürich)</td><td>Virtuoso Core Design</td></tr>
+                        <tr><td class="time-col">14:00 – 14:30</td><td class="speaker-col">Konstantinos Kanellopoulos &amp; Konstantinos Sgouras (ETH Zürich)</td><td>New Features</td></tr>
+                        <tr><td class="time-col">14:30 – 15:00</td><td class="speaker-col"><a href="#bio-nisa">Andreas Kosmas Kakolyris &amp; Nisa Bostanci</a> (ETH Zürich)</td><td>Ramulator + Virtuoso</td></tr>
+
+                        <tr class="section-row"><td colspan="3">Hands-On Tutorial Block</td></tr>
+                        <tr><td class="time-col">15:00 – 15:30</td><td class="speaker-col">Konstantinos Kanellopoulos (ETH Zürich)</td><td>Tutorial Part 1: Setup &amp; Overview</td></tr>
+                        <tr><td class="time-col">15:30 – 16:00</td><td class="speaker-col">Konstantinos Kanellopoulos (ETH Zürich)</td><td>Tutorial Part 2: Core Concepts</td></tr>
+                        <tr><td class="time-col">16:00 – 16:30</td><td class="speaker-col">Konstantinos Kanellopoulos (ETH Zürich)</td><td>Tutorial Part 3: Hands-On Walkthrough</td></tr>
+                        <tr><td class="time-col">16:30 – 17:00</td><td class="speaker-col">Konstantinos Kanellopoulos (ETH Zürich)</td><td>Tutorial Part 4: Advanced Features &amp; Examples</td></tr>
+                        <tr><td class="time-col">17:00 – 17:30</td><td class="speaker-col">Konstantinos Kanellopoulos (ETH Zürich)</td><td>Tutorial Part 5: Q&amp;A &amp; Open Discussion</td></tr>
+                    </tbody>
+                </table>
+
+                <h3 style="margin-top:3rem;">🎤 Invited Speakers</h3>
+
+                <div class="bio-grid" style="margin-top:1.5rem;">
+                    <div class="bio-card" id="bio-nick">
+                        <div class="bio-info">
+                            <img src="../img/organizers/nick.png" alt="Photo of Nick Lindsay" class="bio-photo">
+                            <div class="bio-details">
+                                <h3>Nick Lindsay</h3>
+                                <p>Yale University</p>
+                            </div>
+                        </div>
+                        <div class="bio-description">
+                            <p><strong>Talk:</strong> Understanding Address Translation Scaling Behaviors Using Hardware Event Counters</p>
+                            <p style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid var(--border-color);"><strong>Bio:</strong> Nick Lindsay is a Ph.D. candidate in Computer Science at Yale University, advised by Professor Abhishek Bhattacharjee. His research interests lie at the intersection of microarchitecture, performance modeling, and formal methods, with a focus on the memory system. At Yale, he has worked on brain-computer interfaces, memory-intensive workload characterization, and on studying the memory management unit implementation on modern processors. Nick is joining AMD Research and Advanced Development in August. More info on his <a href="https://nicholaslindsay.github.io/" target="_blank" rel="noopener">webpage</a>.</p>
+                        </div>
                     </div>
-                </div>
-            </div>
-        </section>
 
-        <section id="cfp" class="fade-in">
-            <div class="container">
-                <h2>Call for Submissions</h2>
-                <div class="callout" style="border-color: #c2410c; background: #fff7ed;">
-                    <h3>📢 Submit Your Abstract</h3>
-                    <p>We invite researchers, engineers, and students to submit abstracts describing their work related to hardware/OS co-design, virtual memory, memory management, simulation infrastructure, and related topics. Accepted abstracts will be presented as short talks during the workshop.</p>
-                    <ul>
-                        <li><strong>What to submit:</strong> An abstract describing your work, key contributions, and relevance to the workshop themes.</li>
-                        <li><strong>Topics of interest:</strong> Hardware/OS co-design, virtual memory optimization, memory management techniques, simulation frameworks, address translation, TLB design, page table management, memory security, and related areas.</li>
-                        <li><strong>Submission deadline:</strong> <strong style="color: #c2410c;">March 1, 2026</strong></li>
-                        <li><strong>Notification:</strong> Within one week of submission</li>
-                    </ul>
-                    <p style="margin-bottom: 0;">Please send your abstract via email to the organizers. We look forward to your contributions!</p>
-                    <div class="cta-row">
-                        <a class="btn" href="mailto:konkanello@gmail.com,omutlu@gmail.com?subject=Virtuoso Workshop ASPLOS 2026 - Abstract Submission" style="background: #c2410c; border-color: #c2410c;">📩 Submit Your Abstract</a>
+                    <div class="bio-card" id="bio-kaiyang">
+                        <div class="bio-info">
+                            <img src="../img/organizers/kaiyang.png" alt="Photo of Kaiyang Zhao" class="bio-photo">
+                            <div class="bio-details">
+                                <h3>Kaiyang Zhao</h3>
+                                <p>Carnegie Mellon University</p>
+                            </div>
+                        </div>
+                        <div class="bio-description">
+                            <p><strong>Talk:</strong> Scaling Memory in Data Centers: From Learned Page Tables to CXL-Attached Tiered Memory</p>
+                            <p style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid var(--border-color);"><strong>Bio:</strong> Kaiyang Zhao is a fifth-year PhD student in Computer Science at Carnegie Mellon University, advised by Professor Dimitrios Skarlatos. He cares about efficiency and scalability of memory in datacenters and improves them by working at the intersection of computer architecture and operating systems. He has won awards including ISCA Best Paper Award, IEEE MICRO Top Picks, and Qualcomm Innovation Fellowship.</p>
+                        </div>
+                    </div>
+
+                    <div class="bio-card" id="bio-deepanjali">
+                        <div class="bio-info">
+                            <img src="../img/organizers/deepanjali_image.jpg" alt="Photo of Deepanjali Mishra" class="bio-photo">
+                            <div class="bio-details">
+                                <h3>Deepanjali Mishra</h3>
+                                <p>Carnegie Mellon University</p>
+                            </div>
+                        </div>
+                        <div class="bio-description">
+                            <p><strong>Talk:</strong> I-Fuse: Profile-Guided Speculative Load Fusion for Memory-Intensive Data Centers</p>
+                            <p style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid var(--border-color);"><strong>Bio:</strong> Deepanjali Mishra is a Ph.D. student in the Electrical and Computer Engineering (ECE) Department at Carnegie Mellon University, advised by Prof. Akshitha Sriraman. Her research bridges computer architecture and software systems, demonstrating the importance of that bridge in enabling efficient and sustainable hyperscale data center systems via solutions that span the compute stack. Her research has been recognized with the ASPLOS 2026 WICArch Early-Career Researcher Fellowship, the 2024 Carnegie Institute of Technology Dean's Fellowship, and the 2022 ACM-W Scholarship.</p>
+                        </div>
+                    </div>
+
+                    <div class="bio-card" id="bio-stratos">
+                        <div class="bio-info">
+                            <img src="../img/organizers/stratos_image.jpeg" alt="Photo of Stratos Psomadakis" class="bio-photo">
+                            <div class="bio-details">
+                                <h3>Stratos Psomadakis</h3>
+                                <p>National Technical University of Athens (NTUA)</p>
+                            </div>
+                        </div>
+                        <div class="bio-description">
+                            <p><strong>Talk:</strong> Elastic Translations: A Hardware-Tailored OS Framework for Efficient TLB Coalescing</p>
+                            <p style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid var(--border-color);"><strong>Bio:</strong> Stratos Psomadakis is a postdoctoral researcher at the Computing Systems Laboratory (CSLab), National Technical University of Athens (NTUA). His research lies at the intersection of operating systems and computer architecture, with a focus on virtual memory, memory management, and efficient sandboxing of serverless applications. His work has received two best paper awards (ASPLOS'25, HotStorage'25). In a previous life, he was a Cloud and Site Reliability Engineer at GRNET, and a Gentoo Linux developer.</p>
+                        </div>
+                    </div>
+
+                    <div class="bio-card" id="bio-ataberk">
+                        <div class="bio-info">
+                            <img src="../img/organizers/ataberk.png" alt="Photo of Ataberk Olgun" class="bio-photo">
+                            <div class="bio-details">
+                                <h3>Ataberk Olgun</h3>
+                                <p>ETH Zürich</p>
+                            </div>
+                        </div>
+                        <div class="bio-description">
+                            <p><strong>Talk:</strong> MetaSys: A Practical Open-Source Metadata Management System to Implement and Evaluate Cross-Layer Optimizations</p>
+                            <p style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid var(--border-color);"><strong>Bio:</strong> Ataberk Olgun is a Computer Architecture researcher and a Ph.D. student in the SAFARI Research Group at ETH Zürich, led by Prof. Onur Mutlu. He obtained his BSc and MSc degrees from TOBB ETÜ under Prof. Oğuz Ergin's supervision. His research interests lie primarily in designing reliable, performance- and energy-efficient memory systems from the ground up. More info on his <a href="https://ataberkolgun.com/" target="_blank" rel="noopener">webpage</a>.</p>
+                        </div>
+                    </div>
+
+                    <div class="bio-card" id="bio-nisa">
+                        <div class="bio-info">
+                            <img src="../img/organizers/nisa.png" alt="Photo of Nisa Bostanci" class="bio-photo">
+                            <div class="bio-details">
+                                <h3>Nisa Bostanci</h3>
+                                <p>ETH Zürich</p>
+                            </div>
+                        </div>
+                        <div class="bio-description">
+                            <p><strong>Talk:</strong> Ramulator + Virtuoso</p>
+                            <p style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid var(--border-color);"><strong>Bio:</strong> Nisa Bostanci is a Ph.D. student in the SAFARI Research Group at ETH Zurich, led by Prof. Onur Mutlu. She completed her BSc and MSc degrees in Computer Engineering at TOBB ETU under Prof. Oguz Ergin's supervision. Her research focuses on memory systems, particularly their security, reliability, and safety (robustness), and designing effective and efficient solutions to address robustness issues. More info on her <a href="https://nisabostanci.github.io/" target="_blank" rel="noopener">webpage</a>.</p>
+                        </div>
                     </div>
                 </div>
             </div>
