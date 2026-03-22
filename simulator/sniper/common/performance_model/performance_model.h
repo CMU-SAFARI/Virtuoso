@@ -26,12 +26,20 @@ class PerformanceModel
 public:
    PerformanceModel(Core* core);
    virtual ~PerformanceModel();
+   virtual void drain(){
+      printf("PerformanceModel::drain() called, but not implemented\n");
+   };
 
    void queueInstruction(DynamicInstruction *i);
    void queuePseudoInstruction(PseudoInstruction *i);
    void handleIdleInstruction(PseudoInstruction *i);
    void iterate();
    virtual void synchronize();
+   
+   void emptyInstructionQueue()
+   {
+      m_instruction_queue.clear();
+   }
 
    UInt64 getInstructionCount() const { return m_instruction_count; }
 

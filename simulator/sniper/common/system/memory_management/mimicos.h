@@ -1,78 +1,450 @@
+#ifndef MIMICOS_H
+#define MIMICOS_H
 
-#pragma once
-
-#include "buddy_allocator.h"
-#include "physical_memory_allocator.h"
-#include "utopia.h"
-#include "page_fault_handler.h"
-#include "pagetable.h"
-#include "rangetable.h"
+#include "../../../include/memory_management/physical_memory_allocators/physical_memory_allocator.h"
+#include "application_context.h"
+#include "page_fault_state.h"
+#include "mimicos_message.h"
+#include "memory_management/hugetlbfs.h"
+#include "memory_management/policies/hugetlbfs_policy.h"
+#include "memory_management/swap_cache.h"
+#include "memory_management/policies/swap_cache_policy.h"
 #include "subsecond_time.h"
-#include <unordered_map>
+#include "fixed_types.h"
 
-using namespace std;
+#include <unordered_map>
+#include <memory>
+#include <vector>
+#include <fstream>
+
+// Backward compatibility: old code used MimicOS_NS::Message
+namespace MimicOS_NS {
+    using Message = MimicOSMessage;
+}
+
+// Type aliases for Sniper-space policy-based templates
+using SniperHugeTLBfs  = ::HugeTLBfs<Sniper::HugeTLBfs::MetricsPolicy>;
+using SniperSwapCache  = ::SwapCache<Sniper::SwapCache::MetricsPolicy>;
+
+/**
+ * @brief Per-core performance statistics for adaptive policies
+ * 
+ * This structure holds per-core statistics that can be used by various
+ * adaptive components (e.g., MPLRU controller, prefetchers, etc.)
+ * 
+ * Updated by MMU on each translation, accessible globally via MimicOS.
+ */
+struct PerCoreStats {
+    // ============ Translation Statistics ============
+    SubsecondTime translation_latency;      // Cumulative translation latency
+    SubsecondTime page_walk_latency;        // Cumulative page table walk latency
+    UInt64 num_translations;                // Total translations performed
+    UInt64 l2_tlb_misses;                   // L2 TLB misses (triggers page walks)
+    UInt64 l2_tlb_hits;                     // L2 TLB hits
+    
+    // ============ Data Access Statistics ============
+    SubsecondTime data_access_latency;      // Cumulative data access latency
+    UInt64 num_data_accesses;               // Total data accesses
+    UInt64 cache_hits;                      // Cache hits (L1/L2/L3)
+    UInt64 cache_misses;                    // Cache misses (DRAM accesses)
+    
+    // ============ NUCA Cache Statistics ============
+    UInt64 nuca_accesses;                   // Total NUCA accesses (reads + writes)
+    UInt64 nuca_misses;                     // Total NUCA misses (read + write misses)
+    UInt64 nuca_metadata_misses;            // NUCA misses for metadata (page table) blocks
+    UInt64 nuca_data_misses;                // NUCA misses for data blocks
+    
+    // ============ Instruction Statistics ============
+    UInt64 instructions_executed;           // Total instructions executed
+    UInt64 cycles;                          // Total cycles
+    
+    // ============ Timing ============
+    SubsecondTime last_update_time;         // When stats were last updated
+    
+    PerCoreStats() 
+        : translation_latency(SubsecondTime::Zero())
+        , page_walk_latency(SubsecondTime::Zero())
+        , num_translations(0)
+        , l2_tlb_misses(0)
+        , l2_tlb_hits(0)
+        , data_access_latency(SubsecondTime::Zero())
+        , num_data_accesses(0)
+        , cache_hits(0)
+        , cache_misses(0)
+        , nuca_accesses(0)
+        , nuca_misses(0)
+        , nuca_metadata_misses(0)
+        , nuca_data_misses(0)
+        , instructions_executed(0)
+        , cycles(0)
+        , last_update_time(SubsecondTime::Zero())
+    {}
+    
+    // Derived metrics
+    float getL2TlbMissRate() const {
+        UInt64 total = l2_tlb_hits + l2_tlb_misses;
+        return total > 0 ? (float)l2_tlb_misses / total : 0.0f;
+    }
+    
+    float getL2TlbMPKI() const {
+        return instructions_executed > 0 ? 
+            (float)l2_tlb_misses * 1000.0f / instructions_executed : 0.0f;
+    }
+    
+    float getTranslationShare() const {
+        // Translation latency as fraction of total cycles
+        if (cycles == 0) return 0.0f;
+        return (float)translation_latency.getNS() / (float)cycles;
+    }
+    
+    float getRho() const {
+        // Ratio of translation stalls to data stalls
+        if (data_access_latency.getNS() == 0) return 0.0f;
+        return (float)translation_latency.getNS() / (float)data_access_latency.getNS();
+    }
+    
+    float getNucaMPKI() const {
+        // NUCA misses per 1000 instructions
+        return instructions_executed > 0 ? 
+            (float)nuca_misses * 1000.0f / instructions_executed : 0.0f;
+    }
+    
+    float getNucaMetadataMPKI() const {
+        // NUCA metadata misses per 1000 instructions
+        return instructions_executed > 0 ? 
+            (float)nuca_metadata_misses * 1000.0f / instructions_executed : 0.0f;
+    }
+    
+    float getNucaDataMPKI() const {
+        // NUCA data misses per 1000 instructions
+        return instructions_executed > 0 ? 
+            (float)nuca_data_misses * 1000.0f / instructions_executed : 0.0f;
+    }
+};
+
+/**
+ * @brief MimicOS - Simulated Operating System for memory management
+ * 
+ * MimicOS coordinates memory management simulation:
+ * - Application lifecycle (page tables, VMAs)
+ * - Physical memory allocation
+ * - Swap space (optional)
+ * - Communication with userspace MimicOS (VirtuOS)
+ * 
+ * Two modes of operation:
+ * 1. Sniper-space: MimicOS handles page faults directly
+ * 2. Userspace: MimicOS communicates with VirtuOS for page fault handling
+ * 
+ * This class uses modular components:
+ * - ApplicationContext: per-application state (page tables, VMAs)
+ * - PageFaultState: page fault tracking
+ * - MimicOSMessage/Protocol: userspace communication
+ */
 
 class MimicOS
 {
+public:
+    // ============ Construction/Destruction ============
+    
+    /**
+     * @brief Construct MimicOS
+     * 
+     * @param is_guest True if this is a guest OS (for virtualization)
+     */
+    explicit MimicOS(bool is_guest);
+    ~MimicOS();
+    
+    // Disable copy
+    MimicOS(const MimicOS&) = delete;
+    MimicOS& operator=(const MimicOS&) = delete;
+
+    // ============ Application Management ============
+    
+    /**
+     * @brief Create a new application context
+     * 
+     * @param app_id Application ID
+     */
+    void createApplication(int app_id);
+    
+    /**
+     * @brief Get the application context for an app
+     * 
+     * @param app_id Application ID
+     * @return ApplicationContext* or nullptr if not found
+     */
+    ApplicationContext* getApplication(int app_id);
+    const ApplicationContext* getApplication(int app_id) const;
+
+    // ============ Page Table Access (convenience methods) ============
+    
+    ParametricDramDirectoryMSI::PageTable* getPageTable(int app_id);
+    ParametricDramDirectoryMSI::RangeTable* getRangeTable(int app_id);
+    
+    // ============ VMA Access (convenience methods) ============
+    
+    std::vector<VMA>& getVMA(int app_id);
+    
+    void setAllocatedVMA(int app_id, int vma_index);
+    void setPhysicalOffset(int app_id, int vma_index, IntPtr offset);
+    IntPtr getPhysicalOffsetSpot(int app_id, IntPtr va);
+    bool incrementSuccessfulOffsetBasedAllocations(int app_id, IntPtr va);
+    int getSuccessfulOffsetBasedAllocations(int app_id, IntPtr va);
+    int getVMAThresholdSpot(int app_id, IntPtr va);
+    
+    // ============ Memory Allocator ============
+    
+    PhysicalMemoryAllocator* getMemoryAllocator() { return m_memory_allocator.get(); }
+
+    /**
+     * @brief Get the NUMA node ID for a given physical page number.
+     *
+     * Delegates to the underlying physical memory allocator. NUMA-aware
+     * allocators (e.g., NumaReservationTHPAllocator) return the actual node;
+     * non-NUMA allocators return 0 (single implicit node).
+     *
+     * @param ppn Physical page number (4KB granularity)
+     * @return NUMA node ID (0-based)
+     */
+    UInt32 getNumaNodeForPPN(UInt64 ppn) const
+    {
+        if (m_memory_allocator)
+            return m_memory_allocator->getNumaNodeForPPN(ppn);
+        return 0;
+    }
+    
+    // ============ Swap Management ============
+    
+    bool isSwapEnabled() const { return m_swap_cache != nullptr; }
+    SniperSwapCache* getSwapCache() { return m_swap_cache.get(); }
+    bool swapOutPage(IntPtr vpn, int app_id);
+    void deletePageTableEntry(IntPtr vpn, int app_id);
+    
+    void setLastPageFaultCausedSwapping(bool caused_swapping) {
+        m_last_pf_caused_swapping = caused_swapping;
+    }
+    
+    // ============ HugeTLBfs Management ============
+    
+    /**
+     * @brief Check if HugeTLBfs service is enabled
+     * @return true if hugetlbfs is enabled and initialized
+     */
+    bool isHugeTLBfsEnabled() const { return m_hugetlbfs != nullptr && m_hugetlbfs->isEnabled(); }
+    
+    /**
+     * @brief Get the HugeTLBfs service
+     * @return Pointer to HugeTLBfs service, or nullptr if disabled
+     */
+    SniperHugeTLBfs* getHugeTLBfs() { return m_hugetlbfs.get(); }
+    const SniperHugeTLBfs* getHugeTLBfs() const { return m_hugetlbfs.get(); }
+    
+    /**
+     * @brief Allocate a huge page for an application
+     * 
+     * Convenience method that delegates to HugeTLBfs service.
+     * 
+     * @param app_id    Application requesting the page
+     * @param vaddr     Virtual address to be mapped
+     * @param size_2mb  True for 2MB page, false for 1GB page
+     * @return Base physical page number, or -1 if allocation fails
+     */
+    IntPtr allocateHugePage(int app_id, IntPtr vaddr, bool size_2mb = true);
+    
+    /**
+     * @brief Deallocate a huge page
+     * 
+     * @param base_ppn  Base physical page number
+     * @param size_2mb  True for 2MB page, false for 1GB page
+     * @return true if deallocation succeeded
+     */
+    bool deallocateHugePage(IntPtr base_ppn, bool size_2mb = true);
+    
+    // ============ Page Fault State (per-core) ============
+    
+    /**
+     * @brief Initialize per-core page fault state vectors
+     * @param num_cores Number of cores in the system
+     */
+    void initPerCorePageFaultState(UInt32 num_cores);
+    
+    PageFaultState& getPageFaultState(core_id_t core_id) {
+        assert(core_id >= 0 && (size_t)core_id < m_pf_states.size());
+        return m_pf_states[core_id];
+    }
+    const PageFaultState& getPageFaultState(core_id_t core_id) const {
+        assert(core_id >= 0 && (size_t)core_id < m_pf_states.size());
+        return m_pf_states[core_id];
+    }
+    void resetPageFaultState(core_id_t core_id) {
+        assert(core_id >= 0 && (size_t)core_id < m_pf_states.size());
+        m_pf_states[core_id].reset();
+    }
+    
+    // Per-core page fault API
+    bool getIsPageFault(core_id_t core_id) const {
+        assert(core_id >= 0 && (size_t)core_id < m_pf_states.size());
+        return m_pf_states[core_id].isActive();
+    }
+    void setIsPageFault(core_id_t core_id, bool is_pf) {
+        assert(core_id >= 0 && (size_t)core_id < m_pf_states.size());
+        if (!is_pf) m_pf_states[core_id].reset();
+        else m_pf_states[core_id].is_active = true;
+    }
+    IntPtr getVaTriggeredPageFault(core_id_t core_id) const {
+        assert(core_id >= 0 && (size_t)core_id < m_pf_states.size());
+        return m_pf_states[core_id].getFaultingVA();
+    }
+    void setVaTriggeredPageFault(core_id_t core_id, IntPtr va) {
+        assert(core_id >= 0 && (size_t)core_id < m_pf_states.size());
+        m_pf_states[core_id].faulting_va = va;
+    }
+    void setNumRequestedFrames(core_id_t core_id, int num_frames) {
+        assert(core_id >= 0 && (size_t)core_id < m_pf_states.size());
+        m_pf_states[core_id].num_requested_frames = num_frames;
+    }
+    int getNumRequestedFrames(core_id_t core_id) const {
+        assert(core_id >= 0 && (size_t)core_id < m_pf_states.size());
+        return m_pf_states[core_id].getNumRequestedFrames();
+    }
+    
+    // ============ Userspace Communication ============
+    
+    bool isUserspaceMimicosEnabled() const { return m_userspace_enabled; }
+    
+    MimicOSMessage* getMessage() { return &m_message; }
+    
+    template <typename... Args>
+    void buildMessageWithArgs(const std::string& message_type, Args&&... args) {
+        MimicOSProtocol::buildMessage(m_message, message_type, std::forward<Args>(args)...);
+    }
+    
+    // ============ Configuration ============
+    
+    String getName() const { return m_name; }
+    SubsecondTime getPageFaultLatency() const { return m_page_fault_latency.getLatency(); }
+    
+    int getNumberOfPageSizes() const { return static_cast<int>(m_page_sizes.size()); }
+    int* getPageSizeList() { return m_page_sizes.data(); }
+    const std::vector<int>& getPageSizes() const { return m_page_sizes; }
+    
+    String getPageTableType() const { return m_page_table_type; }
+    String getPageTableName() const { return m_page_table_name; }
+    void setPageTableType(const String& type) { m_page_table_type = type; }
+    void setPageTableName(const String& name) { m_page_table_name = name; }
+    
+    String getRangeTableType() const { return m_range_table_type; }
+    String getRangeTableName() const { return m_range_table_name; }
+    void setRangeTableType(const String& type) { m_range_table_type = type; }
+    void setRangeTableName(const String& name) { m_range_table_name = name; }
+    
+    UInt64 getAccessesPerVPN(IntPtr vpn, int app_id);
+    
+    // ============ Protocol Codes (static, for external access) ============
+    
+    static std::unordered_map<std::string, uint64_t> protocol_codes_encode;
+    static std::unordered_map<uint64_t, std::string> protocol_codes_decode;
+    
+    // ============ Per-Core Statistics ============
+    
+    /**
+     * @brief Initialize per-core stats for a given number of cores
+     * @param num_cores Number of cores in the system
+     */
+    void initPerCoreStats(UInt32 num_cores);
+    
+    /**
+     * @brief Get per-core statistics (read-only)
+     * @param core_id Core ID
+     * @return Reference to per-core stats, or empty stats if invalid
+     */
+    const PerCoreStats& getPerCoreStats(core_id_t core_id) const;
+    
+    /**
+     * @brief Get per-core statistics (mutable, for updates)
+     * @param core_id Core ID
+     * @return Pointer to per-core stats, or nullptr if invalid
+     */
+    PerCoreStats* getPerCoreStatsMutable(core_id_t core_id);
+    
+    /**
+     * @brief Update translation statistics for a core
+     * 
+     * Called by MMU after each translation to update stats.
+     * 
+     * @param core_id       Core ID
+     * @param tr_latency    Translation latency for this access
+     * @param is_l2_miss    True if L2 TLB missed (triggered page walk)
+     * @param walk_latency  Page walk latency (if applicable)
+     */
+    void updateTranslationStats(core_id_t core_id, 
+                                SubsecondTime tr_latency,
+                                bool is_l2_miss,
+                                SubsecondTime walk_latency = SubsecondTime::Zero());
+    
+    /**
+     * @brief Update instruction count for a core
+     * @param core_id       Core ID
+     * @param instructions  Number of instructions executed
+     * @param cycles        Number of cycles elapsed
+     */
+    void updateInstructionStats(core_id_t core_id, UInt64 instructions, UInt64 cycles);
+    
+    /**
+     * @brief Update data access statistics for a core
+     * @param core_id       Core ID
+     * @param latency       Data access latency
+     * @param is_cache_hit  True if hit in cache (L1/L2/L3)
+     */
+    void updateDataAccessStats(core_id_t core_id, SubsecondTime latency, bool is_cache_hit);
+    
+    /**
+     * @brief Check if per-core stats are initialized
+     */
+    bool isPerCoreStatsInitialized() const { return !m_per_core_stats.empty(); }
+    
+    // ============ Deprecated ============
+    
+    /**
+     * @deprecated Use exception handlers instead
+     */
+    void handle_page_fault(IntPtr address, IntPtr core_id, int frames);
 
 private:
-
-    PhysicalMemoryAllocator *m_memory_allocator; // This is the physical memory allocator
-    bool is_guest;
-    String mimicos_name;
-    PageFaultHandlerBase *page_fault_handler;
-    bool vmas_provided;
+    // ============ Identity ============
+    String m_name;
+    bool m_is_guest;
+    bool m_userspace_enabled;
     
-
-    String page_table_type;
-    String page_table_name;
+    // ============ Subsystems ============
+    std::unique_ptr<PhysicalMemoryAllocator> m_memory_allocator;
+    std::unique_ptr<SniperSwapCache> m_swap_cache;
+    std::unique_ptr<SniperHugeTLBfs> m_hugetlbfs;
+    
+    // ============ Per-Application State ============
+    std::unordered_map<int, std::unique_ptr<ApplicationContext>> m_applications;
+    
+    // ============ Page Fault State (per-core) ============
+    std::vector<PageFaultState> m_pf_states;
+    MimicOSMessage m_message;
+    bool m_last_pf_caused_swapping;
+    
+    // ============ Configuration ============
+    String m_page_table_type;
+    String m_page_table_name;
+    String m_range_table_type;
+    String m_range_table_name;
+    std::vector<int> m_page_sizes;
     ComponentLatency m_page_fault_latency;
-
-    String range_table_type;
-    String range_table_name;
-
+    double m_target_fragmentation;
     
-    int number_of_page_sizes;
-    int *page_size_list;
-
-    // Use an unordered map to store the page table for each application
-    std::unordered_map<UInt64, ParametricDramDirectoryMSI::PageTable*> page_tables;
-    std::unordered_map<UInt64, ParametricDramDirectoryMSI::RangeTable*> range_tables;
-
-    // Use an unordered map to store the virtual memory areas for each application
-    std::unordered_map<UInt64, std::vector<VMA>> vm_areas;
-
-public:
-    MimicOS(bool _is_guest);
-    ~MimicOS();
-
-    void handle_page_fault(IntPtr address, IntPtr core_id, int frames);
-    void createApplication(int app_id);
-
-    String getName() { return mimicos_name; }
-
-    PhysicalMemoryAllocator *getMemoryAllocator() { return m_memory_allocator; }
-
-    ParametricDramDirectoryMSI::PageTable* getPageTable(int app_id) { return page_tables[app_id]; }
-    ParametricDramDirectoryMSI::RangeTable* getRangeTable(int app_id) { return range_tables[app_id]; }
-
-    std::vector<VMA> getVMA(int app_id) { return vm_areas[app_id]; }
-
-    void setPageTableType(String type) { page_table_type = type; }
-    void setPageTableName(String name) { page_table_name = name; }
-    String getPageTableType() { return page_table_type; }
-    String getPageTableName() { return page_table_name; }
-
-    void setRangeTableType(String type) { range_table_type = type; }
-    void setRangeTableName(String name) { range_table_name = name; }
-
-    String getRangeTableType() { return range_table_type; }
-    String getRangeTableName() { return range_table_name; }
-
-    int getNumberOfPageSizes() { return number_of_page_sizes; }
-    int* getPageSizeList() { return page_size_list; }
-
-    PageFaultHandlerBase *getPageFaultHandler() { return page_fault_handler; }
-    SubsecondTime getPageFaultLatency() { return m_page_fault_latency.getLatency(); }
-
+    // ============ Per-Core Statistics ============
+    std::vector<PerCoreStats> m_per_core_stats;
+    static PerCoreStats s_empty_stats;  // Returned for invalid core_id
+    
+    // ============ Logging ============
+    std::string m_log_file_name;
+    std::ofstream m_log;
 };
+
+#endif // MIMICOS_H

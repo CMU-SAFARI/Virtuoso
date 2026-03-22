@@ -11,10 +11,10 @@
 #include <fstream>
 #include "pagetable_ht.h"
 #include "simulator.h"
-#include "physical_memory_allocator.h"
+#include "memory_management/physical_memory_allocators/physical_memory_allocator.h"
 #include "mimicos.h"
 
-// #define DEBUG
+#define DEBUG
 
 namespace ParametricDramDirectoryMSI
 {
@@ -54,8 +54,20 @@ namespace ParametricDramDirectoryMSI
                              int *page_table_sizes,
                              bool is_guest)
         : PageTable(core_id, name, type, page_sizes, page_size_list, is_guest),
-          m_page_table_sizes(page_table_sizes)
+          m_page_table_sizes(page_table_sizes),
+          m_resize_threshold(0.6),
+          m_resize_factor(2)
     {
+        // Read resize parameters from config (with defaults)
+        try {
+            m_resize_threshold = Sim()->getCfg()->getFloat("perf_model/" + name + "/resize_threshold");
+        } catch (...) { m_resize_threshold = 0.6; }
+        try {
+            m_resize_factor = Sim()->getCfg()->getInt("perf_model/" + name + "/resize_factor");
+        } catch (...) { m_resize_factor = 2; }
+
+        m_entry_count = new int[page_sizes]();
+
         std::cout << std::endl;
 
         log_file_name = "pagetable_ht.log";
@@ -139,6 +151,15 @@ namespace ParametricDramDirectoryMSI
                                 core_id,
                                 ("table_chained_" + std::to_string(m_page_size_list[i])).c_str(),
                                 &stats.chained[i]);
+        }
+
+        stats.resizes = new uint64[m_page_sizes]();
+        for (int i = 0; i < m_page_sizes; i++)
+        {
+            registerStatsMetric(name,
+                                core_id,
+                                ("resizes_" + std::to_string(m_page_size_list[i])).c_str(),
+                                &stats.resizes[i]);
         }
     }
 
@@ -242,7 +263,7 @@ namespace ParametricDramDirectoryMSI
                              << " and emulated page table physical address: "
                              << current_entry->emulated_physical_address * 4096 + block_offset * 8 << std::endl;
 #endif
-                    visited_addresses.push_back(make_tuple(i,
+                    visited_addresses.push_back(PTWAccess(i,
                                                            counter,
                                                            current_entry->emulated_physical_address * 4096 + block_offset * 8,
                                                            true));
@@ -270,7 +291,7 @@ namespace ParametricDramDirectoryMSI
                     }
                     log_file << std::endl;
 #endif
-                    visited_addresses.push_back(make_tuple(i,
+                    visited_addresses.push_back(PTWAccess(i,
                                                            counter,
                                                            current_entry->emulated_physical_address * 4096 + block_offset * 8,
                                                            false));
@@ -289,7 +310,7 @@ namespace ParametricDramDirectoryMSI
                              << " and block offset " << block_offset
                              << " and hash function result " << hash_function_result << std::endl;
 #endif
-                    visited_addresses.push_back(make_tuple(i,
+                    visited_addresses.push_back(PTWAccess(i,
                                                            counter,
                                                            current_entry->emulated_physical_address * 4096 + block_offset * 8,
                                                            false));
@@ -318,7 +339,7 @@ namespace ParametricDramDirectoryMSI
                              << " and block offset " << block_offset
                              << " and hash function result " << hash_function_result << std::endl;
 #endif
-                    visited_addresses.push_back(make_tuple(i,
+                    visited_addresses.push_back(PTWAccess(i,
                                                            counter,
                                                            current_entry->emulated_physical_address * 4096 + block_offset * 8,
                                                            false));
@@ -358,8 +379,10 @@ namespace ParametricDramDirectoryMSI
 
             // If we want to restart walk after fault, we handle the fault in the OS,
             // then jump back to restart_walk.
-            if (restart_walk_after_fault)
-                Sim()->getMimicOS()->handle_page_fault(address, core_id, 0);
+            if (restart_walk_after_fault) {
+                // TODO @vlnitu: handle page fault in ExceptionHandler
+                // Sim()->getMimicOS()->handle_page_fault(address, core_id, 0);
+            }
 
 #ifdef DEBUG
             log_file << "[Hash Table Chain] Page fault handled for address " << address << std::endl;
@@ -453,14 +476,22 @@ namespace ParametricDramDirectoryMSI
 
                 current_entry->valid[block_offset] = true;
                 current_entry->next_entry = NULL;
+                m_entry_count[page_size_index]++;
 
 #ifdef DEBUG
                 log_file << "[Hash Table Chain] Inserted entry at index: "
                          << hash_function_result
                          << " with tag: " << tag
                          << " at offset: " << block_offset
-                         << "with page size" << page_size << std::endl;
+                         << " with page size " << page_size << std::endl;
 #endif
+
+                // Check if resize is needed
+                double occupancy = static_cast<double>(m_entry_count[page_size_index]) / m_page_table_sizes[page_size_index];
+                if (occupancy >= m_resize_threshold)
+                {
+                    resizeTable(page_size_index);
+                }
                 break;
             }
             // If the current entry has the same tag but the offset is not valid, we enable that offset
@@ -627,6 +658,127 @@ namespace ParametricDramDirectoryMSI
                     current_entry = current_entry->next_entry;
             }
         }
+    }
+
+    /*
+     * resizeTable(page_size_index):
+     *   - Multiplies table size by resize_factor for the given page size.
+     *   - Allocates a new Entry array, rehashes all entries (including chains).
+     *   - Frees old table and chains, updates page_tables[page_size_index].
+     */
+    void PageTableHT::resizeTable(int page_size_index)
+    {
+        int old_size = m_page_table_sizes[page_size_index];
+        int new_size = old_size * m_resize_factor;
+
+        std::cout << "[Hash Table Chain] Resizing table for page size " << m_page_size_list[page_size_index]
+                  << " from " << old_size << " to " << new_size
+                  << " (occupied root slots: " << m_entry_count[page_size_index] << "/" << old_size << ")" << std::endl;
+
+        // Allocate new table
+        Entry *new_table = (Entry *)malloc(sizeof(Entry) * new_size);
+        for (int j = 0; j < new_size; j++)
+        {
+            new_table[j].tag = -1;
+            new_table[j].next_entry = NULL;
+            for (int k = 0; k < 8; k++)
+            {
+                new_table[j].valid[k] = false;
+                new_table[j].ppn[k] = 0;
+            }
+        }
+
+        // Allocate physical space for the new table
+        IntPtr new_pa = Sim()->getMimicOS()->getMemoryAllocator()->handle_page_table_allocations(new_size * 64);
+
+        // Assign emulated physical addresses to new entries
+        for (int j = 0; j < new_size; j++)
+        {
+            new_table[j].emulated_physical_address = new_pa + j * 64;
+        }
+
+        // Rehash all entries from old table (including chains)
+        Entry *old_table = page_tables[page_size_index];
+        int new_entry_count = 0;
+        int new_chain_count = 0;
+
+        for (int j = 0; j < old_size; j++)
+        {
+            Entry *entry = &old_table[j];
+            while (entry != NULL && entry->tag != static_cast<IntPtr>(-1))
+            {
+                // Rehash this entry's tag into the new table
+                IntPtr tag = entry->tag;
+                uint64_t idx = hashFunction(tag, new_size);
+                Entry *dst = &new_table[idx];
+
+                if (dst->tag == static_cast<IntPtr>(-1))
+                {
+                    // Empty slot in new table — copy directly
+                    dst->tag = tag;
+                    for (int k = 0; k < 8; k++)
+                    {
+                        dst->valid[k] = entry->valid[k];
+                        dst->ppn[k] = entry->ppn[k];
+                    }
+                    new_entry_count++;
+                }
+                else if (dst->tag == tag)
+                {
+                    // Same tag already in slot — merge valid offsets
+                    for (int k = 0; k < 8; k++)
+                    {
+                        if (entry->valid[k])
+                        {
+                            dst->valid[k] = true;
+                            dst->ppn[k] = entry->ppn[k];
+                        }
+                    }
+                }
+                else
+                {
+                    // Collision — chain a new entry
+                    Entry *new_chained = (Entry *)malloc(sizeof(Entry));
+                    new_chained->tag = tag;
+                    new_chained->next_entry = NULL;
+                    new_chained->emulated_physical_address =
+                        Sim()->getMimicOS()->getMemoryAllocator()->handle_fine_grained_page_table_allocations(64);
+                    for (int k = 0; k < 8; k++)
+                    {
+                        new_chained->valid[k] = entry->valid[k];
+                        new_chained->ppn[k] = entry->ppn[k];
+                    }
+
+                    // Append to end of chain
+                    Entry *tail = dst;
+                    while (tail->next_entry != NULL)
+                        tail = tail->next_entry;
+                    tail->next_entry = new_chained;
+                    new_chain_count++;
+                    new_entry_count++;
+                }
+
+                // Move to next in old chain
+                Entry *next = entry->next_entry;
+                if (entry != &old_table[j])
+                    free(entry);  // Free chained entries (not root array entries)
+                entry = next;
+            }
+        }
+
+        // Swap
+        free(old_table);
+        page_tables[page_size_index] = new_table;
+        m_page_table_sizes[page_size_index] = new_size;
+        table_pa[page_size_index] = new_pa;
+        m_entry_count[page_size_index] = new_entry_count;
+        stats.resizes[page_size_index]++;
+
+#ifdef DEBUG
+        log_file << "[Hash Table Chain] Resize complete: new size = " << new_size
+                 << ", entries = " << new_entry_count
+                 << ", chains = " << new_chain_count << std::endl;
+#endif
     }
 
 } // namespace ParametricDramDirectoryMSI

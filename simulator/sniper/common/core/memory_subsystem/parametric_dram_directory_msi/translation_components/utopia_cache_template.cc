@@ -19,15 +19,23 @@ namespace ParametricDramDirectoryMSI
  
   {
     std::cout << "[MMU:UTOPIA]" << "Instantiating " << name << " with sets: " <<  k_KILO * size / (associativity * 8) << std::endl;
+    m_unique_cache_lines = 0;
     registerStatsMetric(name, core_id, "access", &m_access);
     registerStatsMetric(name, core_id, "miss", &m_miss);
-
+    registerStatsMetric(name, core_id, "unique_cache_lines", &m_unique_cache_lines);
   }
 
   UtopiaCache::where_t UtopiaCache::lookup(IntPtr address, SubsecondTime now, bool allocate_on_miss, bool count)
   {
           bool hit;
           hit = m_cache.accessSingleLine(address, Cache::LOAD, NULL, 0, now, true);
+
+          // Track unique cache lines (align to 64-byte cache line boundary)
+          IntPtr cache_line_addr = address & ~(IntPtr)63;
+          if (count && m_unique_lines_set.find(cache_line_addr) == m_unique_lines_set.end()) {
+              m_unique_lines_set.insert(cache_line_addr);
+              m_unique_cache_lines = m_unique_lines_set.size();
+          }
 
           //std::cout << "Accessing xmem cache: " << (hit ? "HIT" : "MISS" )<< std::endl;
           if(count) m_access++;
@@ -48,8 +56,14 @@ namespace ParametricDramDirectoryMSI
     IntPtr tag;
     UInt32 set_index;
     Utopia_cache->splitAddress(address, tag, set_index);
-    auto pair = std::make_pair(Utopia_cache->getCacheSet(set_index)->getReplacementIndex(NULL), set_index);
     Utopia_cache->insertSingleLine(address, NULL, &eviction, &evict_addr, &evict_block_info, NULL, now);
+  }
+
+  bool UtopiaCache::invalidate(IntPtr address)
+  {
+    // Invalidate the cache entry for the given address
+    // This is called during migration to ensure stale entries don't cause incorrect translations
+    return m_cache.invalidateSingleLine(address);
   }
 
 }

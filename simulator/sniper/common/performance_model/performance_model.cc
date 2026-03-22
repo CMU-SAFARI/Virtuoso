@@ -13,6 +13,11 @@
 #include "dvfs_manager.h"
 #include "instruction_tracer.h"
 #include "dynamic_instruction.h"
+#include "thread.h"
+#include "trace_thread.h"
+#include "trace_manager.h"
+
+#include "debug_config.h"
 
 PerformanceModel* PerformanceModel::create(Core* core)
 {
@@ -302,6 +307,18 @@ void PerformanceModel::iterate()
       #endif
 
       DynamicInstruction *ins = m_instruction_queue.front();
+
+      
+      TraceThread *trace_thread = Sim()->getTraceManager()->getTraceThread(m_core->getThread()->getAppId(), m_core->getThread()->getId()) ;
+
+      // If we are in the user thread, we perform translation
+      // If we are in the kernel thread, we skip translation
+      if (trace_thread && trace_thread->getCurrentSiftReader() == trace_thread->getAppSiftReader() && Sim()->getCfg()->getBool("general/enable_userspace_mimicos") && !m_fastforward)
+      {
+#if DEBUG_PERF_MODEL >= DEBUG_DETAILED
+         std::cout << "[TRACE:" << trace_thread->getThread()->getId() << "] -- Processing instruction: "  << ins->eip << std::endl;
+#endif
+      }
 
       LOG_ASSERT_ERROR(!ins->instruction->isIdle(), "Idle instructions should not make it here!");
 

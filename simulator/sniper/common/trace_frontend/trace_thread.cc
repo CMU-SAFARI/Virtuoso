@@ -9,6 +9,7 @@
 #include "dynamic_instruction.h"
 #include "performance_model.h"
 #include "instruction_decoder_wlib.h"
+#include "micro_op.h"
 #include "config.hpp"
 #include "syscall_model.h"
 #include "core.h"
@@ -17,22 +18,65 @@
 #include "rng.h"
 #include "routine_tracer.h"
 #include "sim_api.h"
-
+#include "mimicos.h"
 #include "stats.h"
+#include "parametric_dram_directory_msi/memory_manager.h"
 
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <sched.h>
 
 #include <x86_decoder.h>  // TODO remove when the decode function in microop perf model is adapted
 
+#include "debug_config.h"
+#include <sstream>
+#include <vector>
+
+// ---------------------------------------------------------------------------
+// Pin calling thread to a distinct host CPU chosen from the process's
+// available set (typically constrained by SLURM's cgroup).  Thread-safe:
+// uses a static atomic counter so each caller gets a different CPU.
+// ---------------------------------------------------------------------------
+static void pinTraceThreadToCPU(int thread_id)
+{
+   cpu_set_t available;
+   CPU_ZERO(&available);
+   if (sched_getaffinity(0, sizeof(available), &available) != 0)
+      return;  // cannot query – leave scheduling to the OS
+
+   // Collect the list of CPUs we are allowed to use
+   std::vector<int> cpus;
+   for (int c = 0; c < CPU_SETSIZE; ++c)
+      if (CPU_ISSET(c, &available))
+         cpus.push_back(c);
+
+   if (cpus.empty())
+      return;
+
+   // Pick a CPU using the thread id (wraps if more threads than CPUs)
+   int target = cpus[thread_id % cpus.size()];
+
+   cpu_set_t mask;
+   CPU_ZERO(&mask);
+   CPU_SET(target, &mask);
+   sched_setaffinity(0, sizeof(mask), &mask);
+}
+
 int TraceThread::m_isa = 0;
+
+bool kernel_printed = false, app_printed = false; // DBG flags TODO @vlnitu: remove later
 
 TraceThread::TraceThread(Thread *thread, SubsecondTime time_start, String tracefile, String responsefile, app_id_t app_id, bool cleanup)
    : m__thread(NULL)
    , m_thread(thread)
    , m_time_start(time_start)
    , m_trace(tracefile.c_str(), responsefile.c_str(), thread->getId())
+   , m_kernel_trace(NULL)
+   , m_app_trace(NULL)
+   , m_current_sift_reader(NULL)
    , m_trace_has_pa(false)
+   , m_champsim_trace(false)
+   , m_champsim_access_size(Sift::CHAMPSIM_DEFAULT_MEM_SIZE)
    , m_address_randomization(Sim()->getCfg()->getBool("traceinput/address_randomization"))
    , m_appid_from_coreid(Sim()->getCfg()->getString("scheduler/type") == "sequential" ? true : false)
    , m_stop(false)
@@ -48,7 +92,29 @@ TraceThread::TraceThread(Thread *thread, SubsecondTime time_start, String tracef
    , m_cleanup(cleanup)
    , m_started(false)
    , m_stopped(false)
+   , m_champsim_icache_hits(0)
+   , m_champsim_icache_misses(0)
 {
+
+   bool userspace_mimicos_enabled = Sim()->getCfg()->getBool("general/enable_userspace_mimicos");
+
+   if (userspace_mimicos_enabled)
+   {
+      m_current_run_func = &TraceThread::m_run_func_with_userpace_mimicos;
+   }
+   else
+   {
+      m_current_run_func = &TraceThread::m_run_func_default;
+   }
+
+   if (Sim()->getCfg()->hasKey("traceinput/champsim_mem_access_bytes"))
+   {
+      SInt64 configured_size = Sim()->getCfg()->getInt("traceinput/champsim_mem_access_bytes");
+      if (configured_size > 0)
+         m_champsim_access_size = static_cast<UInt32>(configured_size);
+      else
+         m_champsim_access_size = Sift::CHAMPSIM_DEFAULT_MEM_SIZE;
+   }
 
    m_trace.setHandleInstructionCountFunc(TraceThread::__handleInstructionCountFunc, this);
    m_trace.setHandleCacheOnlyFunc(TraceThread::__handleCacheOnlyFunc, this);
@@ -79,11 +145,21 @@ TraceThread::TraceThread(Thread *thread, SubsecondTime time_start, String tracef
    }
 
    thread->setVa2paFunc(_va2pa, (UInt64)this);
-   
+   stats.kernel_time = SubsecondTime::Zero();
+
+   // Guard against duplicate registration when a trace is restarted
+   // (--sim-end=last-restart creates a new TraceThread with the same app_id).
+   StatsMetricBase *existing = Sim()->getStatsManager()->getMetricObject("trace_thread", m_app_id, "kernel_time");
+   if (existing == NULL)
+      registerStatsMetric("trace_thread", m_app_id, "kernel_time", &stats.kernel_time);
+   else
+      static_cast<StatsMetric<SubsecondTime>*>(existing)->metric = &stats.kernel_time;
 }
 
 TraceThread::~TraceThread()
 {
+   printf("[TRACE_THREAD] ~TraceThread destructor called\n");
+   fflush(stdout);
    delete m__thread;
    if (m_cleanup)
    {
@@ -94,6 +170,57 @@ TraceThread::~TraceThread()
    {
       delete (*i).second;
    }
+   
+   // Clean up ChampSim instruction cache (since TraceManager doesn't delete TraceThreads)
+   cleanupChampSimCache();
+}
+
+void TraceThread::cleanupChampSimCache()
+{
+   // Already cleaned up?
+   if (m_champsim_icache.empty()) {
+      return;
+   }
+   
+   // Print ChampSim instruction cache statistics
+   UInt64 total_accesses = m_champsim_icache_hits + m_champsim_icache_misses;
+   if (total_accesses > 0 || m_champsim_icache.size() > 0) {
+      double hit_rate = (total_accesses > 0) ? (100.0 * m_champsim_icache_hits / total_accesses) : 0.0;
+      printf("[CHAMPSIM_ICACHE] Stats: hits=%lu misses=%lu total=%lu hit_rate=%.2f%% cache_size=%zu\n",
+             m_champsim_icache_hits, m_champsim_icache_misses, total_accesses, hit_rate, m_champsim_icache.size());
+      fflush(stdout);
+   }
+   
+   #if DEBUG_CHAMPSIM_CACHE >= DEBUG_BASIC
+   printf("[CHAMPSIM_CACHE] cleanupChampSimCache: Cleaning up %zu cached ChampSim instructions\n", m_champsim_icache.size());
+   #endif
+   
+   // Clean up ChampSim instruction cache
+   size_t cleanup_count = 0;
+   for (auto& kv : m_champsim_icache)
+   {
+      Instruction* instr = kv.second;
+      if (instr) {
+         const std::vector<const MicroOp*>* uops = instr->getMicroOps();
+         #if DEBUG_CHAMPSIM_CACHE >= DEBUG_DETAILED
+         printf("[CHAMPSIM_CACHE] FREE Instruction*=%p with %zu MicroOps\n", 
+                (void*)instr, uops ? uops->size() : 0);
+         #endif
+         if (uops) {
+            for (const MicroOp* uop : *uops) {
+               delete uop;
+            }
+            delete uops;
+         }
+         delete instr;
+         cleanup_count++;
+      }
+   }
+   m_champsim_icache.clear();
+   
+   #if DEBUG_CHAMPSIM_CACHE >= DEBUG_BASIC
+   printf("[CHAMPSIM_CACHE] cleanupChampSimCache: Freed %zu instructions\n", cleanup_count);
+   #endif
 }
 
 UInt64 TraceThread::va2pa(UInt64 va, bool *noMapping)
@@ -416,6 +543,122 @@ Instruction* TraceThread::decode(Sift::Instruction &inst)
    return instruction;
 }
 
+Instruction* TraceThread::decodeChampsim(Sift::Instruction &inst)
+{
+   // Build cache key from instruction signature
+   ChampSimCacheKey cache_key;
+   cache_key.pc = inst.sinst->addr;
+   cache_key.is_branch = inst.is_branch ? 1 : 0;
+   cache_key.num_src_regs = inst.num_src_registers;
+   cache_key.num_dest_regs = inst.num_dest_registers;
+   cache_key.num_loads = inst.num_src_addresses;
+   cache_key.num_stores = inst.num_dest_addresses;
+   
+   // Check cache first
+   auto it = m_champsim_icache.find(cache_key);
+   if (it != m_champsim_icache.end()) {
+      // Cache hit - return cached instruction
+      m_champsim_icache_hits++;
+      #if DEBUG_CHAMPSIM_CACHE >= DEBUG_BASIC
+      printf("[CHAMPSIM_CACHE] HIT  pc=0x%lx branch=%d src_regs=%d dest_regs=%d loads=%d stores=%d -> Instruction*=%p (cache_size=%zu)\n",
+             cache_key.pc, cache_key.is_branch, cache_key.num_src_regs, cache_key.num_dest_regs,
+             cache_key.num_loads, cache_key.num_stores, (void*)it->second, m_champsim_icache.size());
+      #endif
+      return it->second;
+   }
+   
+   m_champsim_icache_misses++;
+   
+   #if DEBUG_CHAMPSIM_CACHE >= DEBUG_BASIC
+   printf("[CHAMPSIM_CACHE] MISS pc=0x%lx branch=%d src_regs=%d dest_regs=%d loads=%d stores=%d (cache_size=%zu) -> ALLOCATING\n",
+          cache_key.pc, cache_key.is_branch, cache_key.num_src_regs, cache_key.num_dest_regs,
+          cache_key.num_loads, cache_key.num_stores, m_champsim_icache.size());
+   #endif
+   
+   // Cache miss - create new instruction
+   OperandList list;
+
+   for (uint8_t idx = 0; idx < inst.num_src_registers; ++idx)
+      list.push_back(Operand(Operand::REG, inst.src_registers[idx], Operand::READ));
+
+   for (uint8_t idx = 0; idx < inst.num_dest_registers; ++idx)
+      list.push_back(Operand(Operand::REG, inst.dest_registers[idx], Operand::WRITE));
+
+   for (uint8_t idx = 0; idx < inst.num_src_addresses; ++idx)
+      list.push_back(Operand(Operand::MEMORY, 0, Operand::READ));
+
+   for (uint8_t idx = 0; idx < inst.num_dest_addresses; ++idx)
+      list.push_back(Operand(Operand::MEMORY, 0, Operand::WRITE));
+
+   Instruction *instruction = inst.is_branch ? static_cast<Instruction*>(new BranchInstruction(list))
+                                             : static_cast<Instruction*>(new GenericInstruction(list));
+
+   instruction->setAddress(va2pa(inst.sinst->addr));
+   instruction->setSize(inst.sinst->size);
+   instruction->setAtomic(false);
+   instruction->setDisassembly("champsim-trace");
+   // Cached instructions are NOT dynamic - they persist and are reused
+   instruction->setDynamic(false);
+
+   UInt32 mem_size = m_champsim_access_size ? m_champsim_access_size : Sift::CHAMPSIM_DEFAULT_MEM_SIZE;
+
+   size_t num_loads = inst.num_src_addresses;
+   size_t num_stores = inst.num_dest_addresses;
+   size_t num_execs = 1;
+   size_t total_microops = num_loads + num_execs + num_stores;
+   if (total_microops == 0)
+   {
+      num_execs = 1;
+      total_microops = 1;
+   }
+
+   auto *uops = new std::vector<const MicroOp*>();
+   uops->reserve(total_microops);
+
+   for (size_t idx = 0; idx < total_microops; ++idx)
+   {
+      MicroOp *uop = new MicroOp();
+      uop->setInstructionPointer(Memory::make_access(inst.sinst->addr));
+      uop->setOperandSize(mem_size * 8);
+      uop->setInstruction(instruction);
+      uop->setDecodedInstruction(NULL);
+
+      if (idx < num_loads)
+      {
+         uop->makeLoad(idx, dl::Decoder::DL_OPCODE_INVALID, "champsim-load", mem_size);
+      }
+      else if (idx < num_loads + num_execs)
+      {
+         size_t exec_index = idx - num_loads;
+         uop->makeExecute(exec_index, num_loads, dl::Decoder::DL_OPCODE_INVALID, "champsim-exec", inst.is_branch);
+      }
+      else
+      {
+         size_t store_index = idx - num_loads - num_execs;
+         uop->makeStore(store_index, num_execs, dl::Decoder::DL_OPCODE_INVALID, "champsim-store", mem_size);
+      }
+
+      if (idx == 0)
+         uop->setFirst(true);
+      if (idx == total_microops - 1)
+         uop->setLast(true);
+
+      uops->push_back(uop);
+   }
+
+   instruction->setMicroOps(uops);
+   
+   // Add to cache for future reuse
+   m_champsim_icache[cache_key] = instruction;
+   
+   #if DEBUG_CHAMPSIM_CACHE >= DEBUG_BASIC
+   printf("[CHAMPSIM_CACHE] ALLOC pc=0x%lx Instruction*=%p with %zu MicroOps (new cache_size=%zu)\n",
+          cache_key.pc, (void*)instruction, uops->size(), m_champsim_icache.size());
+   #endif
+   
+   return instruction;
+}
+
 Sift::Mode TraceThread::handleInstructionCountFunc(uint32_t icount)
 {
    if (!m_started)
@@ -622,7 +865,64 @@ void TraceThread::handleInstructionWarmup(Sift::Instruction &inst, Sift::Instruc
                         va2pa(inst.sinst->addr));
             }
          }
-      }
+   }
+   }
+}
+
+void TraceThread::handleChampSimWarmup(Sift::Instruction &inst, Sift::Instruction &next_inst, Core *core)
+{
+   // Warmup instruction cache
+   if (Sim()->getConfig()->getEnableICacheModeling())
+   {
+      core->readInstructionMemory(va2pa(inst.sinst->addr), inst.sinst->size);
+   }
+
+   // Warmup branch predictor
+   if (inst.is_branch)
+   {
+      bool mispredict = core->accessBranchPredictor(va2pa(inst.sinst->addr), inst.taken, false, va2pa(next_inst.sinst->addr));
+      if (mispredict)
+         core->getPerformanceModel()->handleBranchMispredict();
+   }
+
+   if (!inst.executed)
+      return;
+
+   // Warmup data caches
+   UInt32 mem_size = m_champsim_access_size ? m_champsim_access_size : Sift::CHAMPSIM_DEFAULT_MEM_SIZE;
+
+   for (uint8_t idx = 0; idx < inst.num_src_addresses; ++idx)
+   {
+      bool no_mapping = false;
+      UInt64 pa = va2pa(inst.src_addresses[idx], &no_mapping);
+      if (no_mapping)
+         continue;
+
+      core->accessMemory(
+            Core::NONE,
+            Core::READ,
+            pa,
+            NULL,
+            mem_size,
+            Core::MEM_MODELED_COUNT,
+            va2pa(inst.sinst->addr));
+   }
+
+   for (uint8_t idx = 0; idx < inst.num_dest_addresses; ++idx)
+   {
+      bool no_mapping = false;
+      UInt64 pa = va2pa(inst.dest_addresses[idx], &no_mapping);
+      if (no_mapping)
+         continue;
+
+      core->accessMemory(
+            Core::NONE,
+            Core::WRITE,
+            pa,
+            NULL,
+            mem_size,
+            Core::MEM_MODELED_COUNT,
+            va2pa(inst.sinst->addr));
    }
 }
 
@@ -668,12 +968,119 @@ void TraceThread::handleInstructionDetailed(Sift::Instruction &inst, Sift::Instr
       }
    }
 
-   // Push instruction
 
    prfmdl->queueInstruction(dynins);
 
-   // simulate
 
+   prfmdl->iterate();
+}
+
+void TraceThread::handleChampSimDetailed(Sift::Instruction &inst, Sift::Instruction &next_inst, PerformanceModel *prfmdl)
+{
+   #if DEBUG_TRACE_CHAMPSIM >= DEBUG_BASIC
+      std::cout << "[TraceThread] Handling ChampSim detailed instruction at address " << std::hex << inst.sinst->addr << std::dec << std::endl;
+   #endif 
+
+   // ChampSim instructions are cached by (PC, is_branch, num_src_regs, num_dest_regs, num_loads, num_stores).
+   // If the same PC appears with a different operand signature, a new Instruction is created.
+   // This avoids unbounded memory growth while handling variable operand counts.
+   Instruction *ins = decodeChampsim(inst);
+   DynamicInstruction *dynins = prfmdl->createDynamicInstruction(ins, va2pa(inst.sinst->addr));
+
+   #if DEBUG_TRACE_CHAMPSIM >= DEBUG_BASIC
+   
+      std::ostringstream oss;
+      oss << "[TraceThread] ChampSim instruction info: addr=0x" << std::hex << inst.sinst->addr
+          << " size=" << std::dec << static_cast<uint32_t>(inst.sinst->size)
+          << " branch=" << inst.is_branch
+          << " taken=" << inst.taken
+          << " predicate=" << inst.is_predicate
+          << " executed=" << inst.executed
+          << " isa=" << inst.isa
+          << " is_champsim=" << inst.is_champsim
+          << " num_addresses=" << static_cast<uint32_t>(inst.num_addresses)
+          << " addresses=[";
+      for (uint8_t idx = 0; idx < inst.num_addresses; ++idx)
+      {
+         if (idx)
+            oss << ',';
+         oss << "0x" << std::hex << inst.addresses[idx];
+      }
+      oss << std::dec << "] src=[";
+      for (uint8_t idx = 0; idx < inst.num_src_addresses; ++idx)
+      {
+         if (idx)
+            oss << ',';
+         oss << "0x" << std::hex << inst.src_addresses[idx];
+      }
+      oss << "] dest=[";
+      for (uint8_t idx = 0; idx < inst.num_dest_addresses; ++idx)
+      {
+         if (idx)
+            oss << ',';
+         oss << "0x" << std::hex << inst.dest_addresses[idx];
+      }
+      oss << std::dec << "] src_regs=[";
+      for (uint8_t idx = 0; idx < inst.num_src_registers; ++idx)
+      {
+         if (idx)
+            oss << ',';
+         oss << static_cast<uint32_t>(inst.src_registers[idx]);
+      }
+      oss << "] dest_regs=[";
+      for (uint8_t idx = 0; idx < inst.num_dest_registers; ++idx)
+      {
+         if (idx)
+            oss << ',';
+         oss << static_cast<uint32_t>(inst.dest_registers[idx]);
+      }
+      oss << "]";
+      std::cout << oss.str() << std::endl;
+
+      std::ostringstream opss;
+      const OperandList &ops = ins->getOperands();
+      opss << "[TraceThread] ChampSim operand check: src_regs=[";
+      for (uint8_t idx = 0; idx < inst.num_src_registers; ++idx)
+      {
+         if (idx)
+            opss << ',';
+         opss << static_cast<uint32_t>(inst.src_registers[idx]);
+      }
+      opss << "] dest_regs=[";
+      for (uint8_t idx = 0; idx < inst.num_dest_registers; ++idx)
+      {
+         if (idx)
+            opss << ',';
+         opss << static_cast<uint32_t>(inst.dest_registers[idx]);
+      }
+      opss << "] operands=[";
+      for (size_t i = 0; i < ops.size(); ++i)
+      {
+         if (i)
+            opss << ';';
+         opss << ops[i].toString();
+      }
+      opss << "]";
+      std::cout << opss.str() << std::endl;
+   
+   #endif 
+
+   if (inst.is_branch)
+   {
+      dynins->addBranch(inst.taken, va2pa(next_inst.sinst->addr), false);
+   }
+
+   for (uint8_t idx = 0; idx < inst.num_src_addresses; ++idx)
+   {
+      addChampSimMemoryInfo(dynins, inst.src_addresses[idx], Operand::READ, inst.executed, false, prfmdl);
+   }
+
+   for (uint8_t idx = 0; idx < inst.num_dest_addresses; ++idx)
+   {
+      addChampSimMemoryInfo(dynins, inst.dest_addresses[idx], Operand::WRITE, inst.executed, false, prfmdl);
+   }
+
+   prfmdl->queueInstruction(dynins);
    prfmdl->iterate();
 }
 
@@ -694,6 +1101,7 @@ void TraceThread::addDetailedMemoryInfo(DynamicInstruction *dynins, Sift::Instru
                
    bool no_mapping = false;
    UInt64 pa = va2pa(mem_address, is_prefetch ? &no_mapping : NULL);
+   
 
    if (no_mapping)
    {
@@ -713,6 +1121,36 @@ void TraceThread::addDetailedMemoryInfo(DynamicInstruction *dynins, Sift::Instru
          SubsecondTime::Zero(),
          pa,
          Sim()->getDecoder()->size_mem_op(&decoded_inst, mem_idx),
+         op_type,
+         0,
+         HitWhere::UNKNOWN);
+   }
+}
+
+void TraceThread::addChampSimMemoryInfo(DynamicInstruction *dynins, UInt64 mem_address, Operand::Direction op_type, bool executed, bool is_prefetch, PerformanceModel *prfmdl)
+{
+   bool no_mapping = false;
+   UInt64 pa = va2pa(mem_address, is_prefetch ? &no_mapping : NULL);
+   UInt32 mem_size = m_champsim_access_size ? m_champsim_access_size : Sift::CHAMPSIM_DEFAULT_MEM_SIZE;
+
+   if (no_mapping)
+   {
+      dynins->addMemory(
+         executed,
+         SubsecondTime::Zero(),
+         0,
+         mem_size,
+         op_type,
+         0,
+         HitWhere::PREFETCH_NO_MAPPING);
+   }
+   else
+   {
+      dynins->addMemory(
+         executed,
+         SubsecondTime::Zero(),
+         pa,
+         mem_size,
          op_type,
          0,
          HitWhere::UNKNOWN);
@@ -747,17 +1185,388 @@ void TraceThread::unblock()
    m_blocked = false;
 }
 
-void TraceThread::run()
+void TraceThread::m_run_func_with_userpace_mimicos()
 {
    // Set thread name for Sniper-in-Sniper simulations
    String threadName = String("trace-") + itostr(m_thread->getId());
    SimSetThreadName(threadName.c_str());
+
+   // Pin this trace thread to a distinct host CPU to avoid contention
+   pinTraceThreadToCPU(m_thread->getId());
+
+   // Print which host CPU this thread is running on
+   int host_cpu = sched_getcpu();
+   std::cout << "[TraceThread] Thread " << m_thread->getId()
+             << " (app " << m_app_id << ") started on host CPU " << host_cpu << std::endl;
+
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+   std::cout << "[TRACE:" << m_thread->getId() << "] -- " << threadName.c_str() << " --" << std::endl;
+#endif
+   Sim()->getThreadManager()->onThreadStart(m_thread->getId(), m_time_start);
+
+   // Open the trace (be sure to do this before potentially blocking on reschedule() as this causes deadlock)
+   m_trace.initStream();
+   m_trace_has_pa = m_trace.getTraceHasPhysicalAddresses();
+   m_champsim_trace = m_trace.isChampSimTrace();
+
+   if (m_thread->getCore() == NULL)
+   {
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+      std::cout << "[TRACE:" << m_thread->getId() << "] -- Waiting for core to be assigned --" << std::endl;
+#endif
+      // We didn't get scheduled on startup, wait here
+      SubsecondTime time = SubsecondTime::Zero();
+      m_thread->reschedule(time, NULL);
+   }
+
+   Core *core = m_thread->getCore();
+   PerformanceModel *prfmdl = core->getPerformanceModel();
+
+   Sift::Instruction inst, next_inst;
+   Sift::Instruction inst_kernel, next_inst_kernel;
+   Sift::Instruction inst_app, next_inst_app;
+
+   // Initialise instruction state
+   to_be_replayed_inst.sinst = NULL;
+   to_be_replayed_next_inst.sinst = NULL;
+   inst_app.sinst = next_inst_app.sinst = NULL; // App reader state
+
+   bool app_initialized = false;
+
+   SubsecondTime kernel_start_time = SubsecondTime::Zero();
+   SubsecondTime kernel_end_time = SubsecondTime::Zero();
+   // By design, kernel SIFT reader runs first
+   bool have_inst = m_current_sift_reader->Read(inst_kernel);
+
+
+   kernel_start_time = prfmdl->getElapsedTime();
+
+   if (have_inst)
+   {
+      inst = inst_kernel;
+
+      int  executed_instructions = 0;
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+      bool kernel_mode           = true;
+      bool switched              = false;
+#else
+      bool kernel_mode           __attribute__((unused)) = true;
+      bool switched              __attribute__((unused)) = false;
+#endif
+
+      while (have_inst)
+      {
+         bool have_next = false;
+         switched = false;
+
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+         std::cout << "[TRACE:" << m_thread->getId() << "] -- Reading instruction: "
+                   << std::hex << inst.sinst->addr << std::dec
+                   << " from trace_id = " << getCurrentSiftReader()->getId() << std::endl;
+#endif
+
+         if (getCurrentSiftReader() != getAppSiftReader())
+         {
+            // Currently reading from kernel SIFT reader
+
+            have_next = m_current_sift_reader->Read(next_inst_kernel);
+            if (!have_next)
+               break;   // EOF on kernel trace
+
+            next_inst = next_inst_kernel;
+
+            // NOTE: if we consumed a Context Switch command here, magic_server.cc
+            // may just have switched currentSiftReader: Kernel -> App.
+            if (getCurrentSiftReader() == getAppSiftReader())
+            {
+
+               switched = true;
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+               std::cout << "[TRACE:" << m_thread->getId() << "] -- Switching SIFT reader to the App due to CS --" << std::endl;
+#endif
+               // Finished processing kernel instructions; record end time
+               kernel_end_time = prfmdl->getElapsedTime();
+               stats.kernel_time += (kernel_end_time - kernel_start_time);
+               kernel_mode = false;
+
+               if (to_be_replayed_inst.sinst)
+               {
+                  // Returning from a page fault: restore exact app state
+                  assert(to_be_replayed_inst.sinst == inst_app.sinst &&
+                         to_be_replayed_next_inst.sinst == next_inst_app.sinst);
+
+                  inst      = to_be_replayed_inst;
+                  next_inst = to_be_replayed_next_inst;
+                  to_be_replayed_inst.sinst = to_be_replayed_next_inst.sinst = NULL;
+                  have_next = true; // next_inst is valid by construction
+
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+                  std::cout << "[TRACE:" << m_thread->getId() << "] -- Replaying instruction: inst = "
+                            << std::hex << inst.sinst->addr << std::dec << std::endl;
+#endif
+               }
+               else
+               {
+                  // First time or normal resume on app reader
+                  if (!app_initialized)
+                  {
+                     // First time: read both inst_app and next_inst_app
+                     if (!m_current_sift_reader->Read(inst_app))
+                        break;
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+                     std::cout << "[TRACE:" << m_thread->getId() << "] -- First instruction from App SIFT reader: inst = "
+                               << std::hex << inst_app.sinst->addr << std::dec << std::endl;
+#endif
+                     if (!m_current_sift_reader->Read(next_inst_app))
+                        break;
+                     app_initialized = true;
+                  }
+                  else
+                  {
+                     // Continue: shift lookahead then read a new next_inst_app
+                     inst_app = next_inst_app;
+                     if (!m_current_sift_reader->Read(next_inst_app))
+                        break;
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+                     std::cout << "[TRACE:" << m_thread->getId() << "] -- Restored instruction from App SIFT reader: inst = "
+                               << std::hex << inst_app.sinst->addr << std::dec << std::endl;
+#endif
+                  }
+
+                  inst      = inst_app;
+                  next_inst = next_inst_app;
+                  have_next = true;
+               }
+
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+               std::cout << "[TRACE:" << m_thread->getId() << "] -- Instruction: " << std::hex << inst.sinst->addr << std::dec
+                         << " -- Next instruction: " << std::hex << next_inst.sinst->addr << std::dec
+                         << " -- Kernel mode: " << (kernel_mode ? "true" : "false") << std::endl;
+#endif
+            }
+         }
+         else
+         {
+            // Currently reading from app SIFT reader
+
+            // We assume app_initialized is true when we get here
+            inst_app = next_inst_app;
+            if (!m_current_sift_reader->Read(next_inst_app))
+               break;   // EOF on app trace
+
+            next_inst = next_inst_app;
+            have_next = true;
+         }
+
+         if (!m_started)
+         {
+            // Received first instructions, let TraceManager know our SIFT connection is up and running
+            // Only enable once we have received two instructions, otherwise, we could deadlock
+            Sim()->getTraceManager()->signalStarted();
+            m_started = true;
+         }
+
+         // We may have been blocked in a system call; starting to execute again means we continue
+         if (m_blocked)
+         {
+            unblock();
+         }
+
+         core = m_thread->getCore();
+         LOG_ASSERT_ERROR(core, "We cannot execute instructions while not on a core");
+         prfmdl = core->getPerformanceModel();
+
+         bool   do_icache_warmup = false;
+         UInt64 icache_warmup_addr = 0, icache_warmup_size = 0;
+
+         // Reconstruct and count basic blocks
+
+         if (m_bbv_end || m_bbv_last != inst.sinst->addr)
+         {
+            // We're the start of a new basic block
+            core->countInstructions(m_bbv_base, m_bbv_count);
+            // In cache-only mode, we'll want to do I-cache warmup
+            if (m_bbv_base)
+            {
+               do_icache_warmup = true;
+               icache_warmup_addr = m_bbv_base;
+               icache_warmup_size = m_bbv_last - m_bbv_base;
+            }
+            // Set up new basic block info
+            m_bbv_base = inst.sinst->addr;
+            m_bbv_count = 0;
+         }
+         m_bbv_count++;
+         m_bbv_last = inst.sinst->addr + inst.sinst->size;
+         // Force BBV end on non-taken branches
+         m_bbv_end = inst.is_branch;
+
+         if (inst.is_champsim)
+         {
+            switch(Sim()->getInstrumentationMode())
+            {
+               case InstMode::FAST_FORWARD:
+                  break;
+
+               case InstMode::CACHE_ONLY:
+                  handleChampSimWarmup(inst, next_inst, core);
+                  break;
+
+               case InstMode::DETAILED:
+                  handleChampSimDetailed(inst, next_inst, prfmdl);
+                  break;
+
+               default:
+                  LOG_PRINT_ERROR("Unknown instrumentation mode");
+            }
+         }
+         else
+         {
+            switch(Sim()->getInstrumentationMode())
+            {
+               case InstMode::FAST_FORWARD:
+                  break;
+
+               case InstMode::CACHE_ONLY:
+                  handleInstructionWarmup(inst, next_inst, core, do_icache_warmup, icache_warmup_addr, icache_warmup_size);
+                  break;
+
+               case InstMode::DETAILED:
+                  handleInstructionDetailed(inst, next_inst, prfmdl);
+                  break;
+
+               default:
+                  LOG_PRINT_ERROR("Unknown instrumentation mode");
+            }
+         }
+
+         // We may have been rescheduled to a different core
+         // by prfmdl->iterate (in handleInstructionDetailed),
+         // or core->countInstructions (when using a fast-forward performance model)
+         {
+            SubsecondTime time = prfmdl->getElapsedTime();
+            if (m_thread->reschedule(time, core))
+            {
+               core = m_thread->getCore();
+               prfmdl = core->getPerformanceModel();
+            }
+         }
+
+         if (m_stop)
+         {
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+            std::cout << "[TRACE:" << m_thread->getId() << "] -- Stopping trace thread --" << std::endl;
+#endif
+            break;
+         }
+
+         auto* mimic_os = Sim()->getMimicOS();
+         core_id_t pf_core_id = core->getId();
+
+         if (mimic_os->getIsPageFault(pf_core_id))
+         {
+            kernel_start_time = prfmdl->getElapsedTime();
+            // Page fault must occur only in user space
+            assert(getCurrentSiftReader() == getAppSiftReader());
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+            std::cout << "[TRACE:" << m_thread->getId() << "] -- Switching SIFT reader back to the kernel due to page fault CS --" << std::endl;
+#endif
+
+            // Save app instruction pair to replay after kernel handles the fault
+            to_be_replayed_inst      = inst_app;
+            to_be_replayed_next_inst = next_inst_app;
+
+            int num_requested_frames = mimic_os->getNumRequestedFrames(pf_core_id);
+#if DEBUG_TRACE_THREAD >= DEBUG_BASIC
+            std::cout << "[TRACE:" << m_thread->getId() << "] -- Requesting "
+                      << num_requested_frames << " frames for page fault handling" << std::endl;
+#endif
+
+            mimic_os->buildMessageWithArgs("page_fault",
+                                           mimic_os->getVaTriggeredPageFault(pf_core_id),
+                                           num_requested_frames);
+
+            // Handle PF on user-space MimicOS (kernel) side
+#if DEBUG_TRACE_THREAD >= DEBUG_DETAILED
+            std::cout << "[TRACE:" << m_thread->getId() << "] -- Switching SIFT reader to Kernel and sending response after CS --" << std::endl;
+#endif
+            setCurrentSiftReader(getKernelSiftReader());
+
+            // Unlock Sift::Writer on MimicOS (kernel) side
+            getCurrentSiftReader()->sendResponseAfterContextSwitch();
+
+            // First instruction after switching back to kernel
+            bool have_next_pf = m_current_sift_reader->Read(next_inst_kernel);
+            if (!have_next_pf)
+               break;   // EOF on kernel after PF handling
+
+            next_inst = next_inst_kernel;
+            have_next = have_next_pf;
+
+            kernel_mode = true;
+            mimic_os->resetPageFaultState(pf_core_id);
+         }
+
+         // Save current "next_inst" as the next "inst"
+         inst      = next_inst;
+         have_inst = have_next;
+
+#ifdef HEARTBEAT
+         if (executed_instructions % 20000 == 0)
+         {
+            // Print progress every 20k instructions
+            std::cout << "[TRACE:" << m_thread->getId() << "] -- Current SIFT reader: "
+                      << (getCurrentSiftReader() == getKernelSiftReader() ? "Kernel" : "App") << " -- "
+                      << "Executed instructions: " << executed_instructions
+                      << ", Current time: " << prfmdl->getElapsedTime().getNS() << "ns"
+                      << ", Current SIFT reader position: " << m_current_sift_reader->getPosition()
+                      << std::endl;
+            std::cout << "[TRACE:" << m_thread->getId() << "] -- Current instruction: " << std::hex << inst.sinst->addr << std::dec
+                      << ", Next instruction: " << std::hex << next_inst.sinst->addr << std::dec
+                      << ", Kernel mode: " << (kernel_mode ? "true" : "false")
+                      << std::endl;
+         }
+#endif
+
+         executed_instructions++;
+      }
+   }
+
+   printf("[TRACE:%u] -- %s --\n", m_thread->getId(), m_stop ? "STOP" : "DONE");
+   
+   // Clean up ChampSim instruction cache to avoid leaks (destructor is never called)
+   if (m_champsim_trace) {
+      cleanupChampSimCache();
+   }
+
+   SubsecondTime time_end = prfmdl->getElapsedTime();
+
+   Sim()->getThreadManager()->onThreadExit(m_thread->getId());
+   Sim()->getTraceManager()->signalDone(this, time_end, m_stop /*aborted*/);
+}
+
+
+
+void TraceThread::m_run_func_default()
+{
+   // Set thread name for Sniper-in-Sniper simulations
+   String threadName = String("trace-") + itostr(m_thread->getId());
+   SimSetThreadName(threadName.c_str());
+
+   // Pin this trace thread to a distinct host CPU to avoid contention
+   pinTraceThreadToCPU(m_thread->getId());
+
+   // Print which host CPU this thread is running on
+   int host_cpu = sched_getcpu();
+   std::cout << "[TraceThread] Thread " << m_thread->getId()
+             << " (app " << m_app_id << ") started on host CPU " << host_cpu << std::endl;
 
    Sim()->getThreadManager()->onThreadStart(m_thread->getId(), m_time_start);
 
    // Open the trace (be sure to do this before potentially blocking on reschedule() as this causes deadlock)
    m_trace.initStream();
    m_trace_has_pa = m_trace.getTraceHasPhysicalAddresses();
+   m_champsim_trace = m_trace.isChampSimTrace();
 
    if (m_thread->getCore() == NULL)
    {
@@ -775,6 +1584,7 @@ void TraceThread::run()
 
    while(have_first && m_trace.Read(next_inst))
    {
+   
       if (!m_started)
       {
          // Received first instructions, let TraceManager know our SIFT connection is up and running
@@ -816,21 +1626,43 @@ void TraceThread::run()
       m_bbv_end = inst.is_branch;
 
 
-      switch(Sim()->getInstrumentationMode())
+      if (inst.is_champsim)
       {
-         case InstMode::FAST_FORWARD:
-            break;
+         switch(Sim()->getInstrumentationMode())
+         {
+            case InstMode::FAST_FORWARD:
+               break;
 
-         case InstMode::CACHE_ONLY:
-            handleInstructionWarmup(inst, next_inst, core, do_icache_warmup, icache_warmup_addr, icache_warmup_size);
-            break;
+            case InstMode::CACHE_ONLY:
+               handleChampSimWarmup(inst, next_inst, core);
+               break;
 
-         case InstMode::DETAILED:
-            handleInstructionDetailed(inst, next_inst, prfmdl);
-            break;
+            case InstMode::DETAILED:
+               handleChampSimDetailed(inst, next_inst, prfmdl);
+               break;
 
-         default:
-            LOG_PRINT_ERROR("Unknown instrumentation mode");
+            default:
+               LOG_PRINT_ERROR("Unknown instrumentation mode");
+         }
+      }
+      else
+      {
+         switch(Sim()->getInstrumentationMode())
+         {
+            case InstMode::FAST_FORWARD:
+               break;
+
+            case InstMode::CACHE_ONLY:
+               handleInstructionWarmup(inst, next_inst, core, do_icache_warmup, icache_warmup_addr, icache_warmup_size);
+               break;
+
+            case InstMode::DETAILED:
+               handleInstructionDetailed(inst, next_inst, prfmdl);
+               break;
+
+            default:
+               LOG_PRINT_ERROR("Unknown instrumentation mode");
+         }
       }
 
 
@@ -852,6 +1684,11 @@ void TraceThread::run()
    }
 
    printf("[TRACE:%u] -- %s --\n", m_thread->getId(), m_stop ? "STOP" : "DONE");
+   
+   // Clean up ChampSim instruction cache to avoid leaks (destructor is never called)
+   if (m_champsim_trace) {
+      cleanupChampSimCache();
+   }
 
    SubsecondTime time_end = prfmdl->getElapsedTime();
 
@@ -867,16 +1704,31 @@ void TraceThread::spawn()
 
 UInt64 TraceThread::getProgressExpect()
 {
-   return m_trace.getLength();
+   Sift::Reader *reader = m_current_sift_reader ? m_current_sift_reader : &m_trace;
+   return reader->getLength();
 }
 
 UInt64 TraceThread::getProgressValue()
 {
-   return m_trace.getPosition();
+   Sift::Reader *reader = m_current_sift_reader ? m_current_sift_reader : &m_trace;
+   return reader->getPosition();
 }
 
 void TraceThread::frontEndStop(){
-	m_trace.frontEndStop();
+   // Guard against being called before thread is fully initialized or after it's stopped
+   if (m_stopped)
+   {
+      return;
+   }
+
+   if (m_current_sift_reader != NULL)
+   {
+      m_current_sift_reader->frontEndStop();
+   }
+   else
+   {
+      m_trace.frontEndStop();
+   }
 }
 
 void TraceThread::handleAccessMemory(Core::lock_signal_t lock_signal, Core::mem_op_t mem_op_type, IntPtr d_addr, char* data_buffer, UInt32 data_size)
@@ -914,5 +1766,6 @@ void TraceThread::handleAccessMemory(Core::lock_signal_t lock_signal, Core::mem_
          break;
    }
 
-   m_trace.AccessMemory(sift_lock_signal, sift_mem_op, d_addr, (uint8_t*)data_buffer, data_size);
+   Sift::Reader *reader = m_current_sift_reader ? m_current_sift_reader : &m_trace;
+   reader->AccessMemory(sift_lock_signal, sift_mem_op, d_addr, (uint8_t*)data_buffer, data_size);
 }

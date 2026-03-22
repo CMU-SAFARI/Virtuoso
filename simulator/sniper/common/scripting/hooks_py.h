@@ -38,5 +38,6 @@ PyMODINIT_FUNC PyInit_sim_control(void);
 PyMODINIT_FUNC PyInit_sim_bbv(void);
 PyMODINIT_FUNC PyInit_sim_mem(void);
 PyMODINIT_FUNC PyInit_sim_thread(void);
+PyMODINIT_FUNC PyInit_sim_cache(void);
 
 #endif // HOOKS_PY_H

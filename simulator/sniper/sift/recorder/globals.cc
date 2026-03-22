@@ -17,7 +17,6 @@ KNOB<BOOL> KnobRoutineTracingOutsideDetailed(KNOB_MODE_WRITEONCE, "pintool", "sn
 KNOB<BOOL> KnobDebug(KNOB_MODE_WRITEONCE, "pintool", "sniper:debug", "0", "start debugger on internal exception");
 KNOB<BOOL> KnobVerbose(KNOB_MODE_WRITEONCE, "pintool", "sniper:verbose", "0", "verbose output");
 KNOB<BOOL> KnobTrackVMAs(KNOB_MODE_WRITEONCE, "pintool", "sniper:vma", "0", "track VMAs");
-KNOB<BOOL> KnobRecordMultithreaded(KNOB_MODE_WRITEONCE, "pintool", "sniper:multithreaded", "0", "generate traces for multithreaded applications");
 
 KNOB<UINT64> KnobStopAddress(KNOB_MODE_WRITEONCE, "pintool", "sniper:stop", "0", "stop address (0 = disabled)");
 KNOB<UINT64> KnobMaxThreads(KNOB_MODE_WRITEONCE, "pintool", "sniper:maxthreads", "0", "maximum number of threads (0 = default)");

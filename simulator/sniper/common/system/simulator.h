@@ -5,7 +5,6 @@
 #include "log.h"
 #include "inst_mode.h"
 #include <decoder.h>
-#include "nic.h"
 
 
 class _Thread;
@@ -31,12 +30,6 @@ class TagsManager;
 class RoutineTracer;
 class MemoryTracker;
 class MimicOS;
-
-
-namespace NIC{
-
-   class BasicNIC;
-}  
 
 namespace config
 {
@@ -73,9 +66,6 @@ public:
       //    LOG_PRINT_ERROR("getCfg() called after init, this is not nice\n");
       return m_config_file;
    }
-   NIC::BasicNIC *getNIC() { return m_nic; }
-
-
    void hideCfg() { m_config_file_allowed = false; }
    StatsManager *getStatsManager() { return m_stats_manager; }
    ThreadStatsManager *getThreadStatsManager() { return m_thread_stats_manager; }
@@ -131,7 +121,6 @@ private:
    MemoryTracker *m_memory_tracker;
    MimicOS *m_mimicos;
    MimicOS *m_mimicos_vm;
-   NIC::BasicNIC *m_nic;
 
    bool virtualized_system;
    bool m_running;

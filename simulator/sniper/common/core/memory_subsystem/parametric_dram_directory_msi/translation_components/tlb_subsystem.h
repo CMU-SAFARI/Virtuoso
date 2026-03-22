@@ -28,7 +28,7 @@ namespace ParametricDramDirectoryMSI
 
 	public:
 		bool prefetch_enabled;
-		TLBHierarchy(String mmu_name, Core *core, MemoryManager *memory_manager, ShmemPerfModel *shmem_perf_model);
+		TLBHierarchy(String mmu_name, Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model);
 		~TLBHierarchy();
 		TLBSubsystem getTLBSubsystem() { return tlbLevels; }
 		TLBSubsystem getDataPath() { return data_path; }
@@ -36,6 +36,7 @@ namespace ParametricDramDirectoryMSI
 		bool isPrefetchEnabled() { return prefetch_enabled; }
 		int getNumLevels() { return numLevels; }
 		int predictPagesize(IntPtr eip);
+		void updatePageSizePredictor(IntPtr virtual_address, int page_size);
 		void predictionResult(IntPtr eip, bool success);
 	};
 

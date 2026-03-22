@@ -17,17 +17,29 @@ public:
 
 	enum block_type_t
 	{
-		PAGE_TABLE,
-		PAGE_TABLE_PASSTHROUGH,
-		RANGE_TABLE,
-		UTOPIA,
-		SECURITY,
-		EXPRESSIVE,
-		TLB_ENTRY,			   // used to store TLB entries inside the caches
-		TLB_ENTRY_PASSTHROUGH, // used to store TLB entries inside the caches but passthrough L1 cache
-		NON_PAGE_TABLE,
+		PAGE_TABLE_DATA	= 0, // Page table data (e.g., PTEs for data pages)
+		PAGE_TABLE_INSTRUCTION, // Page table data (e.g., PTEs for instruction pages)
+		UTOPIA_FP,           // Utopia Frame Pointer Array metadata
+		UTOPIA_TAR,          // Utopia Tag Array metadata
+		UTOPIA_RADIX_INTERNAL, // Utopia RadixWay internal node (pointer array)
+		UTOPIA_RADIX_LEAF,     // Utopia RadixWay leaf node (valid+way bitmap)
+		INSTRUCTION,         // Instruction fetches
+		DATA,                // Regular data accesses
 		NUM_BLOCK_TYPES
 	};
+
+	// Helper function to check if a block type is metadata (any translation-related block)
+	static inline bool isMetadataBlockType(block_type_t block_type) {
+		return (block_type == PAGE_TABLE_DATA || 
+		        block_type == PAGE_TABLE_INSTRUCTION ||
+		        block_type == UTOPIA_FP || 
+		        block_type == UTOPIA_TAR ||
+		        block_type == UTOPIA_RADIX_INTERNAL ||
+		        block_type == UTOPIA_RADIX_LEAF);
+	}
+	
+	// For backward compatibility - PAGE_TABLE is an alias for PAGE_TABLE_DATA
+	static const block_type_t PAGE_TABLE = PAGE_TABLE_DATA;
 
 	static const UInt8 BitsUsedOffset = 3; // Track usage on 1<<BitsUsedOffset granularity (per 64-bit / 8-byte)
 	typedef UInt8 BitsUsedType;			   // Enough to store one bit per 1<<BitsUsedOffset byte element per cache line (8 8-byte elements for 64-byte cache lines)
@@ -37,7 +49,7 @@ private:
 
 	// @kanellok for TLB: added ppn to store the physical page number
 	IntPtr ppn;
-	bool m_tlb_entry;	  // @kanellok for caches that store TLB entries: flag to indicate if this is a TLB entry: this was used only in [Kanellopoulos et al. Victima MICRO 2023]
+	bool m_tlb_entry;	  // @kanellok for caches that store TLB entries: flag to indicate if this is a TLB entry
 	int m_page_size;	  //@kanellok for TLBs: hold page size for each cache block
 
 	IntPtr m_tag;
@@ -83,11 +95,9 @@ public:
 
 	inline void setBlockType(block_type_t bt) { m_block_type = bt; }
 	inline block_type_t getBlockType() { return m_block_type; }
-	inline bool isPageTableBlock() { return (m_block_type == block_type_t::PAGE_TABLE); }
-	inline bool isSecurityBlock() { return (m_block_type == block_type_t::SECURITY); }
-	inline bool isExpressiveBlock() { return (m_block_type == block_type_t::EXPRESSIVE); } // @kanellok needed only for memory tagging-based metadata
-	inline bool isUtopiaBlock() { return (m_block_type == block_type_t::UTOPIA); } // @kanellok needed only for Utopia
-	inline bool isTLBBlock() { return (m_block_type == block_type_t::TLB_ENTRY); } // @kanellok needed only for Victima
+	inline bool isPageTableBlock() { return isMetadataBlockType(m_block_type); }
+	inline bool isInstructionBlock() { return (m_block_type == block_type_t::INSTRUCTION); }
+	inline bool isDataBlock() { return (m_block_type == block_type_t::DATA); }
 
 	void setPageSize(int pagesize) { m_page_size = pagesize; }
 

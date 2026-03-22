@@ -13,8 +13,25 @@
 #include "fault_injection.h"
 #include "stats.h"
 #include <memory>
+#include <vector>
+
 // Define to enable the set usage histogram
 // #define ENABLE_SET_USAGE_HIST
+
+// Snapshot data for a single cache block
+struct CacheBlockSnapshot {
+	bool valid;
+	UInt8 block_type;  // CacheBlockInfo::block_type_t
+	UInt8 recency;     // LRU position (0 = MRU, higher = older)
+	int reuse_count;   // How many times this block was reused
+};
+
+// Full cache snapshot
+struct CacheSnapshot {
+	UInt32 num_sets;
+	UInt32 num_ways;
+	std::vector<std::vector<CacheBlockSnapshot>> blocks;  // [set][way]
+};
 
 class Cache : public CacheBase
 {
@@ -50,12 +67,9 @@ private:
 	UInt64 sum_metadata_reuse;
 	UInt64 sum_metadata_utilization;
 
-	UInt64 sum_tlb_reuse;
-	UInt64 sum_tlb_utilization;
 
 	UInt64 number_of_data_reuse;
 	UInt64 number_of_metadata_reuse;
-	UInt64 number_of_tlb_reuse;
 
 	int metadata_passthrough_loc;
 
@@ -64,22 +78,23 @@ private:
 
 	UInt64 data_reuse[5];
 	UInt64 metadata_reuse[5];
-	UInt64 tlb_reuse[5];
 
 	UInt64 data_util[8];
 	UInt64 metadata_util[8];
-	UInt64 tlb_util[8];
 
 #ifdef ENABLE_SET_USAGE_HIST
 	UInt64 *m_set_usage_hist;
 #endif
 
+	// L2 content logging (similar to NUCA cache)
+	core_id_t m_core_id;
+	std::ofstream m_content_log;
+	UInt64 m_last_log_access_count;
+	bool m_content_log_initialized;
+	UInt64 m_total_accesses;  // Total accesses for logging trigger
+
 public:
 	std::vector<uint64_t> m_page_walk_cacheblocks;	/* timeseries stats */
-	std::vector<uint64_t> m_utopia_cacheblocks;		/* timeseries stats */
-	std::vector<uint64_t> m_security_cacheblocks;	/* timeseries stats */
-	std::vector<uint64_t> m_expressive_cacheblocks; /* timeseries stats */
-	std::vector<uint64_t> m_tlb_cacheblocks;		/* timeseries stats */
 
 	// constructors/destructors
 	Cache(String name,
@@ -97,6 +112,8 @@ public:
 	Lock &getSetLock(IntPtr addr);
 
 	bool invalidateSingleLine(IntPtr addr);
+	bool invalidateSingleLineTLB(IntPtr addr, int page_size);
+	bool containsTLB(IntPtr addr, int page_size) const;
 	CacheBlockInfo *accessSingleLine(IntPtr addr,
 									 access_t access_type, Byte *buff, UInt32 bytes, SubsecondTime now, bool update_replacement, bool tlb_entry = false, bool is_metadata = false);
 	CacheBlockInfo *accessSingleLineTLB(IntPtr addr,
@@ -104,19 +121,15 @@ public:
 
 	void insertSingleLine(IntPtr addr, Byte *fill_buff,
 						  bool *eviction, IntPtr *evict_addr,
-						  CacheBlockInfo *evict_block_info, Byte *evict_buff, SubsecondTime now, CacheCntlr *cntlr = NULL, CacheBlockInfo::block_type_t btype = CacheBlockInfo::block_type_t::NON_PAGE_TABLE);
+						  CacheBlockInfo *evict_block_info, Byte *evict_buff, SubsecondTime now, CacheCntlr *cntlr = NULL, CacheBlockInfo::block_type_t btype = CacheBlockInfo::block_type_t::DATA);
 	void insertSingleLineTLB(IntPtr addr, Byte *fill_buff,
 							 bool *eviction, IntPtr *evict_addr,
-							 CacheBlockInfo *evict_block_info, Byte *evict_buff, SubsecondTime now, CacheCntlr *cntlr = NULL, CacheBlockInfo::block_type_t btype = CacheBlockInfo::block_type_t::NON_PAGE_TABLE, int page_size = 12, IntPtr ppn = 0);
+							 CacheBlockInfo *evict_block_info, Byte *evict_buff, SubsecondTime now, CacheCntlr *cntlr = NULL, CacheBlockInfo::block_type_t btype = CacheBlockInfo::block_type_t::DATA, int page_size = 12, IntPtr ppn = 0);
 	CacheBlockInfo *peekSingleLine(IntPtr addr);
 	CacheBlockInfo *peekBlock(UInt32 set_index, UInt32 way) const { return m_sets[set_index]->peekBlock(way); }
 	void updateSetReplacement(IntPtr addr);
 
 	std::vector<uint64_t> getPTWTranslationStats() { return m_page_walk_cacheblocks; }
-	std::vector<uint64_t> getUtopiaTranslationStats() { return m_utopia_cacheblocks; }
-	std::vector<uint64_t> getSecurityTranslationStats() { return m_security_cacheblocks; }
-	std::vector<uint64_t> getExpressiveTranslationStats() { return m_expressive_cacheblocks; }
-	std::vector<uint64_t> getTLBStats() { return m_tlb_cacheblocks; }
 
 	// Update Cache Counters
 	void updateCounters(bool cache_hit);
@@ -129,6 +142,15 @@ public:
 
 	void measureStats();
 	void markMetadata(IntPtr address, CacheBlockInfo::block_type_t blocktype);
+	
+	// Get a snapshot of the entire cache state for visualization
+	CacheSnapshot getCacheSnapshot() const;
+	
+	// Save a cache snapshot as a heatmap image (PPM format)
+	void saveSnapshotHeatmap(const std::string& filename) const;
+	
+	// Log cache content distribution (metadata vs data) - similar to NUCA cache
+	void logCacheContentDistribution(UInt64 access_count);
 };
 
 template <class T>

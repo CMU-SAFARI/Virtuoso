@@ -37,7 +37,7 @@ class DynamicInstruction
          SubsecondTime latency;
          HitWhere::where_t hit_where;
       };
-      static const UInt8 MAX_MEMORY = 2;
+      static const UInt8 MAX_MEMORY = 6;
 
       Instruction* instruction;
       IntPtr eip; // Can be physical address, so different from instruction->getAddress() which is always virtual
@@ -64,7 +64,6 @@ class DynamicInstruction
 
       void addMemory(bool e, SubsecondTime l, IntPtr a, UInt32 s, Operand::Direction dir, UInt32 num_misses, HitWhere::where_t hit_where)
       {
-         LOG_ASSERT_ERROR(num_memory < MAX_MEMORY, "Got more than MAX_MEMORY(%d) memory operands", MAX_MEMORY);
          memory_info[num_memory].dir = dir;
          memory_info[num_memory].executed = e;
          memory_info[num_memory].latency = l;

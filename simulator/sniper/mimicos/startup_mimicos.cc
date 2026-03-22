@@ -1,0 +1,1 @@
+../../../mimicos/startup_mimicos.cc

@@ -23,7 +23,7 @@
 #include <random>	 // for std::default_random_engine
 #include <chrono>	 // for std::chrono::system_clock
 
-#define DEBUG
+#undef DEBUG
 
 namespace ParametricDramDirectoryMSI
 {
@@ -103,7 +103,9 @@ namespace ParametricDramDirectoryMSI
 				// Allocate an array of Elements
 				tables[a][i] = (Element *)malloc(sizeof(Element) * m_page_table_sizes[a]);
 
-				// Grab some physical address space for this table array
+				// Grab some physical address space for this table array 
+				// Fix: ECH starts with small sizes for each nest, but we dont extend the size which might lead to issues
+
 				table_ppns[a][i] = getPhysicalSpace(m_page_table_sizes[a] * 64);
 				std::cout << "[Cuckoo] Table " << i << " has ppn " << table_ppns[a][i] << "\n";
 
@@ -122,7 +124,7 @@ namespace ParametricDramDirectoryMSI
 		cuckoo_stats.cuckoo_evictions = 0;
 		cuckoo_stats.rehashes = 0;
 
-		std::cout << "[Cuckoo] Registering stats with name " << name << " and core " << core_id << "\n";
+		std::cout << "[Cuckoo] Registering ECH Page Table stats with name " << name << " and core " << core_id << "\n";
 
 		// Track total page walks, total evictions, total rehashes
 		registerStatsMetric(name, core_id, "ptws_total", &cuckoo_stats.page_walks_total);
@@ -319,8 +321,8 @@ namespace ParametricDramDirectoryMSI
 				}
 
 				numItems[page_size_index]++;
-				visitedAddresses.push_back(make_tuple(page_size_index, counter,
-													  (uint64_t)(table_ppns[page_size_index][selected_way] + pos * 64), false));
+				// visitedAddresses.push_back(make_tuple(page_size_index, counter,
+				// 									  (uint64_t)(table_ppns[page_size_index][selected_way] + pos * 64), false));
 				return std::make_tuple(true, visitedAddresses);
 			}
 			// Otherwise, we evict the occupant => occupant becomes oldElement; occupant’s spot gets our item
@@ -369,8 +371,8 @@ namespace ParametricDramDirectoryMSI
 					tables[page_size_index][selected_way][pos].frames[i] = currentElement.frames[i];
 				}
 
-				visitedAddresses.push_back(make_tuple(page_size_index, counter,
-													  (uint64_t)(table_ppns[page_size_index][selected_way] + pos * 64), false));
+				// visitedAddresses.push_back(make_tuple(page_size_index, counter,
+				// 									  (uint64_t)(table_ppns[page_size_index][selected_way] + pos * 64), false));
 				selected_way = new_way;
 			}
 			else
@@ -580,11 +582,16 @@ namespace ParametricDramDirectoryMSI
 		int page_size_result = -1;
 		IntPtr ppn_result = 0;
 
-	restart_walk:;
+	restart_walk:
 
 		// Attempt a lookup in each page size
+		// In ECH, we need to access the cuckoo nests for each page size (in parallel)
+		// Each table corresponding to a page size has multiple "ways"/nests 
+
 		for (int i = 0; i < m_page_sizes; i++)
 		{
+
+			// Form the VPN assuming page size P[i]
 			IntPtr VPN = address >> m_page_size_list[i];
 			IntPtr tag = VPN >> 3;
 			IntPtr offset = VPN % 8;
@@ -595,9 +602,17 @@ namespace ParametricDramDirectoryMSI
 					 << " in page size " << m_page_size_list[i] << "\n";
 #endif
 
-			// For each way, compute the hash and check if we have a match
+			// For each way/nest, compute the hash and check if we have a match
+			
 			for (int a = 0; a < m_ways; ++a)
 			{
+				// We incorporate the "a" (way index) into the hash to differentiate between ways
+				// way 0   way 1
+			// ->	|		|
+				// 	|		|
+				// 	|		|
+				// 	|	->	|	// Compute the position in the table using the hash function|
+
 				uint64_t pos = hash(tag + a, m_page_table_sizes[i]);
 
 #ifdef DEBUG
@@ -612,13 +627,17 @@ namespace ParametricDramDirectoryMSI
 				log_file << "\n";
 #endif
 				// If tags and validity match => we found the PPN
+				// In each entry of the table we store a cache line 8 different PTEs (exploiting virtual contiguity) 
 				if (tables[i][a][pos].tag == tag && tables[i][a][pos].validityBits[offset])
 				{
+					last_walked_element = &tables[i][a][pos];
 					ppn_result = tables[i][a][pos].frames[offset];
-					visitedAddresses.push_back(make_tuple(i, 0, (IntPtr)(table_ppns[i][a] * 4096 + pos * 64), true));
+					visitedAddresses.push_back(PTWAccess(i, 0, (IntPtr)(table_ppns[i][a] * 4096 + pos * 64), true));
+					// Result page size expressed in bits (e.g., 12 for 4KB, 21 for 2MB)
 					page_size_result = m_page_size_list[i];
 
 					cuckoo_stats.cuckoo_accesses[i]++;
+
 					if (count)
 					{
 #ifdef DEBUG
@@ -633,17 +652,51 @@ namespace ParametricDramDirectoryMSI
 				else
 				{
 					// If it’s not a match, we record an access for stats
-					visitedAddresses.push_back(make_tuple(i, 0, (IntPtr)(table_ppns[i][a] * 4096 + pos * 64), false));
+					// Table_ppn stores the emulated base physical address of the table (at a 4KB granularity) - one address per way per page size
+					
+					// We push to the vector with the visited addresses the tuple: 
+					// (page_size_index, depth, physical_address, is_the_one_delivering_translation)
+					// Lets define depth: 
+					// In the case of ECH, depth is always 0, since we are not doing a recursive walk - all requests can be served in parallel
+					// In the case of a normal page walk, depth is the number of levels we have walked so far
+					// Depth: an abstract depth in the context of walking a data flow graph of memory accesses 
+					// In the context of Radix, we increase the depth by 1 for each level we walk to make sure we send the requests at 
+					// different times (taking into account dependencies between requests) to the memory hierarchy. 
+
+					visitedAddresses.push_back(PTWAccess(i, 0, (IntPtr)(table_ppns[i][a] * 4096 + pos * 64), false));
 					cuckoo_stats.cuckoo_accesses[i]++;
 				}
 			}
 		}
 
+		// We want to assume perfect CWCs -> we find the page size for free
+		// Remove from the visitedAddresses all the entries that do not match the page size result
+		if (page_size_result != -1)
+		{
+			int page_size_index = -1;
+			// Convert the page size result to a page size index
+			for (int i = 0; i < m_page_sizes; i++)
+			{
+				if(m_page_size_list[i] == page_size_result)
+				{
+					page_size_index = i;
+	 				break;
+				}
+			}
+			// Filter the visitedAddresses to only include the page size that matched the result page size
+			   visitedAddresses.erase(std::remove_if(visitedAddresses.begin(), visitedAddresses.end(),
+		 [page_size_index](const PTWAccess& addr) {
+			return addr.table_level != page_size_index;
+		 }), visitedAddresses.end());
+
+		}
 		// If no match found, page_size_result remains -1 => page fault
 		if (page_size_result == -1)
 		{
-			if (restart_walk_after_fault)
-				Sim()->getMimicOS()->handle_page_fault(address, core_id, false);
+			if (restart_walk_after_fault) {
+                // TODO @vlnitu: handle page fault in ExceptionHandler
+				// Sim()->getMimicOS()->handle_page_fault(address, core_id, 0);
+			}
 
 			is_page_fault_in_every_page_size = true;
 
@@ -700,7 +753,9 @@ namespace ParametricDramDirectoryMSI
 		// If we exceed loadFactor => rehash
 		if (currentLoadFactor(page_size_index) > loadFactor)
 		{
+			// Scale the size by m_scale factor
 			int new_size = m_page_table_sizes[page_size_index] * m_scale;
+			//You need to rehash all the elements in the cuckoo table and put them in the new table
 			while (!rehash(page_size_index, new_size))
 			{
 				new_size *= m_scale;
@@ -724,6 +779,7 @@ namespace ParametricDramDirectoryMSI
 		std::tuple<bool, accessedAddresses> result = insertElement(page_size_index, entry, address);
 
 		// If it fails => keep rehashing with bigger sizes until success
+
 		if (get<0>(result) == false)
 		{
 			new_size *= m_scale;
@@ -734,6 +790,36 @@ namespace ParametricDramDirectoryMSI
 			}
 		}
 
+		IntPtr offset_in_cwt = (address >> 24) & 0x3F;
+		IntPtr cwc_tag = address >> 30;
+#ifdef DEBUG
+		log_file << "[Cuckoo] Address " << address << " has cwc_tag " << cwc_tag << " and maps to offset "
+				 << offset_in_cwt << " in CWT\n";
+#endif
+		if (pmd_cwt_entries.find(cwc_tag) != pmd_cwt_entries.end())
+		{
+#ifdef DEBUG
+			log_file << "[Cuckoo] Found CWT entry for address " << address << " and page size " << page_size_index << std::endl;
+#endif
+			if(page_size_index == 0) 
+				pmd_cwt_entries[cwc_tag].section_header[offset_in_cwt].has_4kb_page = 1;
+			else 	
+				pmd_cwt_entries[cwc_tag].section_header[offset_in_cwt].has_2mb_page = 1;
+		}
+		else
+		{
+#ifdef DEBUG
+			log_file << "[Cuckoo] No CWT entry found for address " << address << " and page size " << page_size_index << std::endl;
+#endif
+			IntPtr cwt_tag = address >> 30; // TODO: cross-check w/ Kon which bits are used fo CWT tag, in paper Figure 11 page 8/16: VPN Tag (18 bits); which 18 bits idk
+			pmd_cwt_entries[cwc_tag] = PmdCwtEntry(cwt_tag);
+
+			if(page_size_index == 0) 
+				pmd_cwt_entries[cwc_tag].section_header[offset_in_cwt].has_4kb_page = 1;
+			else 
+				pmd_cwt_entries[cwc_tag].section_header[offset_in_cwt].has_2mb_page = 1;
+		}
+		
 		return 0;
 	}
 
@@ -784,6 +870,49 @@ namespace ParametricDramDirectoryMSI
 	IntPtr PageTableCuckoo::getPhysicalSpace(int size)
 	{
 		return Sim()->getMimicOS()->getMemoryAllocator()->handle_page_table_allocations(size);
+	}
+
+	CwtSectionHeader PageTableCuckoo::retrieveCWTentry(IntPtr address) {
+		IntPtr offset_pointer = (address >> 24) & 0x3F;
+		IntPtr pmd_address = (address >> 30);
+
+		if (pmd_cwt_entries.find(pmd_address) == pmd_cwt_entries.end())
+		{
+			pmd_cwt_entries[pmd_address] = PmdCwtEntry(static_cast<IntPtr>(-1));
+		}
+		
+		CwtSectionHeader hdr = CwtSectionHeader {
+			pmd_cwt_entries[pmd_address].section_header[offset_pointer].has_4kb_page,
+			pmd_cwt_entries[pmd_address].section_header[offset_pointer].has_2mb_page,
+			pmd_cwt_entries[pmd_address].section_header[offset_pointer].way
+		};
+		return hdr;
+	}
+
+	PmdCwtEntry PageTableCuckoo::retrieveCWTrow(IntPtr address) {
+		IntPtr pmd_address = (address >> 30);
+#ifdef DEBUG
+		log_file << "[Cuckoo] Retrieving CWT row for address " << address << " and pmd_address (tag) = " << pmd_address << std::endl;
+        for (const auto& pair : pmd_cwt_entries) {
+            log_file << "[Cuckoo] Tag: " << pair.first << " ";
+        }
+        log_file << std::endl;
+#endif
+
+		if (pmd_cwt_entries.find(pmd_address) == pmd_cwt_entries.end())
+		{
+#ifdef DEBUG
+		log_file << "----- [Cuckoo] No CWT entry found for pmd_address " << pmd_address << std::endl;
+#endif
+			pmd_cwt_entries[pmd_address] = PmdCwtEntry(static_cast<IntPtr>(-1));
+		}
+		else {
+#ifdef DEBUG
+			log_file << "----- [Cuckoo] Found CWT entry for pmd_address " << pmd_address << std::endl;
+#endif
+		}
+		
+		return pmd_cwt_entries[pmd_address];
 	}
 
 } // namespace ParametricDramDirectoryMSI

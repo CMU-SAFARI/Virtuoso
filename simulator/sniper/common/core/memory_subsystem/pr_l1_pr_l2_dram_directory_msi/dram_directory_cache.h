@@ -1,5 +1,6 @@
 #pragma once
 
+#include <unordered_map>
 #include <vector>
 
 #include "directory.h"
@@ -13,7 +14,7 @@ namespace PrL1PrL2DramDirectoryMSI
       private:
          Directory* m_directory;
          UInt32* m_replacement_ptrs;
-         std::vector<DirectoryEntry*> m_replaced_directory_entry_list;
+         std::unordered_map<IntPtr, DirectoryEntry*> m_replaced_directory_entry_map;
 
          UInt32 m_total_entries;
          UInt32 m_associativity;

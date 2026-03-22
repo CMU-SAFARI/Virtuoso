@@ -1,0 +1,1508 @@
+# Virtuoso Testing Framework Configuration
+# ==========================================
+
+# Base paths
+paths:
+  sniper_root: "${VIRTUOSO_ROOT}/simulator/sniper"
+  traces_dir: "${VIRTUOSO_TRACES}"
+  configs_dir: "./config/address_translation_schemes"
+  results_dir: "./results/testing"
+# Default test parameters
+defaults:
+  instruction_count: 10000000  # 10M instructions
+  max_parallel_jobs: 4
+  timeout_seconds: 3600  # 1 hour
+
+# Available configurations
+# Each config can have:
+#   - file: the base .cfg file
+#   - extends: list of -g options to add
+#   - description: human-readable description
+configs:
+  # Baseline systems
+  baseline:
+    file: "baseline.cfg"
+    description: "Baseline radix page table with 4KB pages"
+  
+  baseline_champsim:
+    file: "baseline.cfg"
+    extends:
+      - "traceinput/type=champsim"
+    description: "Baseline radix page table for ChampSim traces"
+  
+  # No translation (for comparison)
+  no_translation:
+    file: "no_translation.cfg"
+    description: "Translation disabled - VA used directly as PA"
+    
+  # THP-based allocators
+  reservethp_fully_fragmented:
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Reservation-based THP allocator"
+
+  reservethp_mid_fragmented:
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.5"
+    description: "Reservation-based THP with 50% fragmentation"
+    
+  reservethp_no_fragmentation:
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+    description: "Reservation-based THP with no fragmentation"
+
+  # L2 XOR hash configurations for reducing cache conflicts from THP
+  reservethp_l2xor_no_fragmentation:
+    file: "reservethp_l2xor.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+    description: "Reservation-based THP with no fragmentation, L2 XOR hash"
+
+  reservethp_l2xor_fully_fragmented:
+    file: "reservethp_l2xor.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Reservation-based THP fully fragmented, L2 XOR hash"
+
+  asap:
+    file: "asap.cfg"
+    description: "ASAP allocator"
+
+  # Perfect translation (zero latency but uses same PA mapping)
+  perfect:
+    file: "perfect_translation.cfg"
+    description: "Perfect translation - zero latency, but with PA remapping"
+    
+  # SPOT allocator
+  spot:
+    file: "spot.cfg"
+    description: "SPOT contiguity-aware allocator"
+
+  spot_fragmented:
+    file: "spot.cfg"
+    extends:
+      - "--perf_model/spot_allocator/target_fragmentation_spot=50"
+    description: "SPOT with fragmentation level 50"
+
+  # Utopia configurations
+  utopia:
+    file: "utopia.cfg"
+    description: "Utopia with RestSeg + FlexSeg (4-level hierarchy) and UTLB"
+
+  utopia_baseline:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/speculation/enabled=false"
+      - "--perf_model/utopia/migration_cost_topk/enabled=0"
+    description: "Utopia baseline: no speculation, no migration (RadixWay + PWC only)"
+
+  utopia_debug:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/debug=true"
+    description: "Utopia with detailed debug output enabled"
+
+  utopia_no_utlb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/utlb/enabled=false"
+    description: "Utopia without UTLB (for comparison)"
+
+  utopia_fragmented:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/target_fragmentation=0.5"
+    description: "Utopia with 50% memory fragmentation"
+
+  # ============ Utopia MPLRU (Metadata-Priority LRU) Configurations ============
+  # MPLRU prioritizes translation metadata (FPA/TAR) in NUCA cache
+  # meta_level: 0=vanilla LRU, 1=protect if bottom 50%, 2=always evict data, 3=way partition
+
+  utopia_mplru:
+    file: "utopia_mplru.cfg"
+    description: "Utopia with MPLRU adaptive replacement policy"
+
+  utopia_mplru_always:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=always"
+    description: "Utopia with MPLRU always-on (meta_level=2)"
+
+  utopia_mplru_disabled:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=disabled"
+    description: "Utopia with MPLRU disabled (vanilla LRU baseline)"
+
+  utopia_mplru_aggressive:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_start=3"
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_max=3"
+    description: "Utopia with aggressive MPLRU (way partition)"
+
+  utopia_mplru_conservative:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_start=1"
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_max=2"
+    description: "Utopia with conservative MPLRU (protect if bottom 50%)"
+
+  utopia_mplru_fragmented:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/utopia/target_fragmentation=0.5"
+    description: "Utopia MPLRU with 50% memory fragmentation"
+
+  # ============ Utopia MPLRU Bandit Controller Configurations ============
+  # IPC-only multi-armed bandit for level selection (6 levels: L0-L5)
+  # L0: OFF (vanilla LRU), L1: 25% bias, L2: 50% bias, L3: hard bias
+  # L4: 25% partition, L5: 50% partition
+  # Bandit uses Q-value EMA, periodic neighbor probing, abort guardrail
+
+  # Default bandit configuration
+  utopia_mplru_bandit:
+    file: "utopia_mplru_bandit.cfg"
+    description: "Utopia with MPLRU bandit controller (IPC-only, default params)"
+
+  # Beta (EMA smoothing) sweep - controls responsiveness vs stability
+  utopia_mplru_bandit_beta_low:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/beta=0.1"
+    description: "Utopia MPLRU bandit with low beta=0.1 (slower adaptation)"
+
+  utopia_mplru_bandit_beta_high:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/beta=0.4"
+    description: "Utopia MPLRU bandit with high beta=0.4 (faster adaptation)"
+
+  # Probe period sweep - how often to explore neighbors
+  utopia_mplru_bandit_probe_fast:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/probe_period=5"
+    description: "Utopia MPLRU bandit with fast probing (every 5 epochs)"
+
+  utopia_mplru_bandit_probe_slow:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/probe_period=20"
+    description: "Utopia MPLRU bandit with slow probing (every 20 epochs)"
+
+  # Abort threshold sweep - sensitivity to IPC drops during probes
+  utopia_mplru_bandit_abort_tight:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/abort_threshold=0.02"
+    description: "Utopia MPLRU bandit with tight abort (2% IPC drop)"
+
+  utopia_mplru_bandit_abort_loose:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/abort_threshold=0.05"
+    description: "Utopia MPLRU bandit with loose abort (5% IPC drop)"
+
+  # Penalty factor sweep - how much to penalize Q on abort
+  utopia_mplru_bandit_penalty_mild:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/penalty_factor=0.98"
+    description: "Utopia MPLRU bandit with mild penalty (2% on abort)"
+
+  utopia_mplru_bandit_penalty_harsh:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/penalty_factor=0.90"
+    description: "Utopia MPLRU bandit with harsh penalty (10% on abort)"
+
+  # Fragmented memory scenario
+  utopia_mplru_bandit_fragmented:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/utopia/target_fragmentation=0.5"
+    description: "Utopia MPLRU bandit with 50% memory fragmentation"
+
+  # ============ Utopia MPLRU Bandit - Hardcoded Policy Arms ============
+  # Force bandit to use a specific policy (bypass learning)
+  # 12 arms: M0-M5 (metadata protection), D0-D5 (data protection)
+  # M0/D0 = vanilla LRU, M1-M5/D1-D5 = increasing protection levels
+
+  utopia_bandit_force_M0:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=0"
+    description: "Bandit forced to M0 (vanilla LRU - OFF)"
+
+  utopia_bandit_force_M1:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=1"
+    description: "Bandit forced to M1 (metadata 25% bias)"
+
+  utopia_bandit_force_M2:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=2"
+    description: "Bandit forced to M2 (metadata 50% bias)"
+
+  utopia_bandit_force_M3:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=3"
+    description: "Bandit forced to M3 (metadata hard bias)"
+
+  utopia_bandit_force_M4:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=4"
+    description: "Bandit forced to M4 (25% way partition for metadata)"
+
+  utopia_bandit_force_M5:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=5"
+    description: "Bandit forced to M5 (50% way partition for metadata)"
+
+  utopia_bandit_force_D0:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=6"
+    description: "Bandit forced to D0 (vanilla LRU - same as M0)"
+
+  utopia_bandit_force_D1:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=7"
+    description: "Bandit forced to D1 (data 25% bias)"
+
+  utopia_bandit_force_D2:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=8"
+    description: "Bandit forced to D2 (data 50% bias)"
+
+  utopia_bandit_force_D3:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=9"
+    description: "Bandit forced to D3 (data hard bias)"
+
+  utopia_bandit_force_D4:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=10"
+    description: "Bandit forced to D4 (25% way partition for data)"
+
+  utopia_bandit_force_D5:
+    file: "utopia_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/controller/force_policy=true"
+      - "--perf_model/nuca/cache/mplru/controller/forced_policy_id=11"
+    description: "Bandit forced to D5 (50% way partition for data)"
+
+  # ============ Utopia RestSeg Size Configurations ============
+  # RestSeg sizes are configured via: size (in MB), page_size (in bits), assoc
+  # Default: RestSeg-0: 8192MB 2MB-pages 8-way, RestSeg-1: 8192MB 4KB-pages 16-way
+
+  # Large RestSegs (16GB each = 32GB total for RestSeg)
+  utopia_large_restsegs:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=8192,8192"
+    description: "Utopia with large RestSegs (16GB 2MB + 16GB 4KB)"
+
+  # Small RestSegs (4GB each = 8GB total for RestSeg)
+  utopia_small_restsegs:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,2048"
+    description: "Utopia with small RestSegs (4GB 2MB + 4GB 4KB)"
+
+  # Tiny RestSegs (1GB each = 2GB total for RestSeg)
+  utopia_tiny_restsegs:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=512,512"
+    description: "Utopia with tiny RestSegs (512 2MB + 512 4KB)"
+
+
+  # Large 4KB RestSeg only (4GB 2MB, 16GB 4KB)
+  utopia_large_4kb_restseg:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,8192"
+    description: "Utopia with large 4KB RestSeg (1GB 2MB + 16GB 4KB)"
+
+  # High associativity RestSegs
+  utopia_high_assoc:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/assoc=16,32"
+      - "--perf_model/utopia/restseg/size=2048,2048"
+    description: "Utopia with high associativity (16-way 2MB, 32-way 4KB)"
+
+
+  # ============ Utopia Policy Combinations ============
+  # First Touch: 0=Optimistic, 1=Conservative, 2=Coalescing, 3=Adaptive, 4=RegionAware
+  # Migration:   0=None, 1=TLBDriven, 2=AccessCount, 3=Coalescing, 4=Hybrid
+
+  utopia_optimistic_tlb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/first_touch_policy=0"
+      - "--perf_model/utopia/migration_policy=1"
+    description: "Utopia: Optimistic first-touch + TLB-driven migration"
+
+  utopia_optimistic_none:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/first_touch_policy=0"
+      - "--perf_model/utopia/migration_policy=0"
+    description: "Utopia: Optimistic first-touch, no migration"
+
+  utopia_conservative_tlb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/first_touch_policy=1"
+      - "--perf_model/utopia/migration_policy=1"
+    description: "Utopia: Conservative first-touch + TLB-driven migration"
+
+  utopia_conservative_hybrid:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/first_touch_policy=1"
+      - "--perf_model/utopia/migration_policy=4"
+    description: "Utopia: Conservative first-touch + Hybrid migration"
+
+  utopia_coalescing_coalescing:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/first_touch_policy=2"
+      - "--perf_model/utopia/migration_policy=3"
+    description: "Utopia: Coalescing first-touch + Coalescing migration"
+
+  utopia_adaptive_hybrid:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/first_touch_policy=3"
+      - "--perf_model/utopia/migration_policy=4"
+    description: "Utopia: Adaptive first-touch + Hybrid migration"
+
+  utopia_regionaware_accesscount:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/first_touch_policy=4"
+      - "--perf_model/utopia/migration_policy=2"
+    description: "Utopia: RegionAware first-touch + AccessCount migration"
+
+  # ============ Utopia FPA/TAR Cache Size Sweep ============
+  # Default: FPA=8MB, TAR=8MB (both 4-way)
+  # Size is in KB, sweep from 4KB to 2MB
+  
+  utopia_cache_4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/fpacache/size=4"
+      - "--perf_model/utopia/tagcache/size=4"
+      - "--perf_model/utopia/restseg/size=2048,2048"  # Adjust RestSeg size to avoid excessive memory usage
+    description: "Utopia with 4KB FPA + 4KB TAR caches"
+
+  utopia_cache_8kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/fpacache/size=8"
+      - "--perf_model/utopia/tagcache/size=8"
+      - "--perf_model/utopia/restseg/size=2048,2048"  # Adjust RestSeg size to avoid excessive memory usage
+    description: "Utopia with 8KB FPA + 8KB TAR caches"
+
+  utopia_cache_16kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/fpacache/size=16"
+      - "--perf_model/utopia/tagcache/size=16"
+      - "--perf_model/utopia/restseg/size=2048,2048"  # Adjust RestSeg size to avoid excessive memory usage
+    description: "Utopia with 16KB FPA + 16KB TAR caches"
+
+  utopia_cache_32kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/fpacache/size=32"
+      - "--perf_model/utopia/tagcache/size=32"
+      - "--perf_model/utopia/restseg/size=2048,2048"  # Adjust RestSeg size to avoid excessive memory usage
+    description: "Utopia with 32KB FPA + 32KB TAR caches"
+
+  utopia_cache_64kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/fpacache/size=64"
+      - "--perf_model/utopia/tagcache/size=64"
+      - "--perf_model/utopia/restseg/size=2048,2048"  # Adjust RestSeg size to avoid excessive memory usage
+    description: "Utopia with 64KB FPA + 64KB TAR caches"
+
+  utopia_cache_128kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/fpacache/size=128"
+      - "--perf_model/utopia/tagcache/size=128"
+      - "--perf_model/utopia/restseg/size=2048,2048"  # Adjust RestSeg size to avoid excessive memory usage
+    description: "Utopia with 128KB FPA + 128KB TAR caches"
+
+  utopia_cache_256kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/fpacache/size=256"
+      - "--perf_model/utopia/tagcache/size=256"
+      - "--perf_model/utopia/restseg/size=2048,2048"  # Adjust RestSeg size to avoid excessive memory usage
+    description: "Utopia with 256KB FPA + 256KB TAR caches"
+
+  utopia_cache_512kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/fpacache/size=512"
+      - "--perf_model/utopia/tagcache/size=512"
+      - "--perf_model/utopia/restseg/size=2048,2048"  # Adjust RestSeg size to avoid excessive memory usage
+    description: "Utopia with 512KB FPA + 512KB TAR caches"
+
+  utopia_cache_1mb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/fpacache/size=1024"
+      - "--perf_model/utopia/tagcache/size=1024"
+      - "--perf_model/utopia/restseg/size=2048,2048"  # Adjust RestSeg size to avoid excessive memory usage
+    description: "Utopia with 1MB FPA + 1MB TAR caches"
+
+  utopia_cache_2mb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/fpacache/size=2048"
+      - "--perf_model/utopia/tagcache/size=2048"
+      - "--perf_model/utopia/restseg/size=2048,2048"  # Adjust RestSeg size to avoid excessive memory usage
+    description: "Utopia with 2MB FPA + 2MB TAR caches"
+
+  # ============ Utopia 4KB-RestSeg Size Sweep ============
+  # Sweep the 4KB-RestSeg size from 512MB to 8GB
+  # The 2MB-RestSeg is kept constant at 2GB (2048MB)
+  
+  utopia_restseg_512mb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,512"
+    description: "Utopia with 512MB 4KB-RestSeg"
+
+  utopia_restseg_1gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,1024"
+    description: "Utopia with 1GB 4KB-RestSeg"
+
+  utopia_restseg_2gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,2048"
+    description: "Utopia with 2GB 4KB-RestSeg"
+
+  utopia_restseg_4gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,4096"
+    description: "Utopia with 4GB 4KB-RestSeg"
+
+  utopia_restseg_8gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,8192"
+    description: "Utopia with 8GB 4KB-RestSeg"
+
+  # Utopia with FPA/TAR access pattern logging enabled
+  utopia_access_logging:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/access_pattern_logging=true"
+      - "--perf_model/utopia/access_pattern_sample_rate=1"
+      - "--perf_model/utopia/restseg/size=2048,8192"
+    description: "Utopia with FPA/TAR access pattern logging (100% sampled)"
+  
+  baseline_ptw_logging:
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/ptw_access_logging=true"
+      - "--perf_model/mmu/ptw_access_logging_sample_rate=1"
+    description: "Reservation-based THP allocator with per-access PTW logging (100% sampled)"
+
+
+  # DMT
+  dmt:
+    file: "dmt.cfg"
+    description: "Direct Memory Translation"
+
+  # ============ CATS Speculation Configs ============
+  # Base CATS config with speculation enabled (prefetch mode)
+  
+  utopia_cats_512mb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,512"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/credits_max=1000000000"
+      - "--perf_model/utopia/speculation/congestion_limit=10000"
+    description: "Utopia with 512MB 4KB-RestSeg + CATS speculation (prefetch mode)"
+
+  utopia_cats_1gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,1024"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+    description: "Utopia with 1GB 4KB-RestSeg + CATS speculation (prefetch mode)"
+
+  utopia_cats_2gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,2048"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+    description: "Utopia with 2GB 4KB-RestSeg + CATS speculation (prefetch mode)"
+
+  utopia_cats_4gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,4096"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+    description: "Utopia with 4GB 4KB-RestSeg + CATS speculation (prefetch mode)"
+
+  utopia_cats_8gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,8192"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+    description: "Utopia with 8GB 4KB-RestSeg + CATS speculation (prefetch mode)"
+
+  # Aggressive CATS (early-demand mode with higher credit/congestion limits)
+  utopia_cats_aggressive_2gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,2048"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=2"
+      - "--perf_model/utopia/speculation/conf_threshold=2"
+      - "--perf_model/utopia/speculation/credits_max=16"
+      - "--perf_model/utopia/speculation/congestion_limit=16"
+    description: "Utopia with 2GB 4KB-RestSeg + aggressive CATS (early-demand mode)"
+
+  # Conservative CATS (higher confidence threshold, lower credits)
+  utopia_cats_conservative_2gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,2048"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/conf_threshold=5"
+      - "--perf_model/utopia/speculation/credits_max=4"
+      - "--perf_model/utopia/speculation/congestion_limit=4"
+    description: "Utopia with 2GB 4KB-RestSeg + conservative CATS (prefetch mode)"
+
+  # CATS with TAG_IN_ROW metadata fetch (co-fetch FPA+TAR)
+  utopia_cats_metablock_2gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,2048"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/metadata_fetch/mode=1"
+      - "--perf_model/utopia/metadata_fetch/metablock_size=64"
+    description: "Utopia with 2GB 4KB-RestSeg + CATS + TAG_IN_ROW metadata fetch"
+
+  # High-credits CATS (more speculation budget without changing aggressiveness)
+  utopia_cats_highcredits_2gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,2048"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/credits_max=32"
+      - "--perf_model/utopia/speculation/congestion_limit=16"
+    description: "Utopia with 2GB 4KB-RestSeg + CATS with high credits (32 max)"
+
+  # ============ CATS Tuning Configs (more aggressive) ============
+  # Since 94% hit rate + 60% gated by credits → we can be more aggressive
+  
+  # Lower confidence threshold (speculate on less confident predictions)
+  utopia_cats_lowconf_2gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,2048"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/conf_threshold=1"
+      - "--perf_model/utopia/speculation/credits_max=10000"
+    description: "CATS with low confidence threshold (1) - more speculative"
+
+  # Unlimited credits (no credit throttling)
+  utopia_cats_unlimitedcredits_2gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,2048"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/credits_max=1000000000"
+      - "--perf_model/utopia/speculation/congestion_limit=64"
+    description: "CATS with very high credits (256) - minimal credit throttling"
+
+  # Full aggressive: low conf + high credits + early-demand mode
+  utopia_cats_fullaggressive_2gb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=2048,2048"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/conf_threshold=1"
+      - "--perf_model/utopia/speculation/credits_max=1000000000"
+      - "--perf_model/utopia/speculation/congestion_limit=64"
+    description: "CATS full aggressive: early-demand + low conf + unlimited credits"
+
+  # ============ Fixed 1GB 2MB-RestSeg, Sweep 4KB-RestSeg (No Speculation) ============
+  # 2MB-RestSeg fixed at 1GB (1024MB), sweep 4KB-RestSeg from 512MB to 8GB
+  
+  utopia_1gb2mb_512mb4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,512"
+    description: "Utopia: 1GB 2MB-RestSeg + 512MB 4KB-RestSeg (no speculation)"
+
+  utopia_1gb2mb_1gb4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,1024"
+    description: "Utopia: 1GB 2MB-RestSeg + 1GB 4KB-RestSeg (no speculation)"
+
+  utopia_1gb2mb_2gb4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,2048"
+    description: "Utopia: 1GB 2MB-RestSeg + 2GB 4KB-RestSeg (no speculation)"
+
+  utopia_1gb2mb_4gb4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,4096"
+    description: "Utopia: 1GB 2MB-RestSeg + 4GB 4KB-RestSeg (no speculation)"
+
+  utopia_1gb2mb_8gb4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,8192"
+    description: "Utopia: 1GB 2MB-RestSeg + 8GB 4KB-RestSeg (no speculation)"
+
+  # ============ Fixed 1GB 2MB-RestSeg, Sweep 4KB-RestSeg (Aggressive CATS) ============
+  # Same sweep but with aggressive speculation enabled
+  
+  utopia_cats_1gb2mb_512mb4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,512"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/conf_threshold=0"
+      - "--perf_model/utopia/speculation/credits_max=1000000000"
+      - "--perf_model/utopia/speculation/congestion_limit=64"
+    description: "Utopia: 1GB 2MB-RestSeg + 512MB 4KB-RestSeg + aggressive CATS"
+
+  utopia_cats_1gb2mb_1gb4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,1024"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/conf_threshold=0"
+      - "--perf_model/utopia/speculation/credits_max=1000000000"
+      - "--perf_model/utopia/speculation/congestion_limit=64"
+    description: "Utopia: 1GB 2MB-RestSeg + 1GB 4KB-RestSeg + aggressive CATS"
+
+  utopia_cats_1gb2mb_2gb4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,2048"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/conf_threshold=0"
+      - "--perf_model/utopia/speculation/credits_max=1000000000"
+      - "--perf_model/utopia/speculation/congestion_limit=64"
+    description: "Utopia: 1GB 2MB-RestSeg + 2GB 4KB-RestSeg + aggressive CATS"
+
+  utopia_cats_1gb2mb_4gb4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,4096"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/conf_threshold=0"
+      - "--perf_model/utopia/speculation/credits_max=1000000000"
+      - "--perf_model/utopia/speculation/congestion_limit=64"
+    description: "Utopia: 1GB 2MB-RestSeg + 4GB 4KB-RestSeg + aggressive CATS"
+
+  utopia_cats_1gb2mb_8gb4kb:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=1024,8192"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/conf_threshold=0"
+      - "--perf_model/utopia/speculation/credits_max=1000000000"
+      - "--perf_model/utopia/speculation/congestion_limit=64"
+    description: "Utopia: 1GB 2MB-RestSeg + 8GB 4KB-RestSeg + aggressive CATS"
+
+  # ============ CostTopK Migration Policy Configs ============
+  # Top-K cost-based migration promotes expensive-to-translate FlexSeg pages to RestSeg
+  # Parameters:
+  #   - migrate_threshold: score threshold to trigger migration (higher = more selective)
+  #   - topk_entries: number of top candidates tracked (higher = more choices)
+  #   - credits_max: max migrations per credit epoch (higher = more aggressive)
+  #   - score_bits: precision of cost tracking (10 = 0-1023 range)
+  
+  # Conservative: High threshold, low credits (migrate only very hot pages)
+  utopia_costtopk_conservative:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=128"
+      - "--perf_model/utopia/restseg/page_size=12"
+      - "--perf_model/utopia/restseg/assoc=16"
+      - "--perf_model/utopia/restsegs=1"
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=64"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=8"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=2"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    description: "CostTopK conservative: high threshold (64), low credits (2)"
+
+  # Moderate: Balanced settings (default-like)
+  utopia_costtopk_moderate:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=128"
+      - "--perf_model/utopia/restseg/page_size=12"
+      - "--perf_model/utopia/restseg/assoc=16"
+      - "--perf_model/utopia/restsegs=1"
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=32"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=16"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=4"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    description: "CostTopK moderate: medium threshold (32), medium credits (4)"
+
+  # Aggressive: Low threshold, high credits (migrate more pages faster)
+  utopia_costtopk_aggressive:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=128"
+      - "--perf_model/utopia/restseg/page_size=12"
+      - "--perf_model/utopia/restseg/assoc=16"
+      - "--perf_model/utopia/restsegs=1"
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=16"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=32"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=8"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    description: "CostTopK aggressive: low threshold (16), high credits (8)"
+
+  # Very Aggressive: Very low threshold, high credits, larger TopK
+  utopia_costtopk_veryaggressive:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=128"
+      - "--perf_model/utopia/restseg/page_size=12"
+      - "--perf_model/utopia/restseg/assoc=16"
+      - "--perf_model/utopia/restsegs=1"
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=8"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=64"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=16"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    description: "CostTopK very aggressive: very low threshold (8), high credits (16)"
+
+  # No migration baseline (for comparison)
+  utopia_nomigration:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=128"
+      - "--perf_model/utopia/restseg/page_size=12"
+      - "--perf_model/utopia/restseg/assoc=16"
+      - "--perf_model/utopia/restsegs=1"
+      - "--perf_model/utopia/migration_cost_topk/enabled=0"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    description: "Utopia with NO migration (neither CostTopK nor legacy)"
+
+  # Legacy migration baseline (for comparison with CostTopK)
+  utopia_legacymigration:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=128"
+      - "--perf_model/utopia/restseg/page_size=12"
+      - "--perf_model/utopia/restseg/assoc=16"
+      - "--perf_model/utopia/restsegs=1"
+      - "--perf_model/utopia/migration_cost_topk/enabled=0"
+      - "--perf_model/utopia/legacy_migration_enabled=1"
+    description: "Utopia with legacy threshold-based migration only"
+
+  # CostTopK with DRAM-weighted scoring (emphasize DRAM access cost)
+  utopia_costtopk_dramweighted:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=128"
+      - "--perf_model/utopia/restseg/page_size=12"
+      - "--perf_model/utopia/restseg/assoc=16"
+      - "--perf_model/utopia/restsegs=1"
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=32"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=16"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=4"
+      - "--perf_model/utopia/migration_cost_topk/ptw_base_increment=1"
+      - "--perf_model/utopia/migration_cost_topk/dram_weighted_increment_cap=8"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    description: "CostTopK with DRAM-weighted scoring (cap=8 vs default 3)"
+
+  # CostTopK + CATS speculation combined
+  utopia_costtopk_cats:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=0,128"
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=32"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=16"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=4"
+      - "--perf_model/utopia/speculation/enabled=true"
+      - "--perf_model/utopia/speculation/mode=1"
+      - "--perf_model/utopia/speculation/conf_threshold=0"
+      - "--perf_model/utopia/speculation/credits_max=1000000000"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    description: "CostTopK + aggressive CATS speculation combined"
+
+  # CostTopK with different epoch sizes
+  utopia_costtopk_shortepoch:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=0,128"
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=32"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=16"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=4"
+      - "--perf_model/utopia/migration_cost_topk/ranking_epoch_translations=512"
+      - "--perf_model/utopia/migration_cost_topk/credit_epoch_translations=4096"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    description: "CostTopK with shorter epochs (more responsive)"
+
+  utopia_costtopk_longepoch:
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=0,128"
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=32"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=16"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=4"
+      - "--perf_model/utopia/migration_cost_topk/ranking_epoch_translations=2048"
+      - "--perf_model/utopia/migration_cost_topk/credit_epoch_translations=16384"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    description: "CostTopK with longer epochs (more stable)"
+
+
+  utopia_mplru_baseline:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=disabled"
+    description: "Baseline: Utopia with vanilla LRU"
+
+  # MPLRU Adaptive (default controller settings)
+  utopia_mplru_adaptive:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=adaptive"
+    description: "MPLRU adaptive controller (default settings)"
+
+  # MPLRU Always-on (meta_level fixed at 2)
+  utopia_mplru_always:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=always"
+    description: "MPLRU always-on (no controller, meta_level=2)"
+
+  # ============================================================
+  # meta_level Sweep (fixed levels for comparison)
+  # ============================================================
+  utopia_mplru_level0:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=adaptive"
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_start=0"
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_max=0"
+    description: "MPLRU fixed at level 0 (vanilla LRU)"
+
+  utopia_mplru_level1:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=adaptive"
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_start=1"
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_max=1"
+    description: "MPLRU fixed at level 1 (protect if bottom 50%)"
+
+  utopia_mplru_level2:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=adaptive"
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_start=2"
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_max=2"
+    description: "MPLRU fixed at level 2 (always evict data)"
+
+  utopia_mplru_level3:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=adaptive"
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_start=3"
+      - "--perf_model/nuca/cache/mplru/controller/meta_level_max=3"
+    description: "MPLRU fixed at level 3 (way partition)"
+
+  # ============================================================
+  # Controller Tuning Experiments
+  # ============================================================
+  utopia_mplru_fast_adapt:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=adaptive"
+      - "--perf_model/nuca/cache/mplru/controller/epoch_cycles=2000"
+      - "--perf_model/nuca/cache/mplru/controller/cooldown_epochs=1"
+      - "--perf_model/nuca/cache/mplru/controller/ema_alpha=0.4"
+    description: "MPLRU with fast adaptation (short epochs, quick response)"
+
+  utopia_mplru_slow_adapt:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=adaptive"
+      - "--perf_model/nuca/cache/mplru/controller/epoch_cycles=10000"
+      - "--perf_model/nuca/cache/mplru/controller/cooldown_epochs=4"
+      - "--perf_model/nuca/cache/mplru/controller/ema_alpha=0.1"
+    description: "MPLRU with slow adaptation (long epochs, stable)"
+
+  utopia_mplru_aggressive_engage:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=adaptive"
+      - "--perf_model/nuca/cache/mplru/controller/tr_share_min=0.005"
+      - "--perf_model/nuca/cache/mplru/controller/rho_min=0.01"
+    description: "MPLRU with aggressive engage gate (lower thresholds)"
+
+  utopia_mplru_conservative_engage:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache/mplru/mode=adaptive"
+      - "--perf_model/nuca/cache/mplru/controller/tr_share_min=0.02"
+      - "--perf_model/nuca/cache/mplru/controller/rho_min=0.05"
+    description: "MPLRU with conservative engage gate (higher thresholds)"
+
+  # ============================================================
+  # Fragmentation Stress Tests
+  # ============================================================
+  utopia_mplru_frag_0:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/utopia/target_fragmentation=0.0"
+    description: "MPLRU with no fragmentation (best case)"
+
+  # ============================================================
+  # ReserveTHP Comparison
+  # ============================================================
+  reservethp_baseline:
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "ReserveTHP baseline (no MPLRU, no fragmentation)"
+
+  reservethp_4channel:
+    file: "reservethp_4channel.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "ReserveTHP baseline with 4-channel DDR4"
+
+  reservethp_mplru:
+    file: "reservethp_mplru.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "ReserveTHP with MPLRU delta controller"
+
+  reservethp_mplru_bandit:
+    file: "reservethp_mplru_bandit.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "ReserveTHP with MPLRU 12-arm MPKI bandit controller"
+
+  reservethp_mplru_always:
+    file: "reservethp_mplru.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache/mplru/mode=always"
+    description: "ReserveTHP with MPLRU always-on (meta_level=2)"
+
+  # ============================================================
+  # NUCA Cache Size Sweep with MPLRU
+  # ============================================================
+  utopia_mplru_nuca_1mb:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache_size=1024"
+    description: "MPLRU with 1MB NUCA cache"
+
+  utopia_mplru_nuca_2mb:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache_size=2048"
+    description: "MPLRU with 2MB NUCA cache (default)"
+
+  utopia_mplru_nuca_4mb:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache_size=4096"
+    description: "MPLRU with 4MB NUCA cache"
+
+  utopia_mplru_nuca_8mb:
+    file: "utopia_mplru.cfg"
+    extends:
+      - "--perf_model/nuca/cache_size=8192"
+    description: "MPLRU with 8MB NUCA cache"
+
+# Available traces (subset for quick testing)
+traces:
+  small:
+    - crypto71.champsim.gz
+  paoding:
+    - paoding-vecDB-IVF-PQ.trace.6.gz
+    - paoding-vecDB-IVF-PQ.trace.0.gz
+    - paoding-kbest.trace.1.gz
+    - paoding-kbest.trace.0.gz
+    - paoding-kbest.trace.2.gz
+    - paoding-kbest.trace.3.gz
+    - paoding-vecDB-IVF-PQ.trace.4.gz
+    - paoding-vecDB-IVF-PQ.trace.5.gz
+    - paoding-vecDB-IVF-PQ.trace.2.gz
+    - paoding-pytorch.trace.0.gz
+    - paoding-vecDB-IVF-PQ.trace.3.gz
+    - paoding-vecDB-IVF-PQ.trace.1.gz
+
+
+# Test suites
+suites:
+  ipc_comparison:
+    description: "IPC comparison between no_translation and reservethp_fully_fragmented"
+    configs: [no_translation, reservethp_fully_fragmented]
+    traces: [srv612.champsim.gz]
+    instruction_count: 100000000  # 100M instructions
+    
+
+  quickie:
+    description: "Quickie with RND"
+    configs: [reservethp_fully_fragmented]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 5M
+
+  # SpOT test suites
+  spot_quick:
+    description: "Quick SpOT test: verify SpOT prediction table stats and prefetching"
+    configs: [spot]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 5M
+
+  spot_fragmented:
+    description: "SpOT with 50% memory fragmentation"
+    configs: [spot_fragmented]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 5M
+
+  # Utopia test suites
+  utopia:
+    description: "Full Utopia test with UTLB"
+    configs: [reservethp_fully_fragmented,utopia_large_restsegs, utopia_large_4kb_restseg, utopia_high_assoc, utopia_small_restsegs, utopia_tiny_restsegs]
+    traces: [rnd.sift]
+    instruction_count: 5000000 # 5M
+
+  utopia_long:
+    description: "Full Utopia test with UTLB"
+    configs: [reservethp_fully_fragmented,utopia_large_restsegs, utopia_large_4kb_restseg, utopia_high_assoc, utopia_small_restsegs, utopia_tiny_restsegs]
+    traces: [rnd.sift]
+    instruction_count: 50000000 # 5M
+
+  utopia_quick:
+    description: "Quick Utopia test with UTLB"
+    configs: [utopia]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  utopia_debug:
+    description: "Utopia with debug output for analysis"
+    configs: [utopia_debug]
+    traces: [rnd.sift]
+    instruction_count: 100000  # 100K for detailed log analysis
+
+  utopia_comparison:
+    description: "Compare Utopia with and without UTLB"
+    configs: [utopia, utopia_no_utlb, baseline]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+
+  utopia_logging:
+    description: "Utopia with FPA/TAR access pattern logging enabled"
+    configs: [utopia_access_logging]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 5M
+
+  baseline_ptw_logging:
+    description: "Baseline with per-access PTW logging enabled"
+    configs: [baseline_ptw_logging]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 5M
+
+  # ============ Utopia Baseline Test (No Speculation/Migration) ============
+  utopia_baseline:
+    description: "Utopia baseline test: RadixWay + PWC, no speculation or migration"
+    configs: [reservethp_fully_fragmented,utopia_baseline]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  utopia_policies:
+    description: "Test different Utopia first-touch and migration policy combinations"
+    configs: [utopia_optimistic_tlb, utopia_optimistic_none, utopia_conservative_tlb, utopia_conservative_hybrid, utopia_coalescing_coalescing, utopia_adaptive_hybrid, utopia_regionaware_accesscount]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+
+  # ============ MPLRU Bandit Controller Test Suites ============
+  # IPC-only multi-armed bandit for MPLRU level selection
+
+  mplru_bandit_quick:
+    description: "Quick test of MPLRU bandit controller (default params)"
+    configs: [utopia_mplru_bandit]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 5M
+
+  mplru_bandit_vs_delta:
+    description: "Compare bandit vs delta controller (and disabled baseline)"
+    configs: [utopia_mplru_disabled, utopia_mplru, utopia_mplru_bandit]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+
+  mplru_bandit_beta_sweep:
+    description: "Sweep beta (EMA smoothing): 0.1 (slow) vs 0.2 (default) vs 0.4 (fast)"
+    configs: [utopia_mplru_bandit_beta_low, utopia_mplru_bandit, utopia_mplru_bandit_beta_high]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+
+  mplru_bandit_probe_sweep:
+    description: "Sweep probe period: 5 (fast) vs 10 (default) vs 20 (slow) epochs"
+    configs: [utopia_mplru_bandit_probe_fast, utopia_mplru_bandit, utopia_mplru_bandit_probe_slow]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+
+  mplru_bandit_abort_sweep:
+    description: "Sweep abort threshold: 2% (tight) vs 3% (default) vs 5% (loose)"
+    configs: [utopia_mplru_bandit_abort_tight, utopia_mplru_bandit, utopia_mplru_bandit_abort_loose]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+
+  mplru_bandit_penalty_sweep:
+    description: "Sweep penalty factor: 0.98 (mild) vs 0.95 (default) vs 0.90 (harsh)"
+    configs: [utopia_mplru_bandit_penalty_mild, utopia_mplru_bandit, utopia_mplru_bandit_penalty_harsh]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+
+  mplru_bandit_full_sweep:
+    description: "Full bandit hyperparameter sweep (all 10 configs)"
+    configs: [utopia_mplru_bandit, utopia_mplru_bandit_beta_low, utopia_mplru_bandit_beta_high, utopia_mplru_bandit_probe_fast, utopia_mplru_bandit_probe_slow, utopia_mplru_bandit_abort_tight, utopia_mplru_bandit_abort_loose, utopia_mplru_bandit_penalty_mild, utopia_mplru_bandit_penalty_harsh, utopia_mplru_bandit_fragmented]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  mplru_bandit_fragmented:
+    description: "Test bandit controller under 50% memory fragmentation"
+    configs: [utopia_mplru_disabled, utopia_mplru_fragmented, utopia_mplru_bandit_fragmented]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+
+  # ============ MPLRU Bandit Controller - Google Workloads (Problematic) ============
+  # Google workloads (sierra, tango, etc.) were problematic for the delta controller
+  # because they have low translation share but still cause IPC degradation with MPLRU
+
+  mplru_bandit_rnd:
+    description: "Test bandit controller on Sierra workloads (Google - problematic for delta)"
+    configs: [reservethp_fully_fragmented, utopia_mplru_disabled, utopia_mplru,utopia_mplru_bandit]
+    traces: [rnd.sift]
+    instruction_count: 10000000  #
+
+  mplru_bandit_google_sierra:
+    description: "Test bandit controller on Sierra workloads (Google - problematic for delta)"
+    configs: [reservethp_fully_fragmented, utopia_mplru_disabled, utopia_mplru,utopia_mplru_bandit]
+    trace_base_dir: "${CHAMPSIM_TRACES}"
+    traces: [sierra.a.6/sierra.a.6_0005.champsim.gz]
+    instruction_count: 50000000  # 50M
+
+  mplru_bandit_google_tango:
+    description: "Test bandit controller on Tango workload (Google - problematic for delta)"
+    configs: [reservethp_fully_fragmented, utopia_mplru_disabled, utopia_mplru, utopia_mplru_bandit]
+    trace_base_dir: "${CHAMPSIM_TRACES}"
+    traces: [tango/tango_0006.champsim.gz]
+    instruction_count: 50000000  # 50M
+
+  utopia_cache_sweep:
+    description: "Sweep FPA/TAR cache sizes from 4KB to 2MB"
+    configs: [reservethp_fully_fragmented, utopia_cache_4kb, utopia_cache_8kb, utopia_cache_16kb, utopia_cache_32kb, utopia_cache_64kb, utopia_cache_128kb, utopia_cache_256kb, utopia_cache_512kb, utopia_cache_1mb, utopia_cache_2mb]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 5M
+
+  utopia_cache_sweep_long:
+    description: "Long sweep of FPA/TAR cache sizes from 4KB to 2MB"
+    configs: [reservethp_fully_fragmented, utopia_cache_4kb, utopia_cache_8kb, utopia_cache_16kb, utopia_cache_32kb, utopia_cache_64kb, utopia_cache_128kb, utopia_cache_256kb, utopia_cache_512kb, utopia_cache_1mb, utopia_cache_2mb]
+    traces: [rnd.sift]
+    instruction_count: 50000000  # 50M
+
+  utopia_restseg_sweep:
+    description: "Sweep 4KB-RestSeg sizes from 512MB to 8GB"
+    configs: [utopia_restseg_512mb, utopia_restseg_1gb, utopia_restseg_2gb, utopia_restseg_4gb, utopia_restseg_8gb]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 5M
+
+  # ============ CATS Speculation Testing ============
+  cats_speculation_test:
+    description: "Test CATS speculation with different RestSeg sizes"
+    configs: [utopia_cats_512mb, utopia_cats_1gb, utopia_cats_2gb, utopia_cats_4gb, utopia_cats_8gb]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  cats_speculation_test_long:
+    description: "Long test of CATS speculation with different RestSeg sizes"
+    configs: [utopia_cats_512mb, utopia_cats_1gb, utopia_cats_2gb, utopia_cats_4gb, utopia_cats_8gb]
+    traces: [rnd.sift]
+    instruction_count: 50000000  # 50M
+
+  cats_vs_baseline:
+    description: "Compare CATS speculation vs baseline Utopia (no speculation)"
+    configs: [utopia_restseg_2gb, utopia_cats_2gb, utopia_cats_aggressive_2gb]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+
+  cats_throttling_sweep:
+    description: "Test CATS throttling configs: conservative vs default vs aggressive vs high-credits"
+    configs: [utopia_restseg_2gb, utopia_cats_conservative_2gb, utopia_cats_2gb, utopia_cats_aggressive_2gb, utopia_cats_highcredits_2gb]
+    traces: [rnd.sift]
+    instruction_count: 5000000 # 5M
+
+  cats_metablock_test:
+    description: "Test CATS with TAG_IN_ROW metadata co-fetch"
+    configs: [utopia_cats_2gb, utopia_cats_metablock_2gb]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+
+  cats_full_sweep:
+    description: "Full CATS sweep: baseline + all throttling variants + metablock"
+    configs: [utopia_restseg_2gb, utopia_cats_conservative_2gb, utopia_cats_2gb, utopia_cats_aggressive_2gb, utopia_cats_highcredits_2gb, utopia_cats_metablock_2gb]
+    traces: [rnd.sift]
+    instruction_count: 50000000  # 50M
+
+  # CATS Tuning sweep - find optimal aggressiveness
+  cats_tuning_sweep:
+    description: "CATS tuning: test more aggressive configs based on high hit rate"
+    configs: [utopia_restseg_2gb, utopia_cats_2gb, utopia_cats_lowconf_2gb, utopia_cats_unlimitedcredits_2gb, utopia_cats_fullaggressive_2gb]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 10M
+
+  # ============ 1GB 2MB-RestSeg, 4KB-RestSeg Sweep (with/without CATS) ============
+  # These suites use a fixed 1GB 2MB-RestSeg and sweep 4KB-RestSeg size
+  # with and without aggressive speculation, including reservethp baseline
+  
+  restseg_4kb_sweep_no_cats:
+    description: "4KB-RestSeg sweep (512MB-8GB) with 1GB 2MB-RestSeg, NO speculation, + baseline"
+    configs: [reservethp_fully_fragmented, utopia_1gb2mb_512mb4kb, utopia_1gb2mb_1gb4kb, utopia_1gb2mb_2gb4kb, utopia_1gb2mb_4gb4kb, utopia_1gb2mb_8gb4kb]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  restseg_4kb_sweep_cats:
+    description: "4KB-RestSeg sweep (512MB-8GB) with 1GB 2MB-RestSeg, aggressive CATS, + baseline"
+    configs: [reservethp_fully_fragmented, utopia_cats_1gb2mb_512mb4kb, utopia_cats_1gb2mb_1gb4kb, utopia_cats_1gb2mb_2gb4kb, utopia_cats_1gb2mb_4gb4kb, utopia_cats_1gb2mb_8gb4kb]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  restseg_4kb_sweep_comparison:
+    description: "Full comparison: baseline + 4KB-RestSeg sweep with/without CATS"
+    configs: [reservethp_fully_fragmented, utopia_1gb2mb_512mb4kb, utopia_1gb2mb_1gb4kb, utopia_1gb2mb_2gb4kb, utopia_1gb2mb_4gb4kb, utopia_1gb2mb_8gb4kb, utopia_cats_1gb2mb_512mb4kb, utopia_cats_1gb2mb_1gb4kb, utopia_cats_1gb2mb_2gb4kb, utopia_cats_1gb2mb_4gb4kb, utopia_cats_1gb2mb_8gb4kb]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 5M
+
+  # ============ CostTopK Migration Policy Test Suites ============
+  
+  # Quick test of CostTopK aggressiveness sweep
+  costtopk_aggressiveness_sweep:
+    description: "CostTopK aggressiveness sweep: conservative to very aggressive"
+    configs: [utopia_nomigration, utopia_legacymigration, utopia_costtopk_conservative, utopia_costtopk_moderate, utopia_costtopk_aggressive, utopia_costtopk_veryaggressive]
+    traces: [rnd.sift]
+    instruction_count: 5000000  # 5M
+
+  # Long run for stable comparison
+  costtopk_aggressiveness_sweep_long:
+    description: "CostTopK aggressiveness sweep (long run for stability)"
+    configs: [reservethp_4channel, utopia_nomigration, utopia_legacymigration, utopia_costtopk_conservative, utopia_costtopk_moderate, utopia_costtopk_aggressive, utopia_costtopk_veryaggressive]
+    trace_base_dir: "${CHAMPSIM_TRACES_CVP1}"
+    traces: 
+      - compute_int/compute_int_72.champsim.gz
+    instruction_count: 30000000  # 30M
+
+  # CostTopK vs Legacy migration comparison
+  costtopk_vs_legacy:
+    description: "Compare CostTopK vs legacy threshold-based migration"
+    configs: [reservethp_4channel, utopia_nomigration, utopia_legacymigration, utopia_costtopk_moderate, utopia_costtopk_aggressive]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  # CostTopK with different scoring weights
+  costtopk_scoring_sweep:
+    description: "CostTopK with different DRAM weighting"
+    configs: [utopia_costtopk_moderate, utopia_costtopk_dramweighted]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  # CostTopK with different epoch sizes
+  costtopk_epoch_sweep:
+    description: "CostTopK with different epoch sizes"
+    configs: [utopia_costtopk_shortepoch, utopia_costtopk_moderate, utopia_costtopk_longepoch]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  # CostTopK + CATS combined test
+  costtopk_cats_combined:
+    description: "CostTopK migration + CATS speculation combined"
+    configs: [utopia_nomigration, utopia_costtopk_moderate, utopia_cats_1gb2mb_1gb4kb, utopia_costtopk_cats]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  # Full CostTopK evaluation suite
+  costtopk_full_evaluation:
+    description: "Full CostTopK evaluation: all variants + baselines"
+    configs: [reservethp_fully_fragmented, utopia_nomigration, utopia_legacymigration, utopia_costtopk_conservative, utopia_costtopk_moderate, utopia_costtopk_aggressive, utopia_costtopk_veryaggressive, utopia_costtopk_dramweighted, utopia_costtopk_cats]
+    traces: [rnd.sift]
+    instruction_count: 20000000  # 20M
+  
+  basic_repl_comparison:
+    description: "Simple comparison of baseline LRU vs MPLRU adaptive vs MPLRU always-on"
+    configs: [reservethp_fully_fragmented, reservethp_mplru, utopia, utopia_mplru_baseline, utopia_mplru_adaptive, utopia_mplru_always]
+    traces: [rnd.sift]
+    instruction_count: 10000000  # 10M
+
+  # ============================================================
+  # Bottom 10 Google Workloads - MPLRU Bandit Evaluation
+  # ============================================================
+  # These are the 10 Google traces that showed the worst performance
+  # with Utopia (11-16% degradation vs ReserveTHP baseline).
+  # Testing with 12-arm MPLRU bandit to see if data-protection helps.
+  
+  google_bottom10_baseline_utopia: 
+    description: "Bottom 10 Google workloads: ReserveTHP baseline vs Utopia"
+    configs: [reservethp_4channel, utopia, utopia_mplru_bandit]
+    traces:
+      - sierra.a.4/sierra.a.4_0015.champsim.gz
+      - sierra.a.4/sierra.a.4_0017.champsim.gz
+      - sierra.a.4/sierra.a.4_0002.champsim.gz
+      - sierra.a.4/sierra.a.4_0013.champsim.gz
+      - sierra.a.4/sierra.a.4_0014.champsim.gz
+      - sierra.a.4/sierra.a.4_0001.champsim.gz
+      - yankee/yankee_0012.champsim.gz
+      - sierra.a.4/sierra.a.4_0008.champsim.gz
+      - sierra.a.4/sierra.a.4_0016.champsim.gz
+      - sierra.a.4/sierra.a.4_0021.champsim.gz
+    instruction_count: 30000000  # 30M
+    trace_base_dir: "${CHAMPSIM_TRACES}"
+
+  google_bottom10_mplru_bandit:
+    description: "Bottom 10 Google workloads: MPLRU bandit evaluation"
+    configs: [reservethp_4channel, reservethp_mplru, reservethp_mplru_bandit, utopia, utopia_mplru, utopia_mplru_bandit]
+    traces:
+      - sierra.a.4/sierra.a.4_0015.champsim.gz
+      - sierra.a.4/sierra.a.4_0017.champsim.gz
+      - sierra.a.4/sierra.a.4_0002.champsim.gz
+      - sierra.a.4/sierra.a.4_0013.champsim.gz
+      - sierra.a.4/sierra.a.4_0014.champsim.gz
+      - sierra.a.4/sierra.a.4_0001.champsim.gz
+      - yankee/yankee_0012.champsim.gz
+      - sierra.a.4/sierra.a.4_0008.champsim.gz
+      - sierra.a.4/sierra.a.4_0016.champsim.gz
+      - sierra.a.4/sierra.a.4_0021.champsim.gz
+    instruction_count: 100000000  # 100M
+    trace_base_dir: "${CHAMPSIM_TRACES}"
+
+  # ============================================================
+  # Hardcoded Bandit Arms - Full Sweep
+  # ============================================================
+  # Test all 12 bandit arms with forced policy to find optimal per-trace
+  # Also includes baseline and adaptive bandit for comparison
+  
+  google_bottom10_bandit_arms_sweep:
+    description: "Bottom 10 Google workloads: All 12 bandit arms hardcoded"
+    configs: 
+      - reservethp_4channel
+      - utopia_mplru_bandit
+      - utopia_bandit_force_M0
+      - utopia_bandit_force_M1
+      - utopia_bandit_force_M2
+      - utopia_bandit_force_M3
+      - utopia_bandit_force_M4
+      - utopia_bandit_force_M5
+      - utopia_bandit_force_D1
+      - utopia_bandit_force_D2
+      - utopia_bandit_force_D3
+      - utopia_bandit_force_D4
+      - utopia_bandit_force_D5
+    traces:
+      - sierra.a.4/sierra.a.4_0015.champsim.gz
+    instruction_count: 30000000  # 30M
+    trace_base_dir: "${CHAMPSIM_TRACES}"
+  
+  google_bottom10_bandit_arms_sweep_with_spec:
+    description: "Bottom 10 Google workloads with Utopia Spec" 
+    configs: 
+      - reservethp_4channel
+      - utopia_cats_512mb
+    traces:
+      - sierra.a.4/sierra.a.4_0015.champsim.gz
+      - sierra.a.4/sierra.a.4_0017.champsim.gz
+      - sierra.a.4/sierra.a.4_0002.champsim.gz
+      - sierra.a.4/sierra.a.4_0013.champsim.gz
+      - sierra.a.4/sierra.a.4_0014.champsim.gz
+      - sierra.a.4/sierra.a.4_0001.champsim.gz
+      - yankee/yankee_0012.champsim.gz
+      - sierra.a.4/sierra.a.4_0008.champsim.gz
+      - sierra.a.4/sierra.a.4_0016.champsim.gz
+      - sierra.a.4/sierra.a.4_0021.champsim.gz
+    instruction_count: 30000000  # 30M
+    trace_base_dir: "${CHAMPSIM_TRACES}"
+  
+# Metrics to extract from results
+metrics:
+  - name: "cycles"
+    pattern: "performance_model.cycle_count"
+  - name: "instructions"
+    pattern: "performance_model.instruction_count"
+  - name: "tlb_misses"
+    pattern: "dtlb.miss"
+  - name: "page_faults"
+    pattern: "page_fault.count"
+  - name: "page_walks"
+    pattern: "page_table_walker"

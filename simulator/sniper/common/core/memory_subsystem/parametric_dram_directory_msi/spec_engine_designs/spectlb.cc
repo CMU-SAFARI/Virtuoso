@@ -12,13 +12,17 @@
 #include "mimicos.h"
 #include "dvfs_manager.h"
 #include "mimicos.h"
-#include "reserve_thp.h"
+#include "memory_management/policies/buddy_policy.h"
+#include "../../../../../include/memory_management/physical_memory_allocators/reserve_thp.h"
+#include "memory_management/policies/reserve_thp_policy.h"
 
-//#define DEBUG_SPEC_TLB
+typedef ReservationTHPAllocator<Sniper::ReserveTHP::MetricsPolicy> ReserveTHPAllocator;
+
+// #define DEBUG_SPEC_TLB
 
 namespace ParametricDramDirectoryMSI
 {
-    SpecTLB::SpecTLB(Core *core, MemoryManager *_memory_manager, ShmemPerfModel *shmem_perf_model, String _name) : SpecEngineBase(core, _memory_manager, shmem_perf_model, _name), memory_manager(_memory_manager), name(_name)
+    SpecTLB::SpecTLB(Core *core, MemoryManagerBase *_memory_manager, ShmemPerfModel *shmem_perf_model, String _name) : SpecEngineBase(core, _memory_manager, shmem_perf_model, _name), memory_manager(_memory_manager), name(_name)
     {
 
         log_file_name = "spec_tlb.log." + std::to_string(core->getId());
@@ -116,10 +120,10 @@ namespace ParametricDramDirectoryMSI
 #ifdef DEBUG_SPEC_TLB
             log_file << "[SpecTLB] Final Address to Prefetch: " << address_to_prefetch << std::endl;
 #endif
-            memory_manager->getCacheCntlrAt(core->getId(), MemComponent::component_t::L2_CACHE)->doPrefetch(eip,                                         // The instruction pointer (address) from which to prefetch
+            memory_manager->getCacheCntlrAt(core->getId(), MemComponent::component_t::L2_CACHE)->handleMMUPrefetch(eip,                                         // The instruction pointer (address) from which to prefetch
                                                                                                             address_to_prefetch,                         // Calculated address for prefetch
                                                                                                             spec_access_time + spec_tlb->getLatency(),   // Time of the access for prefetching
-                                                                                                            CacheBlockInfo::block_type_t::NON_PAGE_TABLE // Type of block (indicating it's not a page table)
+                                                                                                            CacheBlockInfo::block_type_t::DATA // Type of block (regular data)
             );
         }
     }
@@ -135,26 +139,23 @@ namespace ParametricDramDirectoryMSI
 #ifdef DEBUG_SPEC_TLB
             log_file << "[SpecTLB] TLB Miss & SpecTLB Miss for address: " << address << std::endl;
 #endif
-            ReservationTHPAllocator *res_allocator = (ReservationTHPAllocator *)(Sim()->getMimicOS()->getMemoryAllocator());
-
-            IntPtr is_reserved = res_allocator->isLargePageReserved(address);
-
+            auto *res_allocator = dynamic_cast<ReserveTHPAllocator *>(Sim()->getMimicOS()->getMemoryAllocator());
+            bool is_reserved = res_allocator && res_allocator->isLargePageReserved(address);
 
 #ifdef DEBUG_SPEC_TLB
             log_file << "[SpecTLB] Is Large Page Reserved: " << is_reserved << std::endl;
 #endif
             // Allocate a new entry in the speculative TLB since there was a miss
             // Call the 'allocate' method of the spec_tlb object to handle allocation
-            if (is_reserved != static_cast<IntPtr>(-1))
+            if (is_reserved)
             {
-
                 spec_tlb->allocate(
                     address,          // The address for which we need to allocate a new TLB entry
                     spec_access_time, // The time at which this access happens (used for updating the access time)
                     count,            // The count or the access frequency; might be used for tracking or updating access stats
                     lock,             // The lock status; could indicate if the TLB access should be locked or not
                     21,               // Page size (hardcoded to 21, which is the maximum page size)
-                    is_reserved              // The physical page number (PPN) associated with the address, used for allocation in the TLB
+                    ppn               // The physical page number (PPN) associated with the address, used for allocation in the TLB
                 );
             }
         }

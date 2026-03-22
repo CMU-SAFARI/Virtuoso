@@ -14,8 +14,9 @@ namespace ParametricDramDirectoryMSI
                 int node_size = Sim()->getCfg()->getInt("perf_model/" + name + "/node_size");
                 return new RangeTableBtree(name, node_size, app_id);
             }
-
-            return NULL;
+            else {
+                return NULL; // Unsupported range table type
+            }
         }
     };
 }

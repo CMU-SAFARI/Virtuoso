@@ -5,7 +5,7 @@
 #include "semaphore.h"
 #include "core.h" // for lock_signal_t and mem_op_t
 #include "_thread.h"
-
+#include "sift_reader.h"
 #include <vector>
 
 class TraceThread;
@@ -53,10 +53,14 @@ class TraceManager
       String m_trace_prefix;
       Lock m_lock;
 
+      Sift::Reader *m_kernel_trace_reader;
+
       String getFifoName(app_id_t app_id, UInt64 thread_num, bool response, bool create);
       thread_id_t newThread(app_id_t app_id, bool first, bool init_fifo, bool spawn, SubsecondTime time, thread_id_t creator_thread_id);
 
       friend class Monitor;
+
+      void setTraceReaderHandlers(Sift::Reader* reader, TraceThread* trace_thread);
 
    public:
       TraceManager();
@@ -68,6 +72,7 @@ class TraceManager
       void wait();
       void run();
       void cleanup();
+      void cleanupAllThreads();  // Clean up ChampSim caches on all trace threads
       void setupTraceFiles(int index);
       thread_id_t createThread(app_id_t app_id, SubsecondTime time, thread_id_t creator_thread_id);
       app_id_t createApplication(SubsecondTime time, thread_id_t creator_thread_id);
@@ -78,6 +83,11 @@ class TraceManager
       void accessMemory(int core_id, Core::lock_signal_t lock_signal, Core::mem_op_t mem_op_type, IntPtr d_addr, char* data_buffer, UInt32 data_size);
       void endFrontEnd(); //Ask all trace_threads to send signal to front-end to shutdown
 
+      TraceThread *getTraceThread(app_id_t app_id, thread_id_t th);
+
+      Sift::Reader *getKernelTraceReader() const { return m_kernel_trace_reader; }
+      void setKernelTraceReader(Sift::Reader *reader) { m_kernel_trace_reader = reader; }
+      
       UInt64 getProgressExpect();
       UInt64 getProgressValue();
 };

@@ -14,6 +14,8 @@ Instruction::Instruction(InstructionType type, OperandList &operands)
    : m_type(type)
    , m_uops(NULL)
    , m_addr(0)
+   , m_atomic(false)
+   , m_dynamic(false)
    , m_operands(operands)
 {
 }
@@ -22,6 +24,8 @@ Instruction::Instruction(InstructionType type)
    : m_type(type)
    , m_uops(NULL)
    , m_addr(0)
+   , m_atomic(false)
+   , m_dynamic(false)
 {
 }
 

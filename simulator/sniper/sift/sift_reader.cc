@@ -3,20 +3,59 @@
 #include "sift_utils.h"
 #include "zfstream.h"
 
+#include <array>
 #include <iostream>
 #include <fstream>
 #include <cassert>
 #include <cstring>
+#include <algorithm>
+#include <string>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include "../../../../ChampSim/inc/trace_instruction.h"
+#include "../../../../ChampSim/inc/inf_stream.h"
 
 // Enable (>0) to print out everything we read
 #define VERBOSE 0
 #define VERBOSE_HEX 0
 #define VERBOSE_ICACHE 0
 
-Sift::Reader::Reader(const char *filename, const char *response_filename, uint32_t id)
+// #define DEBUG_SIFT_READER
+
+namespace
+{
+   // Wrap a plain std::ifstream as a ChampSimStream
+   struct IfstreamChampSimStream : public Sift::Reader::ChampSimStream
+   {
+      std::ifstream *stream;
+      explicit IfstreamChampSimStream(std::ifstream *s) : stream(s) {}
+      size_t read_bytes(void *dst, size_t len) override
+      {
+         stream->read(reinterpret_cast<char*>(dst), len);
+         return static_cast<size_t>(stream->gcount());
+      }
+   };
+
+   // Wrap ChampSim's inflating stream as a ChampSimStream
+   template<typename Tag>
+   struct InflatingChampSimStream : public Sift::Reader::ChampSimStream
+   {
+      champsim::inf_istream<Tag> stream;
+      explicit InflatingChampSimStream(const std::string &fname) : stream(fname) {}
+      size_t read_bytes(void *dst, size_t len) override
+      {
+         stream.read(reinterpret_cast<char*>(dst), len);
+         return static_cast<size_t>(stream.gcount());
+      }
+   };
+}
+
+namespace Sift
+{
+
+Reader::Reader(const char *filename, const char *response_filename, uint32_t id, TraceFormat format)
    : input(NULL)
    , response(NULL)
    , handleInstructionCountFunc(NULL)
@@ -39,24 +78,26 @@ Sift::Reader::Reader(const char *filename, const char *response_filename, uint32
    , handleEmuArg(NULL)
    , handleRoutineChangeFunc(NULL)
    , handleRoutineAnnounceFunc(NULL)
-   , handleRoutineArg(NULL)   
+   , handleRoutineArg(NULL)
    , filesize(0)
+   , inputstream(NULL)
    , last_address(0)
    , icache()
+   , scache()
+   , vcache()
    , m_id(id)
    , m_trace_has_pa(false)
    , m_seen_end(false)
    , m_last_sinst(NULL)
    , m_isa(0)
+   , m_format(format)
+   , m_champsim_stream()
 {
    m_filename = strdup(filename);
    m_response_filename = strdup(response_filename);
-
-   // initing stream here could cause deadlock when using pipes, as this should be able to be new()ed from
-   // a thread that should not block
 }
 
-Sift::Reader::~Reader()
+Reader::~Reader()
 {
    free(m_filename);
    free(m_response_filename);
@@ -64,24 +105,42 @@ Sift::Reader::~Reader()
       delete input;
    if (response)
       delete response;
-   for(std::unordered_map<uint64_t, const uint8_t*>::iterator i = icache.begin() ; i != icache.end() ; ++i)
-   {
+   if (inputstream)
+      delete inputstream;
+
+   for (std::unordered_map<uint64_t, const uint8_t*>::iterator i = icache.begin(); i != icache.end(); ++i)
       delete [] (*i).second;
-   }
-   for(std::unordered_map<uint64_t, const StaticInstruction*>::iterator i = scache.begin() ; i != scache.end() ; ++i)
-   {
+
+   for (std::unordered_map<uint64_t, const StaticInstruction*>::iterator i = scache.begin(); i != scache.end(); ++i)
       delete (*i).second;
+}
+
+void Reader::resetStream()
+{
+   if (inputstream)
+   {
+      inputstream->clear();
+      inputstream->seekg(0);
    }
 }
 
-bool Sift::Reader::initStream()
+bool Reader::initStream()
 {
-   #if VERBOSE > 0
+#if VERBOSE > 0
    std::cerr << "[DEBUG:" << m_id << "] InitStream Attempting Open" << std::endl;
-   #endif
+#endif
 
-   inputstream = new std::ifstream(m_filename, std::ios::in);
+   std::string fname(m_filename);
+   bool is_gz  = fname.size() >= 3 && fname.compare(fname.size() - 3, 3, ".gz") == 0;
+   bool is_xz  = fname.size() >= 3 && fname.compare(fname.size() - 3, 3, ".xz") == 0;
+   bool is_bz2 = fname.size() >= 4 && fname.compare(fname.size() - 4, 4, ".bz2") == 0;
+   bool maybe_champsim_compressed = is_gz || is_xz || is_bz2;
 
+   // Heuristic: compressed file with Champsim extension → likely ChampSim
+   if (m_format == TraceFormat::Auto && maybe_champsim_compressed)
+      m_format = TraceFormat::ChampSim;
+
+   inputstream = new std::ifstream(m_filename, std::ios::in | std::ios::binary);
    if ((!inputstream->is_open()) || (!inputstream->good()))
    {
       std::cerr << "[SIFT:" << m_id << "] Cannot open " << m_filename << "\n";
@@ -89,22 +148,77 @@ bool Sift::Reader::initStream()
    }
 
    struct stat filestatus;
-   stat(m_filename, &filestatus);
-   filesize = filestatus.st_size;
+   if (stat(m_filename, &filestatus) == 0)
+      filesize = filestatus.st_size;
+   else
+      filesize = 0;
 
+   // ChampSim-only path: no SIFT header
+   if (m_format == TraceFormat::ChampSim)
+   {
+      std::cout << "[Frontend] Using ChampSim format for trace input\n";
+
+      if (maybe_champsim_compressed)
+      {
+         if (is_gz)
+            m_champsim_stream.reset(new InflatingChampSimStream<champsim::decomp_tags::gzip_tag_t<>>(fname));
+         else if (is_xz)
+            m_champsim_stream.reset(new InflatingChampSimStream<champsim::decomp_tags::lzma_tag_t<>>(fname));
+         else if (is_bz2)
+            m_champsim_stream.reset(new InflatingChampSimStream<champsim::decomp_tags::bzip2_tag_t>(fname));
+      }
+      else
+      {
+         m_champsim_stream.reset(new IfstreamChampSimStream(inputstream));
+      }
+
+      return true;
+   }
+
+   // Try SIFT header
    input = new vifstream(inputstream);
 
    Sift::Header hdr;
    input->read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
    if (hdr.magic != Sift::MagicNumber)
    {
-      std::cerr << "[SIFT:" << m_id << "] Invalid magic number\n";
-      return false;
+      // Fallback: if we were in Auto mode, try to interpret as ChampSim trace
+      if (m_format == TraceFormat::Auto)
+      {
+         resetStream();
+         m_format = TraceFormat::ChampSim;
+
+         std::cout << "[Frontend] SIFT magic mismatch, falling back to ChampSim format\n";
+
+         if (maybe_champsim_compressed)
+         {
+            if (is_gz)
+               m_champsim_stream.reset(new InflatingChampSimStream<champsim::decomp_tags::gzip_tag_t<>>(fname));
+            else if (is_xz)
+               m_champsim_stream.reset(new InflatingChampSimStream<champsim::decomp_tags::lzma_tag_t<>>(fname));
+            else if (is_bz2)
+               m_champsim_stream.reset(new InflatingChampSimStream<champsim::decomp_tags::bzip2_tag_t>(fname));
+         }
+         else
+         {
+            m_champsim_stream.reset(new IfstreamChampSimStream(inputstream));
+         }
+
+         return true;
+      }
+      else
+      {
+         std::cerr << "[SIFT:" << m_id << "] Invalid magic number\n";
+         return false;
+      }
    }
+
    if (hdr.size != 0)
    {
       std::cerr << "[SIFT:" << m_id << "] Invalid header size\n";
    }
+
+   m_format = TraceFormat::Sift;
 
 #if SIFT_USE_ZLIB
    if (hdr.options & CompressionZlib)
@@ -138,14 +252,14 @@ bool Sift::Reader::initStream()
       return false;
    }
 
-   #if VERBOSE > 0
+#if VERBOSE > 0
    std::cerr << "[DEBUG:" << m_id << "] InitStream Connection Open" << std::endl;
-   #endif
+#endif
 
    return true;
 }
 
-bool Sift::Reader::initResponse()
+bool Reader::initResponse()
 {
    if (!response)
    {
@@ -166,9 +280,10 @@ bool Sift::Reader::initResponse()
    return true;
 }
 
-bool Sift::Reader::Read(Instruction &inst)
+bool Reader::Read(Instruction &inst)
 {
-   if (input == NULL)
+   // Initialise stream once (for either SIFT or ChampSim)
+   if (input == NULL && !m_champsim_stream)
    {
       if (!initStream())
       {
@@ -177,6 +292,24 @@ bool Sift::Reader::Read(Instruction &inst)
       }
    }
 
+   // Clear ChampSim-specific fields every time
+   inst.is_champsim = false;
+   inst.num_src_addresses = 0;
+   inst.num_dest_addresses = 0;
+   memset(inst.src_addresses, 0, sizeof(inst.src_addresses));
+   memset(inst.dest_addresses, 0, sizeof(inst.dest_addresses));
+   inst.num_src_registers = 0;
+   inst.num_dest_registers = 0;
+   memset(inst.src_registers, 0, sizeof(inst.src_registers));
+   memset(inst.dest_registers, 0, sizeof(inst.dest_registers));
+
+   // ChampSim path
+   if (m_format == TraceFormat::ChampSim)
+   {
+      return readChampSim(inst);
+   }
+
+   // Original SIFT path
    while(!m_seen_end)
    {
       Record rec;
@@ -189,16 +322,17 @@ bool Sift::Reader::Read(Instruction &inst)
 
       if (byte == 0)
       {
-         // Other
+         // "Other" record
          input->read(reinterpret_cast<char*>(&rec), sizeof(rec.Other));
          switch(rec.Other.type)
          {
             case RecOtherEnd:
                assert(rec.Other.size == 0);
                m_seen_end = true;
-               // disable EndResponse as it causes lockups with sift_recorder
-               //sendSimpleResponse(RecOtherEndResponse);
+               // Disable EndResponse as it causes lockups with sift_recorder
+               // sendSimpleResponse(RecOtherEndResponse);
                return false;
+
             case RecOtherIcache:
             {
                assert(rec.Other.size == sizeof(uint64_t) + ICACHE_SIZE);
@@ -209,12 +343,13 @@ bool Sift::Reader::Read(Instruction &inst)
                icache[address] = bytes;
                break;
             }
+
             case RecOtherIcacheVariable:
             {
-               #if VERBOSE_ICACHE
+#if VERBOSE_ICACHE
                std::cerr << __FUNCTION__ << ": rec=" << std::endl;
                hexdump(&rec, sizeof(rec.Other));
-               #endif
+#endif
                uint64_t address;
                size_t size = rec.Other.size - sizeof(uint64_t);
                input->read(reinterpret_cast<char*>(&address), sizeof(uint64_t));
@@ -228,16 +363,17 @@ bool Sift::Reader::Read(Instruction &inst)
                   size_t read_amount = std::min(size_left, size_t(ICACHE_SIZE - offset));
                   input->read(const_cast<char*>(reinterpret_cast<const char*>(&(icache[base_addr][offset]))), read_amount);
 
-                  #if VERBOSE_ICACHE
+#if VERBOSE_ICACHE
                   std::cerr << __FUNCTION__ << ": Wrote " << read_amount << " bytes to 0x" << std::hex << (void*)&(icache[base_addr][offset]) << std::dec << std::endl;
                   hexdump(&(icache[base_addr][offset]), read_amount);
-                  #endif
+#endif
 
                   size_left -= read_amount;
                   address = base_addr + ICACHE_SIZE;
                }
                break;
             }
+
             case RecOtherLogical2Physical:
             {
                assert(rec.Other.size == 2 * sizeof(uint64_t));
@@ -247,11 +383,12 @@ bool Sift::Reader::Read(Instruction &inst)
                vcache[vp] = pp;
                break;
             }
+
             case RecOtherInstructionCount:
             {
-               #if VERBOSE > 0
+#if VERBOSE > 0
                std::cerr << "[DEBUG:" << m_id << "] Read InstructionCount" << std::endl;
-               #endif
+#endif
                assert(rec.Other.size == sizeof(uint32_t));
                uint32_t icount;
                input->read(reinterpret_cast<char*>(&icount), sizeof(icount));
@@ -261,11 +398,12 @@ bool Sift::Reader::Read(Instruction &inst)
                sendSimpleResponse(RecOtherSyncResponse, &mode, sizeof(Mode));
                break;
             }
+
             case RecOtherCacheOnly:
             {
-               #if VERBOSE > 0
+#if VERBOSE > 0
                std::cerr << "[DEBUG:" << m_id << "] Read CacheOnly" << std::endl;
-               #endif
+#endif
                assert(rec.Other.size == sizeof(uint8_t) + sizeof(uint8_t) + sizeof(uint64_t) + sizeof(uint64_t));
                uint8_t icount, type;
                uint64_t eip, address;
@@ -277,11 +415,12 @@ bool Sift::Reader::Read(Instruction &inst)
                   handleCacheOnlyFunc(handleCacheOnlyArg, icount, (Sift::CacheOnlyType)type, eip, address);
                break;
             }
+
             case RecOtherOutput:
             {
-               #if VERBOSE > 0
+#if VERBOSE > 0
                std::cerr << "[DEBUG:" << m_id << "] Read Output" << std::endl;
-               #endif
+#endif
                assert(rec.Other.size > sizeof(uint8_t));
                uint8_t fd;
                uint32_t size = rec.Other.size - sizeof(uint8_t);
@@ -293,58 +432,61 @@ bool Sift::Reader::Read(Instruction &inst)
                delete [] bytes;
                break;
             }
+
             case RecOtherSyscallRequest:
             {
-               #if VERBOSE > 0
+#if VERBOSE > 0
                std::cerr << "[DEBUG:" << m_id << "] Read SyscallRequest" << std::endl;
-               #endif
+#endif
                assert(rec.Other.size > sizeof(uint16_t));
                uint16_t syscall_number;
                uint32_t size = rec.Other.size - sizeof(uint16_t);
                uint8_t *bytes = new uint8_t[size];
                input->read(reinterpret_cast<char*>(&syscall_number), sizeof(uint16_t));
                input->read(reinterpret_cast<char*>(bytes), size);
-               #if VERBOSE_HEX > 0
+#if VERBOSE_HEX > 0
                hexdump((char*)&rec, sizeof(rec.Other));
                hexdump((char*)&syscall_number, sizeof(syscall_number));
                hexdump((char*)bytes, size);
-               #endif
-               #if VERBOSE > 1
+#endif
+#if VERBOSE > 1
                for (unsigned i = 0 ; i < (size/8) ; i++)
                {
                   std::cerr << __FUNCTION__ << ": syscall args[" << i << "] = " << ((uint64_t*)bytes)[i] << std::endl;
                }
-               #endif
+#endif
 
                assert(handleSyscallFunc);
                if (handleSyscallFunc)
                {
-                  #if VERBOSE > 0
+#if VERBOSE > 0
                   std::cerr << "[DEBUG:" << m_id << "] HandleSyscall" << std::endl;
-                  #endif
+#endif
                   uint64_t ret = handleSyscallFunc(handleSyscallArg, syscall_number, bytes, size);
                   sendSyscallResponse(ret);
                }
                delete [] bytes;
                break;
             }
+
             case RecOtherNewThread:
             {
                assert(rec.Other.size == 0);
                assert(handleNewThreadFunc);
                if (handleNewThreadFunc)
                {
-                  #if VERBOSE > 0
+#if VERBOSE > 0
                   std::cerr << "[DEBUG:" << m_id << "] HandleNewThread" << std::endl;
-                  #endif
+#endif
                   int32_t ret = handleNewThreadFunc(handleNewThreadArg);
                   sendSimpleResponse(RecOtherNewThreadResponse, &ret, sizeof(ret));
-                  #if VERBOSE > 0
+#if VERBOSE > 0
                   std::cerr << "[DEBUG:" << m_id << "] HandleNewThread Done" << std::endl;
-                  #endif
+#endif
                }
                break;
             }
+
             case RecOtherJoin:
             {
                int32_t thread;
@@ -353,17 +495,18 @@ bool Sift::Reader::Read(Instruction &inst)
                assert(handleJoinFunc);
                if (handleJoinFunc)
                {
-                  #if VERBOSE > 0
+#if VERBOSE > 0
                   std::cerr << "[DEBUG:" << m_id << "] HandleJoin" << std::endl;
-                  #endif
+#endif
                   int32_t ret = handleJoinFunc(handleJoinArg, thread);
                   sendSimpleResponse(RecOtherJoinResponse, &ret, sizeof(ret));
-                  #if VERBOSE > 0
+#if VERBOSE > 0
                   std::cerr << "[DEBUG:" << m_id << "] HandleJoin Done" << std::endl;
-                  #endif
+#endif
                }
                break;
             }
+
             case RecOtherSync:
             {
                assert(rec.Other.size == 0);
@@ -373,23 +516,25 @@ bool Sift::Reader::Read(Instruction &inst)
                sendSimpleResponse(RecOtherSyncResponse, &mode, sizeof(Mode));
                break;
             }
+
             case RecOtherFork:
             {
                assert(rec.Other.size == 0);
                assert(handleForkFunc);
                if(handleForkFunc)
                {
-                  #if VERBOSE > 0
+#if VERBOSE > 0
                   std::cerr << "[DEBUG:" << m_id << "] HandleFork" << std::endl;
-                  #endif
+#endif
                   int32_t ret = handleForkFunc(handleForkArg);
                   sendSimpleResponse(RecOtherForkResponse, &ret, sizeof(ret));
-                  #if VERBOSE > 0
+#if VERBOSE > 0
                   std::cerr << "[DEBUG:" << m_id << "] HandleFork Done" << std::endl;
-                  #endif
+#endif
                }
                break;
             }
+
             case RecOtherMagicInstruction:
             {
                assert(rec.Other.size == 3 * sizeof(uint64_t));
@@ -399,16 +544,22 @@ bool Sift::Reader::Read(Instruction &inst)
                input->read(reinterpret_cast<char*>(&c), sizeof(uint64_t));
                uint64_t result;
                if (handleMagicFunc)
-               {
                   result = handleMagicFunc(handleMagicArg, a, b, c);
-               }
                else
-               {
                   result = a; // Do not modify GAX register
+
+               if (result == 42)
+               {
+#ifdef DEBUG_SIFT_READER
+                  std::cout << "[Virtuoso: Magic Instruction] Received magic instruction with result 42: we should not respond to this" << std::endl;
+#endif
+                  return true;
                }
+
                sendSimpleResponse(RecOtherMagicInstructionResponse, &result, sizeof(result));
                break;
             }
+
             case RecOtherEmu:
             {
                assert(rec.Other.size <= sizeof(uint16_t) + sizeof(EmuRequest));
@@ -423,6 +574,7 @@ bool Sift::Reader::Read(Instruction &inst)
                sendEmuResponse(result, res);
                break;
             }
+
             case RecOtherRoutineChange:
             {
                assert(rec.Other.size == sizeof(uint8_t) + 3 * sizeof(uint64_t));
@@ -436,6 +588,7 @@ bool Sift::Reader::Read(Instruction &inst)
                   handleRoutineChangeFunc(handleRoutineArg, Sift::RoutineOpType(event), eip, esp, callEip);
                break;
             }
+
             case RecOtherRoutineAnnounce:
             {
                uint64_t eip, offset;
@@ -458,20 +611,23 @@ bool Sift::Reader::Read(Instruction &inst)
                if (handleRoutineAnnounceFunc)
                   handleRoutineAnnounceFunc(handleRoutineArg, eip, name, imgname, offset, line, column, filename);
                free(name);
+               free(imgname);
                free(filename);
                break;
-            }            
+            }
+
             case RecOtherISAChange:
-            { 
+            {
                assert(rec.Other.size == sizeof(uint32_t));
                uint32_t new_isa;
                input->read(reinterpret_cast<char*>(&new_isa), sizeof(new_isa));
-               m_isa = new_isa; // save here new ISA mode value
-
+               m_isa = new_isa;
                break;
             }
+
             default:
             {
+               // Skip unknown Other record
                uint8_t *bytes = new uint8_t[rec.Other.size];
                input->read(reinterpret_cast<char*>(bytes), rec.Other.size);
                delete [] bytes;
@@ -486,12 +642,12 @@ bool Sift::Reader::Read(Instruction &inst)
 
       if ((byte & 0xf) != 0)
       {
-         // Instruction
+         // Instruction (small encoding)
          input->read(reinterpret_cast<char*>(&rec), sizeof(rec.Instruction));
 
-         #if VERBOSE_HEX > 2
+#if VERBOSE_HEX > 2
          hexdump(&rec, sizeof(rec.Instruction));
-         #endif
+#endif
 
          size = rec.Instruction.size;
          addr = last_address;
@@ -504,12 +660,12 @@ bool Sift::Reader::Read(Instruction &inst)
       }
       else
       {
-         // InstructionExt
+         // InstructionExt (full encoding)
          input->read(reinterpret_cast<char*>(&rec), sizeof(rec.InstructionExt));
 
-         #if VERBOSE_HEX > 2
+#if VERBOSE_HEX > 2
          hexdump(&rec, sizeof(rec.InstructionExt));
-         #endif
+#endif
 
          size = rec.InstructionExt.size;
          addr = rec.InstructionExt.addr;
@@ -525,34 +681,124 @@ bool Sift::Reader::Read(Instruction &inst)
 
       last_address += size;
 
-      for(int i = 0; i < inst.num_addresses; ++i)
+      for (int i = 0; i < inst.num_addresses; ++i)
          input->read(reinterpret_cast<char*>(&inst.addresses[i]), sizeof(uint64_t));
 
       inst.sinst = getStaticInstruction(addr, size);
 
-      #if VERBOSE_HEX > 2
+#if VERBOSE_HEX > 2
       hexdump(inst.sinst->data, inst.sinst->size);
-      #endif
-      #if VERBOSE > 2
-      printf("%016lx (%d) A%u %c%c %c%c\n", inst.sinst->addr, inst.sinst->size, inst.num_addresses, inst.is_branch?'B':'.', inst.is_branch?(inst.taken?'T':'.'):'.', inst.is_predicate?'C':'.', inst.is_predicate?(inst.executed?'E':'n'):'.');
-      #endif
-
+#endif
+#if VERBOSE > 2
+      printf("%016lx (%d) A%u %c%c %c%c\n",
+             inst.sinst->addr, inst.sinst->size, inst.num_addresses,
+             inst.is_branch?'B':'.',
+             inst.is_branch?(inst.taken?'T':'.'):'.',
+             inst.is_predicate?'C':'.',
+             inst.is_predicate?(inst.executed?'E':'n'):'.');
+#endif
       return true;
    }
 
-   // We should not return false (no more instructions) unless we get the End packet.
-   // Return true in case we get to this point (which we shouldn't).
+   // Should only reach here after RecOtherEnd
    return true;
 }
 
-bool Sift::Reader::AccessMemory(MemoryLockType lock_signal, MemoryOpType mem_op, uint64_t d_addr, uint8_t *data_buffer, uint32_t data_size)
+bool Reader::readChampSim(Instruction &inst)
 {
-   #if VERBOSE > 0
+   input_instr cs_inst{};
+   size_t read_bytes = 0;
+
+   if (m_champsim_stream)
+   {
+      read_bytes = m_champsim_stream->read_bytes(&cs_inst, sizeof(cs_inst));
+   }
+   else if (inputstream)
+   {
+      inputstream->read(reinterpret_cast<char*>(&cs_inst), sizeof(cs_inst));
+      read_bytes = static_cast<size_t>(inputstream->gcount());
+   }
+
+   if (read_bytes != sizeof(cs_inst))
+      return false;
+
+   inst.is_champsim = true;
+   inst.is_branch   = cs_inst.is_branch;
+   inst.taken       = cs_inst.branch_taken;
+   inst.is_predicate = false;
+   inst.executed    = true;
+   inst.isa         = m_isa;
+
+   // Collect destination registers
+   for (uint8_t idx = 0; idx < CHAMPSIM_MAX_DEST_REGISTERS; ++idx)
+   {
+      if (cs_inst.destination_registers[idx])
+      {
+         inst.dest_registers[inst.num_dest_registers++] = cs_inst.destination_registers[idx];
+      }
+   }
+
+   // Collect source registers
+   for (uint8_t idx = 0; idx < CHAMPSIM_MAX_SRC_REGISTERS; ++idx)
+   {
+      if (cs_inst.source_registers[idx])
+      {
+         inst.src_registers[inst.num_src_registers++] = cs_inst.source_registers[idx];
+      }
+   }
+
+   // Collect destination memory addresses
+   for (uint8_t idx = 0; idx < CHAMPSIM_MAX_DEST_ADDRESSES; ++idx)
+   {
+      if (cs_inst.destination_memory[idx])
+      {
+         inst.dest_addresses[inst.num_dest_addresses++] = cs_inst.destination_memory[idx];
+      }
+   }
+
+   // Collect source memory addresses
+   for (uint8_t idx = 0; idx < CHAMPSIM_MAX_SRC_ADDRESSES; ++idx)
+   {
+      if (cs_inst.source_memory[idx])
+      {
+         inst.src_addresses[inst.num_src_addresses++] = cs_inst.source_memory[idx];
+      }
+   }
+
+   // Fill legacy addresses[] array with src first, then dest, but keep MAX_DYNAMIC_ADDRESSES bound
+   inst.num_addresses = std::min<uint8_t>(inst.num_src_addresses + inst.num_dest_addresses, MAX_DYNAMIC_ADDRESSES);
+   uint8_t combined_idx = 0;
+
+   for (uint8_t i = 0; i < inst.num_src_addresses && combined_idx < inst.num_addresses; ++i, ++combined_idx)
+   {
+      inst.addresses[combined_idx] = inst.src_addresses[i];
+   }
+   for (uint8_t i = 0; i < inst.num_dest_addresses && combined_idx < inst.num_addresses; ++i, ++combined_idx)
+   {
+      inst.addresses[combined_idx] = inst.dest_addresses[i];
+   }
+
+   inst.sinst = getChampSimStaticInstruction(cs_inst.ip);
+   last_address = cs_inst.ip + inst.sinst->size;
+
+   return true;
+}
+
+bool Reader::AccessMemory(MemoryLockType lock_signal, MemoryOpType mem_op, uint64_t d_addr, uint8_t *data_buffer, uint32_t data_size)
+{
+#ifdef DEBUG_SIFT_READER
    if (mem_op == MemWrite)
-      std::cerr << "[DEBUG:" << m_id << "] Write MemoryRequest - Write" << std::endl;
-   if (mem_op == MemWrite)
-      std::cerr << "[DEBUG:" << m_id << "] Write MemoryRequest - Read" << std::endl;
-   #endif
+      std::cerr << "[DEBUG:" << m_id << "] MemoryRequest - Write - addr = " << d_addr  << std::endl;
+   if (mem_op == MemRead)
+      std::cerr << "[DEBUG:" << m_id << "] MemoryRequest - Read - addr = " << d_addr << std::endl;
+#endif
+
+   // ChampSim traces are offline, there is no live front-end to answer memory requests.
+   if (m_format == TraceFormat::ChampSim)
+   {
+      std::cerr << "[SIFT:" << m_id << "] AccessMemory not supported for ChampSim traces\n";
+      return false;
+   }
 
    if (input == NULL)
    {
@@ -588,15 +834,15 @@ bool Sift::Reader::AccessMemory(MemoryLockType lock_signal, MemoryOpType mem_op,
    }
    response->flush();
 
-   #if VERBOSE > 0
+#if VERBOSE > 0
    std::cerr << "[DEBUG:" << m_id << "] Read MemoryResponse" << std::endl;
-   #endif
+#endif
    uint64_t addr;
    MemoryOpType type;
    input->read(reinterpret_cast<char*>(&rec), sizeof(rec.Other));
-   #if VERBOSE_HEX > 0
+#if VERBOSE_HEX > 0
    hexdump((char*)&rec, sizeof(rec.Other));
-   #endif
+#endif
    if (rec.Other.type != RecOtherMemoryResponse)
    {
       std::cerr << "[SIFT:" << m_id << "] Error: Invalid response. Expected RecOtherMemoryResponse\n";
@@ -604,10 +850,10 @@ bool Sift::Reader::AccessMemory(MemoryLockType lock_signal, MemoryOpType mem_op,
    }
    input->read(reinterpret_cast<char*>(&addr), sizeof(addr));
    input->read(reinterpret_cast<char*>(&type), sizeof(type));
-   #if VERBOSE_HEX > 0
+#if VERBOSE_HEX > 0
    hexdump((char*)&addr, sizeof(addr));
    hexdump((char*)&type, sizeof(type));
-   #endif
+#endif
    if (addr != d_addr)
    {
       std::cerr << "[SIFT:" << m_id << "] Error: Invalid response. Expected addresses to match\n";
@@ -618,25 +864,25 @@ bool Sift::Reader::AccessMemory(MemoryLockType lock_signal, MemoryOpType mem_op,
 
    if (mem_op == MemRead)
    {
-      #if VERBOSE > 0
+#if VERBOSE > 0
       std::cerr << "[DEBUG:" << m_id << "] Read MemoryResponse - Read Return Data" << std::endl;
-      #endif
+#endif
       if (data_size != payload_size)
       {
-	 std::cerr << "[SIFT:" << m_id << "] Error: Invalid response. Expected payload size to match\n";
-	 return false;
+         std::cerr << "[SIFT:" << m_id << "] Error: Invalid response. Expected payload size to match\n";
+         return false;
       }
       input->read(reinterpret_cast<char*>(data_buffer), data_size);
-      #if VERBOSE_HEX > 0
+#if VERBOSE_HEX > 0
       hexdump((char*)data_buffer, data_size);
-      #endif
+#endif
    }
    else if (mem_op == MemWrite)
    {
       if (payload_size != 0)
       {
-	 std::cerr << "[SIFT:" << m_id << "] Error: Invalid response. Expected payload size of 0 for MemWrite\n";
-	 return false;
+         std::cerr << "[SIFT:" << m_id << "] Error: Invalid response. Expected payload size of 0 for MemWrite\n";
+         return false;
       }
    }
    else
@@ -648,7 +894,7 @@ bool Sift::Reader::AccessMemory(MemoryLockType lock_signal, MemoryOpType mem_op,
    return true;
 }
 
-const Sift::StaticInstruction* Sift::Reader::staticInfoInstruction(uint64_t addr, uint8_t size)
+const StaticInstruction* Reader::staticInfoInstruction(uint64_t addr, uint8_t size)
 {
    StaticInstruction *sinst = new StaticInstruction();
    sinst->addr = addr;
@@ -671,8 +917,11 @@ const Sift::StaticInstruction* Sift::Reader::staticInfoInstruction(uint64_t addr
    return sinst;
 }
 
-const Sift::StaticInstruction* Sift::Reader::getStaticInstruction(uint64_t addr, uint8_t size)
+const StaticInstruction* Reader::getStaticInstruction(uint64_t addr, uint8_t size)
 {
+   if (m_format == TraceFormat::ChampSim)
+      return getChampSimStaticInstruction(addr);
+
    const StaticInstruction *sinst;
 
    // Lookup in a large unordered_map is quite expensive if we have to do this for every dynamic instruction
@@ -701,15 +950,48 @@ const Sift::StaticInstruction* Sift::Reader::getStaticInstruction(uint64_t addr,
    return sinst;
 }
 
-void Sift::Reader::sendSyscallResponse(uint64_t return_code)
+const StaticInstruction* Reader::getChampSimStaticInstruction(uint64_t addr)
 {
-   #if VERBOSE > 0
+   const StaticInstruction *sinst;
+
+   if (m_last_sinst && m_last_sinst->next && m_last_sinst->next->addr == addr)
+   {
+      sinst = m_last_sinst->next;
+   }
+   else if (scache.count(addr))
+   {
+      sinst = scache[addr];
+   }
+   else
+   {
+      StaticInstruction *new_sinst = new StaticInstruction();
+      new_sinst->addr = addr;
+      new_sinst->size = CHAMPSIM_DEFAULT_INST_SIZE;
+      memset(new_sinst->data, 0, sizeof(new_sinst->data));
+      new_sinst->next = NULL;
+      scache[addr] = new_sinst;
+      sinst = new_sinst;
+   }
+
+   if (m_last_sinst && m_last_sinst->next == NULL)
+   {
+      ((StaticInstruction*)m_last_sinst)->next = sinst;
+   }
+   m_last_sinst = sinst;
+
+   return sinst;
+}
+
+void Reader::sendSyscallResponse(uint64_t return_code)
+{
+#if VERBOSE > 0
    std::cerr << "[DEBUG:" << m_id << "] Write SyscallResponse" << std::endl;
-   #endif
+#endif
 
    if (!initResponse())
    {
       std::cerr << "[SIFT:" << m_id << "] Error: initResponse failed\n";
+      return;
    }
 
    Record rec;
@@ -721,15 +1003,16 @@ void Sift::Reader::sendSyscallResponse(uint64_t return_code)
    response->flush();
 }
 
-void Sift::Reader::sendEmuResponse(bool handled, EmuReply res)
+void Reader::sendEmuResponse(bool handled, EmuReply res)
 {
-   #if VERBOSE > 0
+#if VERBOSE > 0
    std::cerr << "[DEBUG:" << m_id << "] Write sendEmuResponse" << std::endl;
-   #endif
+#endif
 
    if (!initResponse())
    {
       std::cerr << "[SIFT:" << m_id << "] Error: initResponse failed\n";
+      return;
    }
 
    Record rec;
@@ -743,15 +1026,16 @@ void Sift::Reader::sendEmuResponse(bool handled, EmuReply res)
    response->flush();
 }
 
-void Sift::Reader::sendSimpleResponse(RecOtherType type, void *data, uint32_t size)
+void Reader::sendSimpleResponse(RecOtherType type, void *data, uint32_t size)
 {
-   #if VERBOSE > 0
+#if VERBOSE > 0
    std::cerr << "[DEBUG:" << m_id << "] Write SimpleResponse type=" << type << std::endl;
-   #endif
+#endif
 
    if (!initResponse())
    {
       std::cerr << "[SIFT:" << m_id << "] Error: initResponse failed\n";
+      return;
    }
 
    Record rec;
@@ -760,26 +1044,24 @@ void Sift::Reader::sendSimpleResponse(RecOtherType type, void *data, uint32_t si
    rec.Other.size = size;
    response->write(reinterpret_cast<char*>(&rec), sizeof(rec.Other));
    if (size > 0)
-   {
       response->write(reinterpret_cast<char*>(data), size);
-   }
    response->flush();
 }
 
-uint64_t Sift::Reader::getPosition()
+uint64_t Reader::getPosition()
 {
    if (inputstream)
-      return inputstream->tellg();
+      return static_cast<uint64_t>(inputstream->tellg());
    else
       return 0;
 }
 
-uint64_t Sift::Reader::getLength()
+uint64_t Reader::getLength()
 {
    return filesize;
 }
 
-uint64_t Sift::Reader::va2pa(uint64_t va)
+uint64_t Reader::va2pa(uint64_t va)
 {
    if (m_trace_has_pa)
    {
@@ -802,9 +1084,10 @@ uint64_t Sift::Reader::va2pa(uint64_t va)
    }
 }
 
-void Sift::Reader::frontEndStop()
+void Reader::frontEndStop()
 {
-    if(response)
-	sendSimpleResponse(RecOtherType::RecOtherShutdown, NULL, 0);
+   if (response)
+      sendSimpleResponse(RecOtherType::RecOtherShutdown, NULL, 0);
 }
 
+} // namespace Sift

@@ -140,6 +140,7 @@ void HooksPy::set_env(){
 	PyImport_AppendInittab("sim_bbv", PyInit_sim_bbv);
 	PyImport_AppendInittab("sim_mem", PyInit_sim_mem);
 	PyImport_AppendInittab("sim_thread", PyInit_sim_thread);
+	PyImport_AppendInittab("sim_cache", PyInit_sim_cache);
 	pyInit = true;
 }
 

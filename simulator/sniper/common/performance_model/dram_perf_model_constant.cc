@@ -6,8 +6,8 @@
 #include "shmem_perf.h"
 
 DramPerfModelConstant::DramPerfModelConstant(core_id_t core_id,
-      UInt32 cache_block_size):
-   DramPerfModel(core_id, cache_block_size),
+      UInt32 cache_block_size, const String& suffix):
+   DramPerfModel(core_id, cache_block_size, suffix),
    m_queue_model(NULL),
    m_dram_bandwidth(8 * Sim()->getCfg()->getFloat("perf_model/dram/per_controller_bandwidth")), // Convert bytes to bits
    m_total_queueing_delay(SubsecondTime::Zero()),
@@ -17,12 +17,12 @@ DramPerfModelConstant::DramPerfModelConstant(core_id_t core_id,
 
    if (Sim()->getCfg()->getBool("perf_model/dram/queue_model/enabled"))
    {
-      m_queue_model = QueueModel::create("dram-queue", core_id, Sim()->getCfg()->getString("perf_model/dram/queue_model/type"),
+      m_queue_model = QueueModel::create("dram-queue" + m_suffix, core_id, Sim()->getCfg()->getString("perf_model/dram/queue_model/type"),
                                          m_dram_bandwidth.getRoundedLatency(8 * cache_block_size)); // bytes to bits
    }
 
-   registerStatsMetric("dram", core_id, "total-access-latency", &m_total_access_latency);
-   registerStatsMetric("dram", core_id, "total-queueing-delay", &m_total_queueing_delay);
+   registerStatsMetric("dram" + m_suffix, core_id, "total-access-latency", &m_total_access_latency);
+   registerStatsMetric("dram" + m_suffix, core_id, "total-queueing-delay", &m_total_queueing_delay);
 }
 
 DramPerfModelConstant::~DramPerfModelConstant()

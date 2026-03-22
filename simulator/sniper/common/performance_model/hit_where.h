@@ -24,6 +24,10 @@ class HitWhere
          DRAM_LOCAL,
          DRAM_REMOTE,
          CACHE_REMOTE,
+         // CXL Memory Tiers
+         CXL_NEAR,       // CXL attached memory (single-hop)
+         CXL_FAR,        // CXL attached memory (multi-hop)
+         CXL_POOLED,     // CXL pooled/shared memory
          SIBLING,
          L1_SIBLING = MemComponent::L1_DCACHE + SIBLING,
          L2_SIBLING = MemComponent::L2_CACHE + SIBLING,
@@ -33,6 +37,7 @@ class HitWhere
          PREDICATE_FALSE, // CMOV for which the predicate was false, did not actually execute
          PREFETCH_NO_MAPPING,
          SHADOW_CACHE,
+         PAGE_FAULT,
          NUM_HITWHERES
       };
 };

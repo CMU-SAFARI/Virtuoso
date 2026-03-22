@@ -28,6 +28,11 @@ namespace ParametricDramDirectoryMSI
 		IntPtr *table_pa;
 		int *m_page_table_sizes;
 
+		// Resizing parameters
+		double m_resize_threshold;   // Occupancy ratio to trigger resize (e.g., 0.6)
+		int    m_resize_factor;      // Multiply table size by this factor (e.g., 2)
+		int   *m_entry_count;        // Current number of occupied root slots per page size
+
 		struct Stats
 		{
 			UInt64 *page_table_walks;
@@ -35,6 +40,7 @@ namespace ParametricDramDirectoryMSI
 			UInt64 *num_accesses;
 			UInt64 *table_matches;
 			UInt64 first_hit;
+			UInt64 *resizes;
 		} stats;
 
 		std::ofstream log_file;
@@ -56,5 +62,8 @@ namespace ParametricDramDirectoryMSI
 
 		void printVectorStatistics();
 		void printPageTable();
+
+	private:
+		void resizeTable(int page_size_index);
 	};
 }

@@ -22,11 +22,12 @@ namespace PrL1PrL2DramDirectoryMSI
    {
       private:
          std::unordered_map<IntPtr, Byte*> m_data_map;
-         DramPerfModel* m_dram_perf_model;
+         
          FaultInjector* m_fault_injector;
          AddressHomeLookup* address_home_lookup;
          typedef std::unordered_map<IntPtr,UInt64> AccessCountMap;
          AccessCountMap* m_dram_access_count;
+         DramPerfModel* m_dram_perf_model;
          UInt64 m_reads, m_writes;
 
          ShmemPerf m_dummy_shmem_perf;
@@ -42,7 +43,7 @@ namespace PrL1PrL2DramDirectoryMSI
                UInt32 cache_block_size,AddressHomeLookup* address_home_lookup);
 
          ~DramCntlr();
-
+         
          DramPerfModel* getDramPerfModel() { return m_dram_perf_model; }
 
          // Run DRAM performance model. Pass in begin time, returns latency

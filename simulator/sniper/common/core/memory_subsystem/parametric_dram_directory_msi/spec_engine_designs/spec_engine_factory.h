@@ -5,11 +5,13 @@
 #include "mmu_pomtlb.h"
 #include "mmu_range.h"
 #include "mmu_utopia.h"
-#include "nested_mmu.h"
 #include "config.hpp"
 #include "mmu_spec.h"
 #include "spec_engine_base.h"
 #include "spectlb.h"
+#include "asap_engine.h"
+#include "oracle_spec.h"
+#include "spot_engine.h"
 
 namespace ParametricDramDirectoryMSI
 {
@@ -37,7 +39,7 @@ namespace ParametricDramDirectoryMSI
         static SpecEngineBase *createSpecEngineBase(
             String type,
             Core *core,
-            MemoryManager *memory_manager,
+            MemoryManagerBase *memory_manager,
             ShmemPerfModel *shmem_perf_model,
             String name)
         {
@@ -47,12 +49,18 @@ namespace ParametricDramDirectoryMSI
                 return new SpecTLB(core, memory_manager, shmem_perf_model, name);
             }
             // Placeholder for additional speculative engine types
-            // else if (type == "Revelator")
-            // {
-            //     return new SpecEngineRevelator(memory_manager, name);
-            // }
-            else
+            else if(type=="oracle")
             {
+                return new OracleSpec(core, memory_manager, shmem_perf_model, name);
+            }
+            else if (type == "asap")
+            {
+                return new ASAP(core, memory_manager, shmem_perf_model, name);
+            }
+            else if (type == "SpOT") {
+                return new Spot(core, memory_manager, shmem_perf_model, name);
+            }
+            else {
                 // Handle invalid SpecEngine type error
                 std::cerr << "Invalid SpecEngine type: " << type << std::endl;
                 abort(); // Terminate execution due to invalid input

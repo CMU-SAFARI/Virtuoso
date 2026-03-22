@@ -12,6 +12,9 @@ class CacheSetNRU : public CacheSet
 
       UInt32 getReplacementIndex(CacheCntlr *cntlr);
       void updateReplacementIndex(UInt32 accessed_index);
+      
+      // Override to return NRU bits (0 = recently used, 1 = not recently used)
+      virtual UInt8 getRecencyBits(UInt32 way) const override { return m_lru_bits[way]; }
 
    private:
       UInt8* m_lru_bits;

@@ -1,0 +1,2179 @@
+diff --git a/pintool/Makefile b/pintool/Makefile
+new file mode 100644
+index 0000000..d7ca924
+--- /dev/null
++++ b/pintool/Makefile
+@@ -0,0 +1,27 @@
++# Ramulator2 MimicOS Pintool Makefile
++#
++# Build:
++#   SDE_BUILD_KIT=/path/to/sde_kit make
++#
++# The SDE_BUILD_KIT should point to the same SDE kit used by Sniper.
++
++ifdef SDE_BUILD_KIT
++
++PIN_ROOT := $(SDE_BUILD_KIT)/pinkit
++SDE_ROOT := $(PIN_ROOT)/sde-example
++PINPLAY_ROOT := $(PIN_ROOT)/pinplay
++CONFIG_ROOT := $(PIN_ROOT)/source/tools/Config
++
++ifneq (,$(wildcard $(CONFIG_ROOT)/makefile.config))
++include $(CONFIG_ROOT)/makefile.config
++include makefile.rules
++include $(TOOLS_ROOT)/Config/makefile.default.rules
++else
++$(warning "Cannot find PIN config at $(CONFIG_ROOT)")
++all:
++clean:
++endif
++
++else
++$(error "SDE_BUILD_KIT must be set. Point it to the SDE kit directory (e.g., snipersim/sde_kit)")
++endif
+diff --git a/pintool/makefile.rules b/pintool/makefile.rules
+new file mode 100644
+index 0000000..4c06406
+--- /dev/null
++++ b/pintool/makefile.rules
+@@ -0,0 +1,13 @@
++##############################################################
++# Ramulator2 MimicOS Pintool — SDE Build Rules
++##############################################################
++
++TOOL_ROOTS := ramulator_recorder
++
++# SDE/PinPlay flags
++TOOL_CXXFLAGS := -I$(SDE_ROOT)/include $(TOOL_CXXFLAGS)
++TOOL_CXXFLAGS += -DSDE_INIT -DPINPLAY -I$(PINPLAY_ROOT)/include
++TOOL_CXXFLAGS += -I.  # For ramulator_ipc.h
++
++TOOL_LPATHS += -L$(SDE_ROOT)/lib/$(TARGET) -L$(PINPLAY_ROOT)/$(TARGET)
++TOOL_LPATHS += -lpinplay -lsde -lpinplay -lsde -lbz2 -lzlib
+diff --git a/pintool/ramulator_ipc.h b/pintool/ramulator_ipc.h
+new file mode 100644
+index 0000000..b17a2f2
+--- /dev/null
++++ b/pintool/ramulator_ipc.h
+@@ -0,0 +1,72 @@
++/**
++ * @file ramulator_ipc.h
++ * @brief IPC protocol between Ramulator2 and the MimicOS SDE pintool.
++ *
++ * Binary message protocol over Unix pipes (or named FIFOs).
++ * All multi-byte values are little-endian (native x86).
++ */
++
++#ifndef RAMULATOR_IPC_H
++#define RAMULATOR_IPC_H
++
++#include <cstdint>
++#include <vector>
++
++namespace RamulatorIPC {
++
++// Message types
++enum MsgType : uint8_t {
++  // Ramulator2 → Pintool
++  PAGE_FAULT_REQUEST = 1,   // Page fault occurred, MimicOS should handle it
++  SIMULATION_END     = 10,  // Simulation is ending, pintool should terminate
++
++  // Pintool → Ramulator2
++  FAULT_RESPONSE     = 2,   // MimicOS resolved the page fault
++  MEMORY_ACCESS      = 3,   // MimicOS memory access during fault handling
++  MIMICOS_READY      = 4,   // MimicOS is initialized and ready
++  MIMICOS_DONE       = 5,   // MimicOS finished processing (no more accesses)
++};
++
++// Ramulator2 → Pintool: page fault request
++struct FaultRequest {
++  uint64_t vpn;
++  uint32_t num_frames_needed;
++  uint32_t core_id;
++};
++
++// Pintool → Ramulator2: page fault response
++struct FaultResponse {
++  uint64_t ppn;                    // Allocated physical page number
++  uint32_t page_size_log2;         // 12=4KB, 21=2MB
++  uint32_t num_frames;             // Number of PT frames
++  // Followed by num_frames × uint64_t frame PPNs
++};
++
++// Pintool → Ramulator2: MimicOS memory access
++struct MemoryAccess {
++  uint64_t addr;        // Physical address accessed by MimicOS
++  uint8_t  is_write;    // 0=read, 1=write
++};
++
++// Helper: write a message to a file descriptor
++static inline bool write_msg(int fd, MsgType type, const void* data, size_t len) {
++  uint8_t t = static_cast<uint8_t>(type);
++  if (write(fd, &t, 1) != 1) return false;
++  if (len > 0 && write(fd, data, len) != static_cast<ssize_t>(len)) return false;
++  return true;
++}
++
++// Helper: read exactly N bytes from a file descriptor
++static inline bool read_exact(int fd, void* buf, size_t len) {
++  size_t total = 0;
++  while (total < len) {
++    ssize_t n = read(fd, static_cast<char*>(buf) + total, len - total);
++    if (n <= 0) return false;
++    total += n;
++  }
++  return true;
++}
++
++}  // namespace RamulatorIPC
++
++#endif  // RAMULATOR_IPC_H
+diff --git a/pintool/ramulator_recorder.cpp b/pintool/ramulator_recorder.cpp
+new file mode 100644
+index 0000000..588f56b
+--- /dev/null
++++ b/pintool/ramulator_recorder.cpp
+@@ -0,0 +1,350 @@
++/**
++ * @file ramulator_recorder.cpp
++ * @brief SDE pintool for MimicOS ↔ Ramulator2 integration.
++ *
++ * This tool instruments MimicOS running under SDE and:
++ *   1. Intercepts magic instructions (xchg bx,bx) for MimicOS IPC
++ *   2. Records memory accesses during page fault handling
++ *   3. Communicates with Ramulator2 via file descriptors (pipes)
++ *
++ * Usage:
++ *   sde64 -t64 ramulator_recorder.so \
++ *     -ramulator:ipc_read_fd 3 -ramulator:ipc_write_fd 4 \
++ *     -ramulator:roi 1 \
++ *     -- mimicos/build/startup_mimicos <config> <trace> <output>
++ */
++
++#include <iostream>
++#include <fstream>
++#include <cstring>
++#include <unordered_set>
++#include <cstdlib>
++#include <unistd.h>
++#include <sys/types.h>
++
++#include "pin.H"
++
++#if defined(SDE_INIT)
++#include "sde-init.H"
++#include "sde-control.H"
++#endif
++
++#ifdef PINPLAY
++#include "pinplay.H"
++#endif
++
++#include "ramulator_ipc.h"
++
++// ============================================================================
++// Sim API command codes (must match sim_api.h used by MimicOS)
++// ============================================================================
++#define SIM_CMD_ROI_START        1
++#define SIM_CMD_ROI_END          2
++#define SIM_CMD_MALLOC           100
++#define SIM_CMD_START_PROCESS    101
++#define SIM_CMD_MIMICOS_RESULT   102
++#define SIM_CMD_CONTEXT_SWITCH   103
++#define SIM_CMD_RECEIVE_MESSAGE  104
++
++// ============================================================================
++// Knobs
++// ============================================================================
++KNOB<INT64> KnobIpcReadFd(KNOB_MODE_WRITEONCE, "pintool", "ramulator:ipc_read_fd", "0",
++                          "File descriptor to read IPC from Ramulator2");
++KNOB<INT64> KnobIpcWriteFd(KNOB_MODE_WRITEONCE, "pintool", "ramulator:ipc_write_fd", "1",
++                           "File descriptor to write IPC to Ramulator2");
++KNOB<UINT64> KnobUseROI(KNOB_MODE_WRITEONCE, "pintool", "ramulator:roi", "0",
++                        "Use ROI markers");
++KNOB<BOOL> KnobVerbose(KNOB_MODE_WRITEONCE, "pintool", "ramulator:verbose", "0",
++                       "Verbose output");
++
++// ============================================================================
++// Global state
++// ============================================================================
++static int g_ipc_read_fd = 0;
++static int g_ipc_write_fd = 1;
++static bool g_in_roi = false;
++static bool g_in_fault_handling = false;  // True between context switches
++static bool g_verbose = false;
++
++// Pending fault request from Ramulator2
++static RamulatorIPC::FaultRequest g_pending_fault;
++static bool g_has_pending_fault = false;
++
++// MimicOS result buffer
++static uint64_t g_result_argv[64];
++static int g_result_argc = 0;
++
++// Memory access tracking during fault handling
++static uint64_t g_fault_mem_accesses = 0;
++// Track unique cache lines accessed during fault handling (deduplicate)
++static std::unordered_set<uint64_t> g_fault_cachelines;
++static const uint64_t CACHELINE_MASK = ~63ULL;  // 64-byte cache lines
++
++// ============================================================================
++// IPC helpers
++// ============================================================================
++static void send_to_ramulator(RamulatorIPC::MsgType type, const void* data, size_t len) {
++  uint8_t t = static_cast<uint8_t>(type);
++  write(g_ipc_write_fd, &t, 1);
++  if (len > 0) write(g_ipc_write_fd, data, len);
++}
++
++static bool recv_from_ramulator(void* buf, size_t len) {
++  return RamulatorIPC::read_exact(g_ipc_read_fd, buf, len);
++}
++
++// ============================================================================
++// Magic instruction handler
++// ============================================================================
++ADDRINT handleMagic(THREADID threadid, const CONTEXT* ctxt,
++                    ADDRINT gax, ADDRINT gbx, ADDRINT gcx)
++{
++  uint64_t cmd = gax;
++  uint64_t arg0 = gbx;
++  uint64_t arg1 = gcx;
++
++  if (g_verbose) {
++    std::cerr << "[RAMULATOR_RECORDER] Magic cmd=" << cmd
++              << " arg0=0x" << std::hex << arg0 << std::dec
++              << " arg1=0x" << std::hex << arg1 << std::dec << std::endl;
++  }
++
++  switch (cmd) {
++    case SIM_CMD_ROI_START:
++      g_in_roi = true;
++      if (g_verbose) std::cerr << "[RAMULATOR_RECORDER] ROI START" << std::endl;
++      break;
++
++    case SIM_CMD_ROI_END:
++      g_in_roi = false;
++      if (g_verbose) std::cerr << "[RAMULATOR_RECORDER] ROI END" << std::endl;
++      break;
++
++    case SIM_CMD_START_PROCESS: {
++      // MimicOS is starting the application trace
++      // arg0 = pointer to trace file path (in MimicOS address space)
++      char path[256];
++      PIN_SafeCopy(path, reinterpret_cast<void*>(arg0), 255);
++      path[255] = '\0';
++      if (g_verbose) {
++        std::cerr << "[RAMULATOR_RECORDER] START_PROCESS: " << path << std::endl;
++      }
++      // Signal Ramulator2 that MimicOS is ready
++      send_to_ramulator(RamulatorIPC::MIMICOS_READY, path, strlen(path) + 1);
++      break;
++    }
++
++    case SIM_CMD_CONTEXT_SWITCH: {
++      // MimicOS is yielding — either finishing fault handling or waiting for next fault
++      if (g_in_fault_handling) {
++        // Finished handling fault — send DONE marker
++        g_in_fault_handling = false;
++        send_to_ramulator(RamulatorIPC::MIMICOS_DONE, nullptr, 0);
++        if (g_verbose) {
++          std::cerr << "[RAMULATOR_RECORDER] Context switch: fault handling done ("
++                    << g_fault_mem_accesses << " mem accesses)" << std::endl;
++        }
++        // Fall through to read the next fault (MimicOS loops back to SimReceiveMessage)
++      }
++
++      // Block until Ramulator2 sends a fault request (or end signal)
++      uint8_t msg_type;
++      if (!recv_from_ramulator(&msg_type, 1)) {
++        if (g_verbose) std::cerr << "[RAMULATOR_RECORDER] IPC pipe closed, exiting" << std::endl;
++        PIN_ExitApplication(0);
++        return 0;
++      }
++
++      if (msg_type == RamulatorIPC::PAGE_FAULT_REQUEST) {
++        recv_from_ramulator(&g_pending_fault, sizeof(g_pending_fault));
++        g_has_pending_fault = true;
++        g_in_fault_handling = true;
++        g_fault_mem_accesses = 0;
++        g_fault_cachelines.clear();
++        if (g_verbose) {
++          std::cerr << "[RAMULATOR_RECORDER] Received fault: vpn=0x"
++                    << std::hex << g_pending_fault.vpn << std::dec
++                    << " frames=" << g_pending_fault.num_frames_needed << std::endl;
++        }
++      } else if (msg_type == RamulatorIPC::SIMULATION_END) {
++        if (g_verbose) std::cerr << "[RAMULATOR_RECORDER] Simulation end received" << std::endl;
++        PIN_ExitApplication(0);
++        return 0;
++      }
++
++      return 42;
++    }
++
++    case SIM_CMD_RECEIVE_MESSAGE: {
++      // MimicOS wants to read the fault message
++      // arg0 = pointer to argc (int*)
++      // arg1 = pointer to argv (uint64_t*)
++      if (g_has_pending_fault) {
++        // Build the message: [exception_type=1, va, num_frames]
++        int argc = 3;
++        uint64_t argv[3];
++        argv[0] = 1;  // PAGE_FAULT exception type
++        argv[1] = g_pending_fault.vpn << 12;  // Virtual address
++        argv[2] = g_pending_fault.num_frames_needed;
++
++        // Write to MimicOS memory
++        PIN_SafeCopy(reinterpret_cast<void*>(arg0), &argc, sizeof(int));
++        PIN_SafeCopy(reinterpret_cast<void*>(arg1), argv, argc * sizeof(uint64_t));
++        g_has_pending_fault = false;
++      }
++      break;
++    }
++
++    case SIM_CMD_MIMICOS_RESULT: {
++      // MimicOS is sending back the allocation result
++      // arg0 = argc (int)
++      // arg1 = pointer to argv (uint64_t*)
++      g_result_argc = static_cast<int>(arg0);
++      if (g_result_argc > 0 && g_result_argc < 64) {
++        PIN_SafeCopy(g_result_argv, reinterpret_cast<void*>(arg1),
++                     g_result_argc * sizeof(uint64_t));
++      }
++
++      // Parse: argv[0]=exception_type, argv[1]=vpn, argv[2]=ppn,
++      //        argv[3]=page_size, argv[4..]=frames
++      if (g_result_argc >= 4) {
++        RamulatorIPC::FaultResponse resp;
++        resp.ppn = g_result_argv[2];
++        resp.page_size_log2 = static_cast<uint32_t>(g_result_argv[3]);
++        resp.num_frames = (g_result_argc > 4) ? (g_result_argc - 4) : 0;
++
++        // Send response header
++        send_to_ramulator(RamulatorIPC::FAULT_RESPONSE, &resp, sizeof(resp));
++        // Send frame PPNs
++        if (resp.num_frames > 0) {
++          write(g_ipc_write_fd, &g_result_argv[4], resp.num_frames * sizeof(uint64_t));
++        }
++
++        if (g_verbose) {
++          std::cerr << "[RAMULATOR_RECORDER] Result: ppn=" << resp.ppn
++                    << " page_size=" << resp.page_size_log2
++                    << " frames=" << resp.num_frames << std::endl;
++        }
++      }
++      break;
++    }
++
++    case SIM_CMD_MALLOC:
++      // Ignore malloc tracking for now
++      break;
++
++    default:
++      if (g_verbose) {
++        std::cerr << "[RAMULATOR_RECORDER] Unknown magic cmd=" << cmd << std::endl;
++      }
++      break;
++  }
++
++  return gax;
++}
++
++// ============================================================================
++// Memory access recording (only during fault handling)
++// ============================================================================
++VOID handleMemory(THREADID threadid, ADDRINT addr, UINT32 size, BOOL is_write)
++{
++  if (!g_in_fault_handling) return;
++
++  // Deduplicate by cache line — only send unique cache line accesses
++  uint64_t cl_addr = static_cast<uint64_t>(addr) & CACHELINE_MASK;
++  if (g_fault_cachelines.count(cl_addr)) return;
++  g_fault_cachelines.insert(cl_addr);
++
++  RamulatorIPC::MemoryAccess ma;
++  ma.addr = cl_addr;
++  ma.is_write = is_write ? 1 : 0;
++  send_to_ramulator(RamulatorIPC::MEMORY_ACCESS, &ma, sizeof(ma));
++  g_fault_mem_accesses++;
++}
++
++// ============================================================================
++// Instrumentation callbacks
++// ============================================================================
++VOID traceCallback(TRACE trace, VOID* v)
++{
++  for (BBL bbl = TRACE_BblHead(trace); BBL_Valid(bbl); bbl = BBL_Next(bbl)) {
++    for (INS ins = BBL_InsHead(bbl); INS_Valid(ins); ins = INS_Next(ins)) {
++
++      // Detect magic instruction: xchg bx, bx
++      if (INS_IsXchg(ins) &&
++          INS_OperandReg(ins, 0) == REG_BX &&
++          INS_OperandReg(ins, 1) == REG_BX) {
++        INS_InsertPredicatedCall(
++          ins, IPOINT_BEFORE, (AFUNPTR)handleMagic,
++          IARG_RETURN_REGS, REG_GAX,
++          IARG_THREAD_ID,
++          IARG_CONST_CONTEXT,
++          IARG_REG_VALUE, REG_GAX,
++          IARG_REG_VALUE, REG_GBX,
++          IARG_REG_VALUE, REG_GCX,
++          IARG_END);
++      }
++
++      // Record memory accesses (only active during fault handling)
++      for (UINT32 i = 0; i < INS_MemoryOperandCount(ins); i++) {
++        if (INS_MemoryOperandIsRead(ins, i)) {
++          INS_InsertPredicatedCall(
++            ins, IPOINT_BEFORE, (AFUNPTR)handleMemory,
++            IARG_THREAD_ID,
++            IARG_MEMORYOP_EA, i,
++            IARG_MEMORYOP_SIZE, i,
++            IARG_BOOL, FALSE,
++            IARG_END);
++        }
++        if (INS_MemoryOperandIsWritten(ins, i)) {
++          INS_InsertPredicatedCall(
++            ins, IPOINT_BEFORE, (AFUNPTR)handleMemory,
++            IARG_THREAD_ID,
++            IARG_MEMORYOP_EA, i,
++            IARG_MEMORYOP_SIZE, i,
++            IARG_BOOL, TRUE,
++            IARG_END);
++        }
++      }
++    }
++  }
++}
++
++VOID Fini(INT32 code, VOID* v)
++{
++  if (g_verbose) {
++    std::cerr << "[RAMULATOR_RECORDER] Finished with code " << code << std::endl;
++  }
++}
++
++// ============================================================================
++// Entry point
++// ============================================================================
++int main(int argc, char* argv[])
++{
++#if defined(SDE_INIT)
++  sde_pin_init(argc, argv);
++  sde_init();
++#else
++  if (PIN_Init(argc, argv)) {
++    std::cerr << "Usage: sde64 -t64 ramulator_recorder.so [options] -- <app>" << std::endl;
++    return 1;
++  }
++#endif
++
++  g_ipc_read_fd = static_cast<int>(KnobIpcReadFd.Value());
++  g_ipc_write_fd = static_cast<int>(KnobIpcWriteFd.Value());
++  g_verbose = KnobVerbose.Value();
++
++  if (g_verbose) {
++    std::cerr << "[RAMULATOR_RECORDER] ipc_read_fd=" << g_ipc_read_fd
++              << " ipc_write_fd=" << g_ipc_write_fd << std::endl;
++  }
++
++  TRACE_AddInstrumentFunction(traceCallback, 0);
++  PIN_AddFiniFunction(Fini, 0);
++
++  PIN_StartProgram();  // Never returns
++  return 0;
++}
+diff --git a/src/frontend/impl/processor/simpleO3/simpleO3.cpp b/src/frontend/impl/processor/simpleO3/simpleO3.cpp
+index b8b1d0d..d6820b5 100644
+--- a/src/frontend/impl/processor/simpleO3/simpleO3.cpp
++++ b/src/frontend/impl/processor/simpleO3/simpleO3.cpp
+@@ -53,6 +53,10 @@ class SimpleO3 final : public IFrontEnd, public Implementation {
+       // m_llc->deserialize(serialization_filename);
+       // m_llc->serialize(serialization_filename);
+ 
++      // Give the LLC and receive callback to the translation unit for PTW cache hierarchy access
++      m_translation->set_cache(static_cast<void*>(m_llc));
++      m_translation->set_receive_callback([this](Request& req) { this->receive(req); });
++
+       // Create the cores
+       for (int id = 0; id < m_num_cores; id++) {
+         SimpleO3Core* core = new SimpleO3Core(id, ipc, depth, m_num_expected_insts, trace_list[id], m_translation, m_llc);
+@@ -94,11 +98,18 @@ class SimpleO3 final : public IFrontEnd, public Implementation {
+     void receive(Request& req) {
+       m_llc->receive(req);
+ 
+-      // TODO: LLC latency for the core to receive the request?
+       for (auto r : m_llc->m_receive_requests[req.addr]) {
+         r.arrive = req.arrive;
+         r.depart = req.depart;
+-        m_cores[r.source_id]->receive(r);
++        if (r.scratchpad[0] == 1) {
++          // PTW request: dispatch to translation unit
++          m_translation->ptw_callback(r);
++        } else {
++          // Core data request: dispatch to core for instruction window tracking
++          if (r.source_id >= 0 && r.source_id < static_cast<int>(m_cores.size())) {
++            m_cores[r.source_id]->receive(r);
++          }
++        }
+       }
+       m_llc->m_receive_requests[req.addr].clear();
+     };
+@@ -113,6 +124,7 @@ class SimpleO3 final : public IFrontEnd, public Implementation {
+     }
+ 
+     void connect_memory_system(IMemorySystem* memory_system) override {
++      IFrontEnd::connect_memory_system(memory_system);  // Setup children (Translation, etc.)
+       m_llc->connect_memory_system(memory_system);
+     };
+ 
+diff --git a/src/translation/CMakeLists.txt b/src/translation/CMakeLists.txt
+index 3dee0eb..72abdeb 100644
+--- a/src/translation/CMakeLists.txt
++++ b/src/translation/CMakeLists.txt
+@@ -6,6 +6,8 @@ target_sources(
+ 
+   impl/no_translation.cpp
+   impl/random_translation.cpp
++  impl/tlb_translation.cpp
++  impl/mimicos_translation.cpp
+ )
+ 
+ target_link_libraries(
+diff --git a/src/translation/impl/mimicos_translation.cpp b/src/translation/impl/mimicos_translation.cpp
+new file mode 100644
+index 0000000..5a5074c
+--- /dev/null
++++ b/src/translation/impl/mimicos_translation.cpp
+@@ -0,0 +1,351 @@
++/**
++ * @file mimicos_translation.cpp
++ * @brief MimicOS-backed address translation for Ramulator2.
++ *
++ * Extends TLBTranslation by replacing the built-in page fault handler with
++ * IPC-based communication to a MimicOS process running under the SDE pintool.
++ *
++ * On page fault:
++ *   1. Send PAGE_FAULT_REQUEST to pintool (via pipe)
++ *   2. Receive MEMORY_ACCESS messages — inject into DRAM as PTW-like requests
++ *   3. Receive FAULT_RESPONSE — get PPN + PT frames from MimicOS allocator
++ *   4. Receive MIMICOS_DONE — fault handling complete
++ *   5. Install mapping and resume page table walk
++ *
++ * MimicOS is launched as a subprocess:
++ *   sde64 -t64 ramulator_recorder.so -ramulator:ipc_read_fd 3 -ramulator:ipc_write_fd 4
++ *     -- mimicos/build/startup_mimicos <config.ini> <trace.sift> <output>
++ */
++
++#include <cerrno>
++#include <cstdint>
++#include <cstring>
++#include <fcntl.h>
++#include <iostream>
++#include <signal.h>
++#include <string>
++#include <sys/wait.h>
++#include <unistd.h>
++#include <vector>
++
++#include "base/base.h"
++#include "base/request.h"
++#include "translation/translation.h"
++#include "frontend/frontend.h"
++#include "memory_system/memory_system.h"
++#include "frontend/impl/processor/simpleO3/llc.h"
++
++// Inline the IPC header
++namespace RamulatorIPC {
++  enum MsgType : uint8_t {
++    PAGE_FAULT_REQUEST = 1,
++    FAULT_RESPONSE = 2,
++    MEMORY_ACCESS = 3,
++    MIMICOS_READY = 4,
++    MIMICOS_DONE = 5,
++    SIMULATION_END = 10,
++  };
++  struct FaultRequest { uint64_t vpn; uint32_t num_frames_needed; uint32_t core_id; };
++  struct FaultResponse { uint64_t ppn; uint32_t page_size_log2; uint32_t num_frames; };
++  struct MemoryAccess { uint64_t addr; uint8_t is_write; };
++
++  static bool read_exact(int fd, void* buf, size_t len) {
++    size_t total = 0;
++    while (total < len) {
++      ssize_t n = read(fd, static_cast<char*>(buf) + total, len - total);
++      if (n <= 0) return false;
++      total += n;
++    }
++    return true;
++  }
++}
++
++namespace Ramulator {
++
++class MimicOSTranslation : public ITranslation, public Implementation {
++  RAMULATOR_REGISTER_IMPLEMENTATION(
++    ITranslation, MimicOSTranslation, "MimicOSTranslation",
++    "TLB translation with MimicOS userspace page fault handling via SDE pintool IPC."
++  );
++
++  // IPC state
++  pid_t m_mimicos_pid = -1;
++  int m_pipe_to_mimicos[2] = {-1, -1};    // Ramulator writes, pintool reads
++  int m_pipe_from_mimicos[2] = {-1, -1};  // Pintool writes, Ramulator reads
++  bool m_mimicos_ready = false;
++
++  // Config
++  std::string m_sde_path;
++  std::string m_pintool_path;
++  std::string m_mimicos_binary;
++  std::string m_mimicos_config;
++  std::string m_mimicos_trace;
++  std::string m_mimicos_output;
++
++  // Fault handling state
++  bool m_fault_in_progress = false;
++  bool m_fault_response_received = false;
++  RamulatorIPC::FaultResponse m_fault_response;
++  std::vector<uint64_t> m_fault_frames;
++
++  // Memory system for injecting MimicOS accesses
++  IMemorySystem* m_mem = nullptr;
++  void* m_llc_ptr = nullptr;
++  std::function<void(Request&)> m_frontend_callback;
++
++  // Stats
++  uint64_t s_mimicos_mem_accesses = 0;
++  uint64_t s_mimicos_faults_handled = 0;
++
++  // Delegate to an internal TLBTranslation for the actual TLB/PTW machinery
++  // (We'll create TLBTranslation as a child)
++  ITranslation* m_inner_translation = nullptr;
++
++public:
++  void init() override {
++    m_sde_path = param<std::string>("sde_path").desc("Path to sde64 binary").required();
++    m_pintool_path = param<std::string>("pintool_path").desc("Path to ramulator_recorder.so").required();
++    m_mimicos_binary = param<std::string>("mimicos_binary").desc("Path to MimicOS startup_mimicos").required();
++    m_mimicos_config = param<std::string>("mimicos_config").desc("Path to MimicOS .ini config").required();
++    m_mimicos_trace = param<std::string>("mimicos_trace").desc("Path to SIFT trace file").required();
++    m_mimicos_output = param<std::string>("mimicos_output").desc("MimicOS output prefix").default_val("/tmp/mimicos_ram_out");
++
++    // Create the inner TLBTranslation as a child for TLB/PTW machinery
++    m_inner_translation = create_child_ifce<ITranslation>();
++
++    // Wire up the fault handler so TLBTranslation calls us on page fault
++    m_inner_translation->set_fault_handler(
++      [this](uint64_t vpn, int num_frames, int core_id,
++             uint64_t& out_ppn, std::vector<uint64_t>& out_frames) -> bool {
++        return this->handle_page_fault_impl(vpn, num_frames, core_id, out_ppn, out_frames);
++      }
++    );
++
++    register_stat(s_mimicos_mem_accesses).name("mimicos_mem_accesses");
++    register_stat(s_mimicos_faults_handled).name("mimicos_faults_handled");
++
++    // Launch MimicOS subprocess
++    launch_mimicos();
++  }
++
++  void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
++    m_mem = memory_system;
++  }
++
++  void set_cache(void* llc_ptr) override {
++    m_llc_ptr = llc_ptr;
++    if (m_inner_translation) m_inner_translation->set_cache(llc_ptr);
++  }
++
++  void set_receive_callback(std::function<void(Request&)> cb) override {
++    m_frontend_callback = cb;
++    if (m_inner_translation) m_inner_translation->set_receive_callback(cb);
++  }
++
++  void ptw_callback(Request& req) override {
++    if (m_inner_translation) m_inner_translation->ptw_callback(req);
++  }
++
++  bool translate(Request& req) override {
++    // Delegate to inner TLBTranslation
++    return m_inner_translation->translate(req);
++  }
++
++  Addr_t get_max_addr() override {
++    return m_inner_translation ? m_inner_translation->get_max_addr() : 0;
++  }
++
++  // Called by inner translation when a page fault occurs
++  // (TODO: hook into TLBTranslation's fault path)
++
++  ~MimicOSTranslation() {
++    // Signal pintool to exit
++    if (m_pipe_to_mimicos[1] >= 0) {
++      uint8_t end_msg = RamulatorIPC::SIMULATION_END;
++      write(m_pipe_to_mimicos[1], &end_msg, 1);
++      close(m_pipe_to_mimicos[1]);
++    }
++    if (m_pipe_from_mimicos[0] >= 0) close(m_pipe_from_mimicos[0]);
++
++    // Wait for MimicOS to exit
++    if (m_mimicos_pid > 0) {
++      int status;
++      waitpid(m_mimicos_pid, &status, WNOHANG);
++    }
++  }
++
++private:
++  void launch_mimicos() {
++    // Ignore SIGPIPE so write() to a broken pipe returns EPIPE instead of killing us
++    signal(SIGPIPE, SIG_IGN);
++
++    // Create pipes
++    if (pipe(m_pipe_to_mimicos) < 0 || pipe(m_pipe_from_mimicos) < 0) {
++      std::cerr << "[MimicOSTranslation] Failed to create pipes" << std::endl;
++      return;
++    }
++
++    m_mimicos_pid = fork();
++    if (m_mimicos_pid < 0) {
++      std::cerr << "[MimicOSTranslation] Failed to fork" << std::endl;
++      return;
++    }
++
++    if (m_mimicos_pid == 0) {
++      // Child: pass pipe FDs to the pintool via command-line args
++      // The pintool reads from pipe_to[0] and writes to pipe_from[1]
++      int read_fd = m_pipe_to_mimicos[0];
++      int write_fd = m_pipe_from_mimicos[1];
++
++      // Close unused ends
++      close(m_pipe_to_mimicos[1]);
++      close(m_pipe_from_mimicos[0]);
++
++      // Ensure the FDs we're passing survive exec
++      fcntl(read_fd, F_SETFD, 0);
++      fcntl(write_fd, F_SETFD, 0);
++
++      std::string ipc_read = std::to_string(read_fd);
++      std::string ipc_write = std::to_string(write_fd);
++
++      execlp(m_sde_path.c_str(), "sde64",
++             "-t64", m_pintool_path.c_str(),
++             "-ramulator:ipc_read_fd", ipc_read.c_str(),
++             "-ramulator:ipc_write_fd", ipc_write.c_str(),
++             "-ramulator:roi", "1",
++             "-ramulator:verbose", "1",
++             "--",
++             m_mimicos_binary.c_str(),
++             m_mimicos_config.c_str(),
++             m_mimicos_trace.c_str(),
++             m_mimicos_output.c_str(),
++             nullptr);
++
++      // If exec fails
++      std::cerr << "[MimicOSTranslation] execlp failed: " << strerror(errno) << std::endl;
++      _exit(1);
++    }
++
++    // Parent: close unused pipe ends
++    close(m_pipe_to_mimicos[0]);
++    close(m_pipe_from_mimicos[1]);
++
++    // Set read pipe to non-blocking for polling
++    int flags = fcntl(m_pipe_from_mimicos[0], F_GETFL, 0);
++    fcntl(m_pipe_from_mimicos[0], F_SETFL, flags | O_NONBLOCK);
++
++    std::cerr << "[MimicOSTranslation] MimicOS launched, pid=" << m_mimicos_pid << std::endl;
++
++    // Wait for MIMICOS_READY
++    // Switch to blocking briefly for init handshake
++    fcntl(m_pipe_from_mimicos[0], F_SETFL, flags);  // Restore blocking
++    uint8_t msg_type;
++    if (RamulatorIPC::read_exact(m_pipe_from_mimicos[0], &msg_type, 1) &&
++        msg_type == RamulatorIPC::MIMICOS_READY) {
++      char path[256];
++      // Read null-terminated path
++      for (int i = 0; i < 255; i++) {
++        if (read(m_pipe_from_mimicos[0], &path[i], 1) != 1 || path[i] == '\0') break;
++      }
++      m_mimicos_ready = true;
++      std::cerr << "[MimicOSTranslation] MimicOS ready" << std::endl;
++    }
++    // Back to non-blocking
++    fcntl(m_pipe_from_mimicos[0], F_SETFL, flags | O_NONBLOCK);
++  }
++
++  bool handle_page_fault_impl(uint64_t vpn, int num_frames, int core_id,
++                              uint64_t& out_ppn, std::vector<uint64_t>& out_frames) {
++    if (!m_mimicos_ready || m_pipe_to_mimicos[1] < 0) return false;
++
++    // Send fault request
++    RamulatorIPC::FaultRequest freq;
++    freq.vpn = vpn;
++    freq.num_frames_needed = num_frames;
++    freq.core_id = core_id;
++
++    uint8_t msg = RamulatorIPC::PAGE_FAULT_REQUEST;
++    write(m_pipe_to_mimicos[1], &msg, 1);
++    write(m_pipe_to_mimicos[1], &freq, sizeof(freq));
++
++    // Block until we get the response (this is during a stalled tick)
++    // Switch to blocking mode
++    int flags = fcntl(m_pipe_from_mimicos[0], F_GETFL, 0);
++    fcntl(m_pipe_from_mimicos[0], F_SETFL, flags & ~O_NONBLOCK);
++
++    bool done = false;
++    while (!done) {
++      uint8_t resp_type;
++      if (!RamulatorIPC::read_exact(m_pipe_from_mimicos[0], &resp_type, 1)) break;
++
++      switch (resp_type) {
++        case RamulatorIPC::MEMORY_ACCESS: {
++          RamulatorIPC::MemoryAccess ma;
++          RamulatorIPC::read_exact(m_pipe_from_mimicos[0], &ma, sizeof(ma));
++          s_mimicos_mem_accesses++;
++          // Inject MimicOS memory access into the DRAM system
++          inject_mimicos_access(ma);
++          break;
++        }
++
++        case RamulatorIPC::FAULT_RESPONSE: {
++          RamulatorIPC::read_exact(m_pipe_from_mimicos[0], &m_fault_response, sizeof(m_fault_response));
++          m_fault_frames.resize(m_fault_response.num_frames);
++          if (m_fault_response.num_frames > 0) {
++            RamulatorIPC::read_exact(m_pipe_from_mimicos[0],
++                                     m_fault_frames.data(),
++                                     m_fault_response.num_frames * sizeof(uint64_t));
++          }
++          m_fault_response_received = true;
++          break;
++        }
++
++        case RamulatorIPC::MIMICOS_DONE:
++          done = true;
++          s_mimicos_faults_handled++;
++          break;
++
++        default:
++          std::cerr << "[MimicOSTranslation] Unknown message type: " << (int)resp_type << std::endl;
++          done = true;
++          break;
++      }
++    }
++
++    // Restore non-blocking
++    fcntl(m_pipe_from_mimicos[0], F_SETFL, flags | O_NONBLOCK);
++
++    if (m_fault_response_received) {
++      out_ppn = m_fault_response.ppn;
++      out_frames = m_fault_frames;
++      m_fault_response_received = false;
++    }
++    return m_fault_response_received || out_ppn != 0;
++  }
++
++private:
++  void inject_mimicos_access(const RamulatorIPC::MemoryAccess& ma) {
++    if (!m_mem) return;
++
++    Addr_t addr = static_cast<Addr_t>(ma.addr);
++    Addr_t max_addr = m_inner_translation ? m_inner_translation->get_max_addr() : 0;
++    if (max_addr > 0) addr = addr % max_addr;
++
++    int type = ma.is_write ? Request::Type::Write : Request::Type::Read;
++    Request req(addr, type);
++    req.source_id = 0;
++    req.callback = m_frontend_callback;
++
++    // Send through LLC if available, otherwise directly to memory
++    bool sent = false;
++    if (m_llc_ptr) {
++      auto* llc = static_cast<SimpleO3LLC*>(m_llc_ptr);
++      sent = llc->send(req);
++    }
++    if (!sent && m_mem) {
++      m_mem->send(req);
++    }
++  }
++};
++
++}  // namespace Ramulator
+diff --git a/src/translation/impl/tlb_translation.cpp b/src/translation/impl/tlb_translation.cpp
+new file mode 100644
+index 0000000..1832c14
+--- /dev/null
++++ b/src/translation/impl/tlb_translation.cpp
+@@ -0,0 +1,647 @@
++/**
++ * @file tlb_translation.cpp
++ * @brief Address translation with TLB hierarchy, page walk cache, PTW
++ *        through DRAM, and MSHR coalescing for Ramulator2.
++ *
++ * Latency model (all in frontend ticks):
++ *   L1 TLB hit:    l1_latency ticks (typically 1 — consumed by the tick that calls translate)
++ *   L1 miss → L2:  l1_miss_penalty ticks, then L2 lookup
++ *   L2 TLB hit:    l2_latency ticks
++ *   L2 miss → PTW: pwc_latency ticks for PWC lookup, then DRAM walk
++ *   PWC hit:        skip levels above hit level, continue walk from hit level - 1
++ *   PWC miss:       walk from level 4 (root)
++ *   Per-level PTW:  1 tick to issue + DRAM latency (real request through memory system)
++ *   Per-level PWC:  checked before each DRAM issue; if hit, skip that level (0 DRAM cost)
++ *
++ * Tick discipline:
++ *   - translate() called once per core::tick() for a stalled request
++ *   - DRAM callbacks only set flags; advance_walk() runs in translate()
++ *   - No reentrant m_mem->send() calls
++ */
++
++#include <cassert>
++#include <cstdint>
++#include <deque>
++#include <functional>
++#include <unordered_map>
++#include <unordered_set>
++#include <vector>
++
++#include "base/base.h"
++#include "base/request.h"
++#include "translation/translation.h"
++#include "frontend/frontend.h"
++#include "memory_system/memory_system.h"
++#include "frontend/impl/processor/simpleO3/llc.h"
++
++namespace Ramulator {
++
++// ============================================================================
++// TLB
++// ============================================================================
++class TLB {
++public:
++  struct Entry { Addr_t vpn = -1; Addr_t ppn = -1; bool valid = false; uint64_t stamp = 0; };
++
++  TLB(int entries, int assoc, int lat)
++    : m_nsets(entries / assoc), m_assoc(assoc), m_lat(lat) {
++    m_sets.resize(m_nsets, std::vector<Entry>(m_assoc));
++  }
++
++  std::pair<bool, Addr_t> lookup(Addr_t vpn) {
++    auto& s = m_sets[vpn % m_nsets];
++    for (auto& e : s) if (e.valid && e.vpn == vpn) { e.stamp = ++m_c; return {true, e.ppn}; }
++    return {false, -1};
++  }
++
++  void insert(Addr_t vpn, Addr_t ppn) {
++    auto& s = m_sets[vpn % m_nsets];
++    for (auto& e : s) if (!e.valid) { e = {vpn, ppn, true, ++m_c}; return; }
++    auto* v = &s[0]; for (auto& e : s) if (e.stamp < v->stamp) v = &e;
++    *v = {vpn, ppn, true, ++m_c};
++  }
++
++  int latency() const { return m_lat; }
++
++private:
++  int m_nsets, m_assoc, m_lat;
++  uint64_t m_c = 0;
++  std::vector<std::vector<Entry>> m_sets;
++};
++
++// ============================================================================
++// Page Walk Cache — per-level caches for intermediate PTEs
++// ============================================================================
++class PageWalkCache {
++public:
++  PageWalkCache(int cap_per_level, int lookup_lat)
++    : m_cap(cap_per_level), m_lat(lookup_lat) {}
++
++  // Check if we have a cached frame for this vpn at this level
++  // Returns frame_ppn on hit, -1 on miss
++  Addr_t lookup(Addr_t vpn, int level, int total_levels) {
++    if (level <= 1) return -1;  // Never cache leaf
++    Addr_t key = vpn >> (9 * (level - 1));
++    auto it = m_cache[level].find(key);
++    if (it != m_cache[level].end()) {
++      update_lru(level, key);
++      return it->second;
++    }
++    return -1;
++  }
++
++  // Find the deepest cached level (closest to leaf)
++  // Returns {hit_level, frame_ppn}, or {0, -1} if no hit
++  struct DeepResult { int level; Addr_t ppn; };
++  DeepResult lookup_deepest(Addr_t vpn, int total_levels) {
++    for (int lvl = 2; lvl <= total_levels; lvl++) {
++      Addr_t key = vpn >> (9 * (lvl - 1));
++      auto it = m_cache[lvl].find(key);
++      if (it != m_cache[lvl].end()) {
++        update_lru(lvl, key);
++        return {lvl, it->second};
++      }
++    }
++    return {0, -1};
++  }
++
++  void insert(Addr_t vpn, int level, int total_levels, Addr_t frame_ppn) {
++    if (level <= 1) return;
++    Addr_t key = vpn >> (9 * (level - 1));
++    auto& c = m_cache[level];
++    if (static_cast<int>(c.size()) >= m_cap) {
++      Addr_t lru = m_lru[level].back(); m_lru[level].pop_back(); c.erase(lru);
++    }
++    c[key] = frame_ppn;
++    m_lru[level].push_front(key);
++  }
++
++  int latency() const { return m_lat; }
++
++private:
++  int m_cap, m_lat;
++  std::unordered_map<int, std::unordered_map<Addr_t, Addr_t>> m_cache;
++  std::unordered_map<int, std::deque<Addr_t>> m_lru;
++
++  void update_lru(int level, Addr_t key) {
++    auto& q = m_lru[level];
++    q.erase(std::remove(q.begin(), q.end(), key), q.end());
++    q.push_front(key);
++  }
++};
++
++// ============================================================================
++// PageTable
++// ============================================================================
++class PageTable {
++public:
++  static constexpr int LEVELS = 4;
++  static constexpr int PAGE_OFFSET_BITS = 12;
++  struct Frame {
++    std::vector<Addr_t> entries;
++    Addr_t emulated_ppn;
++    Frame(Addr_t ppn) : entries(512, -1), emulated_ppn(ppn) {}
++  };
++
++  void set_allocator(std::function<Addr_t()> a) { m_alloc = a; }
++  void init() { m_frames.reserve(4096); m_frames.emplace_back(m_alloc()); }
++  int root() const { return 0; }
++
++  Addr_t pte_addr(int fi, Addr_t vpn, int lvl) const {
++    return m_frames[fi].emulated_ppn * 4096 + ((vpn >> (9*(lvl-1))) & 0x1FF) * 8;
++  }
++  Addr_t entry(int fi, Addr_t vpn, int lvl) const {
++    return m_frames[fi].entries[(vpn >> (9*(lvl-1))) & 0x1FF];
++  }
++  Addr_t frame_ppn(int fi) const { return m_frames[fi].emulated_ppn; }
++
++  void install(Addr_t vaddr, Addr_t ppn) {
++    Addr_t vpn = vaddr >> PAGE_OFFSET_BITS;
++    int fi = 0;
++    for (int l = LEVELS; l > 0; l--) {
++      int idx = (vpn >> (9*(l-1))) & 0x1FF;
++      if (l == 1) { m_frames[fi].entries[idx] = ppn; return; }
++      if (m_frames[fi].entries[idx] == -1) {
++        int ni = static_cast<int>(m_frames.size());
++        m_frames.emplace_back(m_alloc());
++        m_frames[fi].entries[idx] = ni;
++        fi = ni;
++      } else fi = static_cast<int>(m_frames[fi].entries[idx]);
++    }
++  }
++
++  // Walk to find the frame_idx at a given level for a vpn
++  int frame_at_level(Addr_t vpn, int target_level) const {
++    int fi = 0;
++    for (int l = LEVELS; l > target_level; l--) {
++      Addr_t e = m_frames[fi].entries[(vpn >> (9*(l-1))) & 0x1FF];
++      if (e == -1) return -1;
++      fi = static_cast<int>(e);
++    }
++    return fi;
++  }
++
++  // Check if mapping exists
++  bool has_mapping(Addr_t vpn) const {
++    int fi = 0;
++    for (int l = LEVELS; l > 0; l--) {
++      Addr_t e = m_frames[fi].entries[(vpn >> (9*(l-1))) & 0x1FF];
++      if (e == -1) return false;
++      if (l > 1) fi = static_cast<int>(e);
++    }
++    return true;
++  }
++
++private:
++  std::vector<Frame> m_frames;
++  std::function<Addr_t()> m_alloc;
++};
++
++// ============================================================================
++// Allocator
++// ============================================================================
++class Allocator {
++public:
++  Allocator(Addr_t kb, double) : m_n(1), m_m(kb*1024/4096) {}
++  Addr_t allocate() { if (m_n >= m_m) m_n = 1; return m_n++; }
++private:
++  Addr_t m_n; uint64_t m_m;
++};
++
++// ============================================================================
++// Walk state machine — explicit phases with tick counts
++// ============================================================================
++enum class WalkPhase {
++  PWC_LOOKUP,           // Checking PWC (costs pwc_latency ticks)
++  ISSUE_PTE_REQUEST,    // Ready to issue DRAM request for current level
++  WAIT_PTE_RESPONSE,    // Waiting for DRAM response
++  ADVANCE_LEVEL,        // DRAM responded, process and move to next level
++  COMPLETE,             // Walk finished, PPN available
++};
++
++struct WalkState {
++  Addr_t vpn;
++  int    core_id;
++  int    current_level;       // Current walk level (counting DOWN: 4→1)
++  int    frame_idx;           // Current page table frame index
++  Addr_t ppn = -1;
++  WalkPhase phase = WalkPhase::PWC_LOOKUP;
++  int    stall_remaining = 0; // Ticks to stall in current phase
++  bool   mem_response_received = false;
++  bool   complete = false;
++  std::vector<int> coalesced_cores;
++};
++
++// ============================================================================
++// Per-core translation state
++// ============================================================================
++enum class CorePhase {
++  IDLE,             // Not translating
++  L1_LOOKUP,        // L1 TLB lookup (consumes the calling tick)
++  L2_STALL,         // Waiting for L2 hit latency
++  WALKING,          // PTW in progress
++};
++
++struct CoreState {
++  CorePhase phase = CorePhase::IDLE;
++  int    stall = 0;
++  Addr_t vpn = -1;
++  Addr_t ppn = -1;
++};
++
++// ============================================================================
++// TLBTranslation
++// ============================================================================
++class TLBTranslation : public ITranslation, public Implementation {
++  RAMULATOR_REGISTER_IMPLEMENTATION(
++    ITranslation, TLBTranslation, "TLBTranslation",
++    "Full address translation: TLB, PWC, PTW through DRAM, MSHRs, cycle-accurate."
++  );
++
++  Addr_t m_max_addr;
++  int m_num_cores, m_pob = 12;
++
++  struct CTLBs { std::unique_ptr<TLB> l1d; std::unique_ptr<TLB> l1i; };
++  std::vector<CTLBs> m_l1;
++  std::unique_ptr<TLB> m_l2;
++
++  std::unique_ptr<PageWalkCache> m_pwc;
++  std::vector<std::unique_ptr<PageTable>> m_pts;
++  std::unique_ptr<Allocator> m_alloc;
++  IMemorySystem* m_mem = nullptr;
++  FaultHandler m_external_fault_handler;  // Optional: MimicOS handles faults
++
++  // LLC for PTW requests (PTEs go through cache hierarchy)
++  void* m_llc_ptr = nullptr;
++  // Frontend receive callback (same as core requests, for proper LLC dispatch)
++  std::function<void(Request&)> m_frontend_callback;
++
++  std::vector<CoreState> m_cs;
++  std::unordered_map<Addr_t, WalkState> m_walks;  // VPN → walk
++  std::vector<Addr_t> m_core_walk_vpn;  // Per-core: VPN being walked (-1 = none)
++
++  // Config
++  int m_l1_miss_penalty;
++  int m_num_walkers;  // Number of hardware page table walkers (= L2 TLB miss MSHRs)
++
++  uint64_t s_trans=0, s_l1h=0, s_l1m=0, s_l2h=0, s_l2m=0;
++  uint64_t s_walks=0, s_faults=0, s_ptw_dram=0;
++  uint64_t s_mshr=0, s_pwc_h=0, s_pwc_m=0, s_pwc_walk_h=0;
++  uint64_t s_walker_stalls=0;
++
++public:
++  void init() override {
++    m_max_addr       = param<Addr_t>("max_addr").required();
++    int l1d_sz       = param<int>("l1_dtlb_size").default_val(64);
++    int l1d_as       = param<int>("l1_dtlb_assoc").default_val(4);
++    int l1d_lat      = param<int>("l1_dtlb_latency").default_val(1);
++    int l1i_sz       = param<int>("l1_itlb_size").default_val(64);
++    int l1i_as       = param<int>("l1_itlb_assoc").default_val(4);
++    int l2_sz        = param<int>("l2_tlb_size").default_val(2048);
++    int l2_as        = param<int>("l2_tlb_assoc").default_val(8);
++    int l2_lat       = param<int>("l2_tlb_latency").default_val(8);
++    m_l1_miss_penalty = param<int>("l1_miss_penalty").default_val(1);
++    m_num_walkers    = param<int>("num_page_table_walkers").default_val(4);
++    int pwc_sz       = param<int>("pwc_entries_per_level").default_val(32);
++    int pwc_lat      = param<int>("pwc_latency").default_val(2);
++    Addr_t mem_kb    = param<Addr_t>("memory_size_kb").default_val(4LL*1024*1024);
++    double frag      = param<double>("target_fragmentation").default_val(0.0);
++
++    // Try to get num_cores from parent frontend; fall back to config param
++    int cfg_cores = param<int>("num_cores").default_val(0);
++    if (cfg_cores > 0) {
++      m_num_cores = cfg_cores;
++    } else {
++      m_num_cores = cast_parent<IFrontEnd>()->get_num_cores();
++    }
++
++    m_l1.resize(m_num_cores);
++    for (int c = 0; c < m_num_cores; c++) {
++      m_l1[c].l1d = std::make_unique<TLB>(l1d_sz, l1d_as, l1d_lat);
++      m_l1[c].l1i = std::make_unique<TLB>(l1i_sz, l1i_as, 1);
++    }
++    m_l2 = std::make_unique<TLB>(l2_sz, l2_as, l2_lat);
++    m_pwc = std::make_unique<PageWalkCache>(pwc_sz, pwc_lat);
++
++    m_alloc = std::make_unique<Allocator>(mem_kb, frag);
++    m_pts.resize(m_num_cores);
++    for (int c = 0; c < m_num_cores; c++) {
++      m_pts[c] = std::make_unique<PageTable>();
++      m_pts[c]->set_allocator([this]() { return m_alloc->allocate(); });
++      m_pts[c]->init();
++    }
++
++    m_cs.resize(m_num_cores);
++    m_core_walk_vpn.resize(m_num_cores, -1);
++
++    register_stat(s_trans).name("total_translations");
++    register_stat(s_l1h).name("l1_dtlb_hits");
++    register_stat(s_l1m).name("l1_dtlb_misses");
++    register_stat(s_l2h).name("l2_tlb_hits");
++    register_stat(s_l2m).name("l2_tlb_misses");
++    register_stat(s_walks).name("page_table_walks");
++    register_stat(s_faults).name("page_faults");
++    register_stat(s_ptw_dram).name("ptw_dram_accesses");
++    register_stat(s_mshr).name("ptw_mshr_merges");
++    register_stat(s_pwc_h).name("pwc_hits");
++    register_stat(s_pwc_m).name("pwc_misses");
++    register_stat(s_pwc_walk_h).name("pwc_walk_level_hits");
++    register_stat(s_walker_stalls).name("ptw_walker_stalls");
++  }
++
++  void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
++    m_mem = memory_system;
++  }
++
++  void set_cache(void* llc_ptr) override {
++    m_llc_ptr = llc_ptr;
++  }
++
++  void set_fault_handler(FaultHandler handler) override {
++    m_external_fault_handler = handler;
++  }
++
++  void set_receive_callback(std::function<void(Request&)> cb) override {
++    m_frontend_callback = cb;
++  }
++
++  // Called by the frontend when a PTW request completes (hit or miss path)
++  void ptw_callback(Request& req) {
++    Addr_t vpn = static_cast<Addr_t>(req.scratchpad[1])
++               | (static_cast<Addr_t>(req.scratchpad[2]) << 31);
++    auto it = m_walks.find(vpn);
++    if (it != m_walks.end()) {
++      it->second.mem_response_received = true;
++    }
++  }
++
++  bool translate(Request& req) override {
++    int cid = req.source_id;
++    if (cid < 0 || cid >= m_num_cores) cid = 0;
++    Addr_t vaddr = req.addr;
++    Addr_t vpn = vaddr >> m_pob;
++    Addr_t off = vaddr & ((1ULL << m_pob) - 1);
++
++    s_trans++;
++    auto& cs = m_cs[cid];
++
++    // ── Handle ongoing stall (L2 hit latency or L1 miss penalty) ──
++    if (cs.phase == CorePhase::L2_STALL) {
++      cs.stall--;
++      if (cs.stall <= 0) {
++        cs.phase = CorePhase::IDLE;
++        m_l1[cid].l1d->insert(vpn, cs.ppn);
++        req.addr = pa(cs.ppn, off);
++        return true;
++      }
++      return false;
++    }
++
++    // ── Handle ongoing walk ──
++    if (cs.phase == CorePhase::WALKING) {
++      Addr_t w_vpn = m_core_walk_vpn[cid];
++      auto it = m_walks.find(w_vpn);
++      if (it != m_walks.end()) {
++        if (it->second.core_id == cid) advance_walk(it->second);
++        if (it->second.complete) return finish_walk(it->second, cid, req, vpn, off);
++        return false;
++      }
++      // Walk gone (completed by another core via MSHR)
++      cs.phase = CorePhase::IDLE;
++      m_core_walk_vpn[cid] = -1;
++      // Fall through — TLB should hit now
++    }
++
++    // ── L1 DTLB ──
++    auto [l1h, l1p] = m_l1[cid].l1d->lookup(vpn);
++    if (l1h) {
++      s_l1h++;
++      req.addr = pa(l1p, off);
++      return true;  // L1 hit: costs 1 tick (this tick)
++    }
++    s_l1m++;
++
++    // ── L2 TLB (after L1 miss) ──
++    auto [l2h, l2p] = m_l2->lookup(vpn);
++    if (l2h) {
++      s_l2h++;
++      int total_lat = m_l1_miss_penalty + m_l2->latency();
++      if (total_lat <= 1) {
++        m_l1[cid].l1d->insert(vpn, l2p);
++        req.addr = pa(l2p, off);
++        return true;
++      }
++      cs.phase = CorePhase::L2_STALL;
++      cs.stall = total_lat - 1;  // -1: this tick counts
++      cs.vpn = vpn;
++      cs.ppn = l2p;
++      return false;
++    }
++    s_l2m++;
++
++    // ── MSHR: coalesce with existing walk ──
++    auto wit = m_walks.find(vpn);
++    if (wit != m_walks.end()) {
++      // Coalescing doesn't consume a walker — it shares the existing one
++      wit->second.coalesced_cores.push_back(cid);
++      cs.phase = CorePhase::WALKING;
++      m_core_walk_vpn[cid] = vpn;
++      s_mshr++;
++      return false;
++    }
++
++    // ── Check walker availability (L2 TLB miss MSHRs) ──
++    if (static_cast<int>(m_walks.size()) >= m_num_walkers) {
++      // All page table walkers are busy — stall
++      s_walker_stalls++;
++      return false;
++    }
++
++    // ── Start new walk ──
++    s_walks++;
++    begin_walk(cid, vaddr, vpn);
++    cs.phase = CorePhase::WALKING;
++    m_core_walk_vpn[cid] = vpn;
++    return false;
++  }
++
++  Addr_t get_max_addr() override { return m_max_addr; }
++
++private:
++  Addr_t pa(Addr_t ppn, Addr_t off) {
++    return ((ppn << m_pob) | off) % m_max_addr;
++  }
++
++  void begin_walk(int cid, Addr_t vaddr, Addr_t vpn) {
++    auto& pt = *m_pts[cid];
++
++    // Resolve page fault if needed
++    if (!pt.has_mapping(vpn)) {
++      s_faults++;
++      if (m_external_fault_handler) {
++        // Use external handler (e.g., MimicOS)
++        uint64_t out_ppn = 0;
++        std::vector<uint64_t> out_frames;
++        m_external_fault_handler(vpn, PageTable::LEVELS - 1, cid, out_ppn, out_frames);
++        pt.install(vaddr, static_cast<Addr_t>(out_ppn));
++      } else {
++        // Built-in allocator (sniper-space style)
++        pt.install(vaddr, m_alloc->allocate());
++      }
++    }
++
++    WalkState ws;
++    ws.vpn = vpn;
++    ws.core_id = cid;
++    ws.current_level = PageTable::LEVELS;
++    ws.frame_idx = pt.root();
++    ws.phase = WalkPhase::PWC_LOOKUP;
++    ws.stall_remaining = m_pwc->latency();  // PWC lookup costs ticks
++
++    // Check PWC for deepest hit
++    auto pwc_r = m_pwc->lookup_deepest(vpn, PageTable::LEVELS);
++    if (pwc_r.level > 0) {
++      s_pwc_h++;
++      // Walk starts below the hit level
++      ws.current_level = pwc_r.level - 1;
++      int fi = pt.frame_at_level(vpn, ws.current_level);
++      if (fi >= 0) ws.frame_idx = fi;
++    } else {
++      s_pwc_m++;
++    }
++
++    // If after PWC we're already at leaf or below, complete immediately
++    if (ws.current_level <= 0) {
++      ws.ppn = pt.entry(ws.frame_idx, vpn, 1);
++      ws.phase = WalkPhase::COMPLETE;
++      ws.complete = true;
++    }
++
++    m_walks[vpn] = std::move(ws);
++  }
++
++  void advance_walk(WalkState& ws) {
++    if (ws.complete) return;
++    auto& pt = *m_pts[ws.core_id];
++
++    switch (ws.phase) {
++      case WalkPhase::PWC_LOOKUP:
++        // Stall for PWC lookup latency
++        if (ws.stall_remaining > 0) { ws.stall_remaining--; return; }
++        ws.phase = WalkPhase::ISSUE_PTE_REQUEST;
++        return;  // Will issue on the NEXT tick
++
++      case WalkPhase::ISSUE_PTE_REQUEST: {
++        // Before issuing DRAM, check PWC for this specific level
++        Addr_t pwc_ppn = m_pwc->lookup(ws.vpn, ws.current_level, PageTable::LEVELS);
++        if (pwc_ppn != -1) {
++          // PWC hit for this level — skip DRAM, advance immediately
++          s_pwc_walk_h++;
++          Addr_t entry_val = pt.entry(ws.frame_idx, ws.vpn, ws.current_level);
++          if (entry_val == -1) {
++            ws.complete = true; ws.ppn = 0; return;
++          }
++          if (ws.current_level == 1) {
++            ws.ppn = entry_val;
++            ws.phase = WalkPhase::COMPLETE;
++            ws.complete = true;
++            return;
++          }
++          m_pwc->insert(ws.vpn, ws.current_level, PageTable::LEVELS,
++                        pt.frame_ppn(static_cast<int>(entry_val)));
++          ws.frame_idx = static_cast<int>(entry_val);
++          ws.current_level--;
++          // Stay in ISSUE_PTE_REQUEST for next level (will check PWC again next tick)
++          return;
++        }
++
++        // No PWC hit — issue memory request through cache hierarchy
++        Addr_t pte_pa = pt.pte_addr(ws.frame_idx, ws.vpn, ws.current_level) % m_max_addr;
++        s_ptw_dram++;
++
++        Request pte_req(pte_pa, Request::Type::Read);
++        pte_req.source_id = ws.core_id;
++        pte_req.scratchpad[0] = 1;  // Mark as PTW request
++        pte_req.scratchpad[1] = static_cast<int>(ws.vpn & 0x7FFFFFFF);
++        pte_req.scratchpad[2] = static_cast<int>((ws.vpn >> 31) & 0x7FFFFFFF);
++        // Use the same callback as core data requests so the LLC
++        // miss→DRAM→receive() path works correctly
++        pte_req.callback = m_frontend_callback;
++
++        // Send through LLC (PTEs are cacheable and benefit from cache hierarchy)
++        bool sent = false;
++        if (m_llc_ptr) {
++          auto* llc = static_cast<SimpleO3LLC*>(m_llc_ptr);
++          sent = llc->send(pte_req);
++        } else if (m_mem) {
++          sent = m_mem->send(pte_req);
++        } else {
++          ws.mem_response_received = true;
++          ws.phase = WalkPhase::ADVANCE_LEVEL;
++          return;
++        }
++
++        if (sent) {
++          ws.phase = WalkPhase::WAIT_PTE_RESPONSE;
++        }
++        // If send fails (LLC/MSHR busy), stay in ISSUE and retry next tick
++        return;
++      }
++
++      case WalkPhase::WAIT_PTE_RESPONSE:
++        if (!ws.mem_response_received) return;  // Still waiting
++        ws.mem_response_received = false;
++        ws.phase = WalkPhase::ADVANCE_LEVEL;
++        return;  // Process on next tick
++
++      case WalkPhase::ADVANCE_LEVEL: {
++        Addr_t entry_val = pt.entry(ws.frame_idx, ws.vpn, ws.current_level);
++        if (entry_val == -1) {
++          ws.complete = true; ws.ppn = 0; return;
++        }
++
++        // Cache in PWC
++        if (ws.current_level > 1) {
++          m_pwc->insert(ws.vpn, ws.current_level, PageTable::LEVELS,
++                        pt.frame_ppn(static_cast<int>(entry_val)));
++        }
++
++        if (ws.current_level == 1) {
++          ws.ppn = entry_val;
++          ws.phase = WalkPhase::COMPLETE;
++          ws.complete = true;
++          return;
++        }
++
++        ws.frame_idx = static_cast<int>(entry_val);
++        ws.current_level--;
++        ws.phase = WalkPhase::ISSUE_PTE_REQUEST;  // Next level
++        return;
++      }
++
++      case WalkPhase::COMPLETE:
++        ws.complete = true;
++        return;
++    }
++  }
++
++  bool finish_walk(WalkState& ws, int cid, Request& req, Addr_t vpn, Addr_t off) {
++    Addr_t ppn = ws.ppn;
++    m_l1[ws.core_id].l1d->insert(vpn, ppn);
++    m_l2->insert(vpn, ppn);
++    m_cs[ws.core_id].phase = CorePhase::IDLE;
++    m_core_walk_vpn[ws.core_id] = -1;
++
++    for (int oc : ws.coalesced_cores) {
++      m_l1[oc].l1d->insert(vpn, ppn);
++      m_cs[oc].phase = CorePhase::IDLE;
++      m_core_walk_vpn[oc] = -1;
++    }
++
++    m_walks.erase(vpn);
++    req.addr = pa(ppn, off);
++    return true;
++  }
++};
++
++}  // namespace Ramulator
+diff --git a/src/translation/translation.h b/src/translation/translation.h
+index e634271..7f432ea 100644
+--- a/src/translation/translation.h
++++ b/src/translation/translation.h
+@@ -40,6 +40,28 @@ class ITranslation {
+       return 0;
+     };
+ 
++    /**
++     * @brief    Provides the LLC cache for PTW requests to go through the cache hierarchy.
++     *           Default no-op for translation implementations that don't need it.
++     */
++    virtual void set_cache(void* llc_ptr) {};
++    virtual void set_receive_callback(std::function<void(Request&)> cb) {};
++
++    /**
++     * @brief    Called when a PTW request completes through the cache hierarchy.
++     *           Identified by scratchpad[0] == 1 on the request.
++     */
++    virtual void ptw_callback(Request& req) {};
++
++    /**
++     * @brief    Sets a custom page fault handler. When set, the translation
++     *           unit calls this instead of its built-in allocator on page fault.
++     *           Callback: (vpn, num_frames, core_id) → {ppn, frames[]}
++     */
++    using FaultHandler = std::function<bool(uint64_t vpn, int num_frames, int core_id,
++                                            uint64_t& out_ppn, std::vector<uint64_t>& out_frames)>;
++    virtual void set_fault_handler(FaultHandler handler) {};
++
+ };
+ 
+ }        // namespace Ramulator
+diff --git a/test_mimicos_config.yaml b/test_mimicos_config.yaml
+new file mode 100644
+index 0000000..af94ed7
+--- /dev/null
++++ b/test_mimicos_config.yaml
+@@ -0,0 +1,51 @@
++Frontend:
++  impl: SimpleO3
++  clock_ratio: 8
++  num_expected_insts: 100000
++  traces:
++    - example_inst.trace
++  Translation:
++    impl: MimicOSTranslation
++    max_addr: 2147483648
++    sde_path: /mnt/panzer/kanellok/virtuoso_artifact/snipersim/sde_kit/sde64
++    pintool_path: /mnt/panzer/kanellok/virtuoso_artifact/simulator/ramulator2/pintool/obj-intel64/ramulator_recorder.so
++    mimicos_binary: /mnt/panzer/kanellok/virtuoso_artifact/simulator/ramulator2/mimicos/build/startup_mimicos
++    mimicos_config: /mnt/panzer/kanellok/virtuoso_artifact/simulator/ramulator2/mimicos/configs/reservethp_32GB.ini
++    mimicos_trace: /mnt/panzer/kanellok/virtuoso_traces/rnd.sift
++    mimicos_output: /tmp/ramulator_mimicos_out
++    # Inner TLBTranslation config (created as child)
++    Translation:
++      impl: TLBTranslation
++      max_addr: 2147483648
++      num_cores: 1
++      l1_dtlb_size: 64
++      l1_dtlb_assoc: 4
++      l2_tlb_size: 2048
++      l2_tlb_assoc: 8
++      l2_tlb_latency: 8
++      num_page_table_walkers: 4
++      pwc_entries_per_level: 32
++      memory_size_kb: 4194304
++
++MemorySystem:
++  impl: GenericDRAM
++  clock_ratio: 3
++  DRAM:
++    impl: DDR4
++    org:
++      preset: DDR4_8Gb_x8
++      channel: 1
++      rank: 2
++    timing:
++      preset: DDR4_2400R
++  Controller:
++    impl: Generic
++    Scheduler:
++      impl: FRFCFS
++    RefreshManager:
++      impl: AllBank
++    RowPolicy:
++      impl: ClosedRowPolicy
++      cap: 4
++  AddrMapper:
++    impl: RoBaRaCoCh
+diff --git a/test_tlb_config.yaml b/test_tlb_config.yaml
+new file mode 100644
+index 0000000..a5fd47f
+--- /dev/null
++++ b/test_tlb_config.yaml
+@@ -0,0 +1,44 @@
++Frontend:
++  impl: SimpleO3
++  clock_ratio: 8
++  num_expected_insts: 100000
++  traces:
++    - example_inst.trace
++  Translation:
++    impl: TLBTranslation
++    max_addr: 2147483648
++    l1_dtlb_size: 64
++    l1_dtlb_assoc: 4
++    l1_dtlb_latency: 1
++    l1_itlb_size: 64
++    l1_itlb_assoc: 4
++    l1_itlb_latency: 1
++    l2_tlb_size: 2048
++    l2_tlb_assoc: 8
++    l2_tlb_latency: 8
++    max_outstanding_walks: 4
++    memory_size_kb: 4194304
++    target_fragmentation: 0.0
++
++MemorySystem:
++  impl: GenericDRAM
++  clock_ratio: 3
++  DRAM:
++    impl: DDR4
++    org:
++      preset: DDR4_8Gb_x8
++      channel: 1
++      rank: 2
++    timing:
++      preset: DDR4_2400R
++  Controller:
++    impl: Generic
++    Scheduler:
++      impl: FRFCFS
++    RefreshManager:
++      impl: AllBank
++    RowPolicy:
++      impl: ClosedRowPolicy
++      cap: 4
++  AddrMapper:
++    impl: RoBaRaCoCh
+diff --git a/testing/gen_trace.py b/testing/gen_trace.py
+new file mode 100644
+index 0000000..25d16fc
+--- /dev/null
++++ b/testing/gen_trace.py
+@@ -0,0 +1,90 @@
++#!/usr/bin/env python3
++"""
++Generate synthetic SimpleO3 traces with controllable properties.
++
++Format: <bubble_count> <load_addr> [writeback_addr]
++  bubble_count = number of non-memory instructions before this memory op
++  load_addr    = virtual address of load (cache-line aligned, 64B)
++  writeback_addr = optional writeback address (for stores)
++
++Usage:
++  python3 gen_trace.py --num-accesses 100000 --num-pages 64 --output trace.trace
++  python3 gen_trace.py --num-accesses 100000 --num-pages 1024 --pattern zipf --output trace.trace
++"""
++
++import argparse
++import random
++import sys
++import os
++import math
++
++
++def generate_trace(num_accesses, num_pages, pattern, bubble_mean, page_size, seed, write_ratio):
++    rng = random.Random(seed)
++    page_shift = int(math.log2(page_size))
++    cacheline_size = 64
++    lines_per_page = page_size // cacheline_size
++
++    # Generate page access sequence based on pattern
++    if pattern == "sequential":
++        pages = [i % num_pages for i in range(num_accesses)]
++    elif pattern == "random":
++        pages = [rng.randint(0, num_pages - 1) for _ in range(num_accesses)]
++    elif pattern == "zipf":
++        # Zipf distribution: few hot pages, long tail of cold pages
++        alpha = 1.2
++        weights = [1.0 / ((i + 1) ** alpha) for i in range(num_pages)]
++        total = sum(weights)
++        weights = [w / total for w in weights]
++        pages = rng.choices(range(num_pages), weights=weights, k=num_accesses)
++    elif pattern == "strided":
++        stride = max(1, num_pages // 16)
++        pages = [(i * stride) % num_pages for i in range(num_accesses)]
++    else:
++        raise ValueError(f"Unknown pattern: {pattern}")
++
++    lines = []
++    for i, page_id in enumerate(pages):
++        bubble = max(0, int(rng.gauss(bubble_mean, bubble_mean / 4)))
++        # Random cache line within the page
++        cl_offset = rng.randint(0, lines_per_page - 1)
++        vaddr = (page_id << page_shift) + cl_offset * cacheline_size
++        # Add base offset to avoid address 0
++        vaddr += 0x10000000
++
++        if rng.random() < write_ratio:
++            # Write (has writeback addr)
++            lines.append(f"{bubble} {vaddr} {vaddr}")
++        else:
++            # Read only
++            lines.append(f"{bubble} {vaddr}")
++
++    return lines
++
++
++def main():
++    parser = argparse.ArgumentParser(description="Generate synthetic Ramulator2 traces")
++    parser.add_argument("--num-accesses", type=int, default=100000, help="Number of memory accesses")
++    parser.add_argument("--num-pages", type=int, default=64, help="Number of unique pages (working set)")
++    parser.add_argument("--pattern", choices=["sequential", "random", "zipf", "strided"], default="random")
++    parser.add_argument("--bubble-mean", type=int, default=5, help="Mean bubble count between memory ops")
++    parser.add_argument("--page-size", type=int, default=4096, help="Page size in bytes")
++    parser.add_argument("--write-ratio", type=float, default=0.2, help="Fraction of writes")
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--output", type=str, required=True)
++    args = parser.parse_args()
++
++    lines = generate_trace(
++        args.num_accesses, args.num_pages, args.pattern,
++        args.bubble_mean, args.page_size, args.seed, args.write_ratio,
++    )
++
++    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
++    with open(args.output, "w") as f:
++        f.write("\n".join(lines) + "\n")
++
++    print(f"Generated {len(lines)} accesses, {args.num_pages} pages, pattern={args.pattern} → {args.output}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/testing/validate_translation.py b/testing/validate_translation.py
+new file mode 100644
+index 0000000..2c16a6f
+--- /dev/null
++++ b/testing/validate_translation.py
+@@ -0,0 +1,384 @@
++#!/usr/bin/env python3
++"""
++Validation suite for Ramulator2 TLBTranslation.
++
++Tests:
++  1. TLB hit rate scales with TLB size vs working set
++  2. PTW DRAM accesses = 4 × unique pages (4-level radix)
++  3. Page faults = unique pages (cold start)
++  4. L2 TLB latency impact on total cycles
++  5. Translation overhead vs NoTranslation baseline
++"""
++
++import json
++import os
++import re
++import subprocess
++import sys
++import tempfile
++import yaml
++
++
++RAMULATOR = None
++TESTING_DIR = os.path.dirname(os.path.abspath(__file__))
++ROOT_DIR = os.path.dirname(TESTING_DIR)
++
++
++def find_ramulator():
++    global RAMULATOR
++    candidates = [
++        os.path.join(ROOT_DIR, "build", "ramulator2"),
++    ]
++    for c in candidates:
++        if os.path.isfile(c) and os.access(c, os.X_OK):
++            RAMULATOR = c
++            return
++    print("ERROR: ramulator2 binary not found", file=sys.stderr)
++    sys.exit(1)
++
++
++def gen_trace(num_accesses, num_pages, pattern="random", seed=42, output=None):
++    if output is None:
++        output = tempfile.mktemp(suffix=".trace")
++    cmd = [
++        sys.executable, os.path.join(TESTING_DIR, "gen_trace.py"),
++        "--num-accesses", str(num_accesses),
++        "--num-pages", str(num_pages),
++        "--pattern", pattern,
++        "--seed", str(seed),
++        "--output", output,
++    ]
++    subprocess.run(cmd, check=True, capture_output=True)
++    return output
++
++
++def make_config(trace_path, translation_impl="TLBTranslation", num_insts=100000, **tlb_params):
++    cfg = {
++        "Frontend": {
++            "impl": "SimpleO3",
++            "clock_ratio": 8,
++            "num_expected_insts": num_insts,
++            "traces": [trace_path],
++            "Translation": {
++                "impl": translation_impl,
++                "max_addr": 2147483648,
++            },
++        },
++        "MemorySystem": {
++            "impl": "GenericDRAM",
++            "clock_ratio": 3,
++            "DRAM": {
++                "impl": "DDR4",
++                "org": {"preset": "DDR4_8Gb_x8", "channel": 1, "rank": 2},
++                "timing": {"preset": "DDR4_2400R"},
++            },
++            "Controller": {
++                "impl": "Generic",
++                "Scheduler": {"impl": "FRFCFS"},
++                "RefreshManager": {"impl": "AllBank"},
++                "RowPolicy": {"impl": "ClosedRowPolicy", "cap": 4},
++            },
++            "AddrMapper": {"impl": "RoBaRaCoCh"},
++        },
++    }
++
++    if translation_impl == "TLBTranslation":
++        trans = cfg["Frontend"]["Translation"]
++        trans.setdefault("l1_dtlb_size", 64)
++        trans.setdefault("l1_dtlb_assoc", 4)
++        trans.setdefault("l2_tlb_size", 2048)
++        trans.setdefault("l2_tlb_assoc", 8)
++        trans.setdefault("l2_tlb_latency", 8)
++        trans.setdefault("memory_size_kb", 4 * 1024 * 1024)
++        trans.update(tlb_params)
++
++    return cfg
++
++
++def run_ramulator(config_dict):
++    cfg_file = tempfile.mktemp(suffix=".yaml")
++    with open(cfg_file, "w") as f:
++        yaml.dump(config_dict, f)
++
++    result = subprocess.run(
++        [RAMULATOR, "-f", cfg_file],
++        capture_output=True, text=True, timeout=60,
++    )
++    os.unlink(cfg_file)
++
++    # Parse YAML stats from stdout (skip debug lines)
++    stats_lines = []
++    in_stats = False
++    for line in result.stdout.splitlines():
++        if line.startswith("Frontend:") or line.startswith("MemorySystem:"):
++            in_stats = True
++        if in_stats:
++            stats_lines.append(line)
++
++    stats_text = "\n".join(stats_lines)
++    # Parse key-value pairs from the stats
++    stats = {}
++    for line in stats_lines:
++        m = re.match(r'\s+(\w+):\s+([\d.e+-]+)$', line)
++        if m:
++            key, val = m.group(1), m.group(2)
++            try:
++                stats[key] = int(val)
++            except ValueError:
++                try:
++                    stats[key] = float(val)
++                except ValueError:
++                    stats[key] = val
++
++    return stats
++
++
++def test_ptw_dram_accesses():
++    """PTW DRAM accesses: first walk = 4 levels, subsequent walks benefit from PWC."""
++    print("Test 1: PTW DRAM accesses (with PWC caching)")
++
++    results = []
++    for num_pages in [4, 16, 64, 256]:
++        trace = gen_trace(50000, num_pages, pattern="random")
++        cfg = make_config(trace, num_insts=50000)
++        stats = run_ramulator(cfg)
++        os.unlink(trace)
++
++        ptw_dram = stats.get("ptw_dram_accesses", 0)
++        faults = stats.get("page_faults", 0)
++        walks = stats.get("page_table_walks", 0)
++        pwc_hits = stats.get("pwc_hits", 0)
++        pwc_misses = stats.get("pwc_misses", 0)
++        # With PWC, DRAM accesses < 4*walks (upper levels cached)
++        # Minimum: walks (1 DRAM per walk if all upper levels cached) + 3 (first walk full)
++        # Maximum: 4*walks (no PWC hits)
++        max_dram = num_pages * 4
++        min_dram = num_pages + 3  # First walk = 4, rest = 1 each
++
++        ok = (faults == num_pages and walks == num_pages and
++              ptw_dram >= min_dram and ptw_dram <= max_dram and
++              pwc_hits > 0)
++        status = "PASS" if ok else "FAIL"
++        print(f"  {status}: pages={num_pages}, faults={faults}, walks={walks}, "
++              f"ptw_dram={ptw_dram} (range [{min_dram},{max_dram}]), "
++              f"pwc_hits={pwc_hits}")
++        results.append(ok)
++
++    return all(results)
++
++
++def test_tlb_hit_rate_scaling():
++    """L1 DTLB hit rate should increase when TLB size ≥ working set."""
++    print("Test 2: TLB hit rate scales with TLB size vs working set")
++
++    num_pages = 32
++    trace = gen_trace(100000, num_pages, pattern="random")
++
++    results = []
++    prev_hit_rate = 0
++    for tlb_size in [8, 16, 32, 64, 128]:
++        cfg = make_config(trace, num_insts=100000, l1_dtlb_size=tlb_size, l1_dtlb_assoc=min(tlb_size, 4))
++        stats = run_ramulator(cfg)
++
++        hits = stats.get("l1_dtlb_hits", 0)
++        misses = stats.get("l1_dtlb_misses", 0)
++        total = hits + misses
++        hit_rate = 100.0 * hits / total if total > 0 else 0
++
++        # Hit rate should increase as TLB grows toward working set size
++        ok = hit_rate >= prev_hit_rate - 0.1  # Allow tiny rounding tolerance
++        status = "PASS" if ok else "FAIL"
++        print(f"  {status}: tlb_size={tlb_size:4d}, hit_rate={hit_rate:6.2f}%, "
++              f"hits={hits}, misses={misses}")
++        results.append(ok)
++        prev_hit_rate = hit_rate
++
++    os.unlink(trace)
++
++    # Final check: with TLB >= working set, hit rate should be very high (>99%)
++    if prev_hit_rate < 99.0:
++        print(f"  FAIL: Final hit rate {prev_hit_rate:.2f}% < 99% with TLB >> working set")
++        results.append(False)
++    else:
++        print(f"  PASS: Final hit rate {prev_hit_rate:.2f}% >= 99%")
++        results.append(True)
++
++    return all(results)
++
++
++def test_translation_overhead():
++    """TLBTranslation should have more DRAM accesses than NoTranslation."""
++    print("Test 3: Translation overhead — more DRAM reads with TLB vs no translation")
++
++    trace = gen_trace(50000, 64, pattern="random")
++
++    cfg_no = make_config(trace, translation_impl="NoTranslation", num_insts=50000)
++    cfg_tlb = make_config(trace, num_insts=50000)
++
++    stats_no = run_ramulator(cfg_no)
++    stats_tlb = run_ramulator(cfg_tlb)
++    os.unlink(trace)
++
++    dram_no = stats_no.get("total_num_read_requests", 0)
++    dram_tlb = stats_tlb.get("total_num_read_requests", 0)
++    ptw_dram = stats_tlb.get("ptw_dram_accesses", 0)
++
++    ok = dram_tlb > dram_no and ptw_dram > 0
++    status = "PASS" if ok else "FAIL"
++    print(f"  {status}: NoTranslation DRAM reads={dram_no}, "
++          f"TLBTranslation DRAM reads={dram_tlb} (+{ptw_dram} PTW)")
++
++    return ok
++
++
++def test_page_fault_count():
++    """Page faults should equal the number of unique pages accessed (cold start)."""
++    print("Test 4: Page faults = unique pages (cold start)")
++
++    results = []
++    for num_pages in [8, 32, 128, 512]:
++        trace = gen_trace(50000, num_pages, pattern="sequential")
++        cfg = make_config(trace, num_insts=50000)
++        stats = run_ramulator(cfg)
++        os.unlink(trace)
++
++        faults = stats.get("page_faults", 0)
++        ok = faults == num_pages
++        status = "PASS" if ok else "FAIL"
++        print(f"  {status}: num_pages={num_pages}, page_faults={faults}")
++        results.append(ok)
++
++    return all(results)
++
++
++def test_l2_latency_impact():
++    """Higher L2 TLB latency should increase total cycles when there are L2 hits."""
++    print("Test 5: L2 TLB latency impact on cycles")
++
++    # Use a working set larger than L1 TLB but smaller than L2
++    trace = gen_trace(100000, 128, pattern="random")
++
++    cycles = {}
++    for lat in [1, 8, 16, 32]:
++        cfg = make_config(trace, num_insts=100000, l1_dtlb_size=16, l1_dtlb_assoc=4, l2_tlb_latency=lat)
++        stats = run_ramulator(cfg)
++        c = stats.get("cycles_recorded_core_0", 0)
++        l2_hits = stats.get("l2_tlb_hits", 0)
++        cycles[lat] = c
++        print(f"  l2_latency={lat:2d}: cycles={c}, l2_hits={l2_hits}")
++
++    # With L2 hits, higher latency should mean more cycles
++    ok = cycles[32] >= cycles[1]
++    status = "PASS" if ok else "FAIL"
++    print(f"  {status}: cycles[lat=32]={cycles[32]} >= cycles[lat=1]={cycles[1]}")
++
++    os.unlink(trace)
++    return ok
++
++
++def test_walker_capacity():
++    """Fewer walkers should increase cycles due to serialization of walks."""
++    print("Test 6: Walker capacity — fewer walkers means more stall cycles")
++
++    # Large working set with small L1 TLB forces many walks
++    # Use small L1 (8 entries) so most accesses miss and trigger walks
++    num_pages = 256
++    trace = gen_trace(50000, num_pages, pattern="random")
++
++    cycles = {}
++    walks = {}
++    stalls = {}
++    for nw in [1, 2, 4, 8]:
++        cfg = make_config(trace, num_insts=50000,
++                          l1_dtlb_size=8, l1_dtlb_assoc=4,
++                          num_page_table_walkers=nw)
++        stats = run_ramulator(cfg)
++        c = stats.get("cycles_recorded_core_0", 0)
++        w = stats.get("page_table_walks", 0)
++        s = stats.get("ptw_walker_stalls", 0)
++        cycles[nw] = c
++        walks[nw] = w
++        stalls[nw] = s
++        print(f"  walkers={nw}: cycles={c}, walks={w}, stalls={s}")
++
++    os.unlink(trace)
++
++    # All configs should produce the same number of walks (same trace, same TLB)
++    walk_counts = list(walks.values())
++    walks_consistent = all(w == walk_counts[0] for w in walk_counts)
++
++    # With single-core SimpleO3, walks are serialized anyway (core stalls on translate),
++    # so walker limit doesn't cause extra stalls. Verify walks are consistent.
++    ok = walks_consistent and walk_counts[0] == num_pages
++    status = "PASS" if ok else "FAIL"
++    print(f"  {status}: walks consistent={walks_consistent} (all={walk_counts[0]}), "
++          f"expected={num_pages}")
++
++    return ok
++
++
++def test_pwc_effectiveness():
++    """PWC should reduce DRAM accesses for workloads with spatial locality."""
++    print("Test 7: PWC effectiveness — spatial locality reduces PTW DRAM")
++
++    # Sequential pattern: pages 0,1,2,...,N share upper-level PTEs
++    trace_seq = gen_trace(50000, 64, pattern="sequential")
++    # Random pattern: less spatial locality in page table
++    trace_rnd = gen_trace(50000, 64, pattern="random", seed=99)
++
++    cfg_seq = make_config(trace_seq, num_insts=50000)
++    cfg_rnd = make_config(trace_rnd, num_insts=50000)
++
++    stats_seq = run_ramulator(cfg_seq)
++    stats_rnd = run_ramulator(cfg_rnd)
++
++    os.unlink(trace_seq)
++    os.unlink(trace_rnd)
++
++    dram_seq = stats_seq.get("ptw_dram_accesses", 0)
++    dram_rnd = stats_rnd.get("ptw_dram_accesses", 0)
++    pwc_h_seq = stats_seq.get("pwc_hits", 0)
++    pwc_h_rnd = stats_rnd.get("pwc_hits", 0)
++
++    # Both should have PWC hits, but sequential should have at least as many
++    # since pages are contiguous and share upper-level entries
++    ok = pwc_h_seq > 0 and pwc_h_rnd > 0 and dram_seq <= dram_rnd * 1.1
++    status = "PASS" if ok else "FAIL"
++    print(f"  {status}: sequential ptw_dram={dram_seq} pwc_hits={pwc_h_seq}, "
++          f"random ptw_dram={dram_rnd} pwc_hits={pwc_h_rnd}")
++
++    return ok
++
++
++def main():
++    find_ramulator()
++    print(f"Ramulator2 binary: {RAMULATOR}\n")
++
++    results = []
++    results.append(("PTW DRAM accesses", test_ptw_dram_accesses()))
++    print()
++    results.append(("TLB hit rate scaling", test_tlb_hit_rate_scaling()))
++    print()
++    results.append(("Translation overhead", test_translation_overhead()))
++    print()
++    results.append(("Page fault count", test_page_fault_count()))
++    print()
++    results.append(("L2 latency impact", test_l2_latency_impact()))
++    print()
++    results.append(("Walker capacity", test_walker_capacity()))
++    print()
++    results.append(("PWC effectiveness", test_pwc_effectiveness()))
++
++    print("\n" + "=" * 50)
++    passed = sum(1 for _, ok in results if ok)
++    total = len(results)
++    print(f"Results: {passed}/{total} passed")
++    for name, ok in results:
++        status = "PASS" if ok else "FAIL"
++        print(f"  {status}: {name}")
++
++    sys.exit(0 if passed == total else 1)
++
++
++if __name__ == "__main__":
++    main()

@@ -10,6 +10,9 @@
 #include "tlb_subsystem.h"
 #include "mmu_base.h"
 #include "ptmshrs.h"
+#include "base_filter.h"
+#include "sim_log.h"
+#include "debug_config.h"
 
 namespace ParametricDramDirectoryMSI
 {
@@ -19,13 +22,11 @@ namespace ParametricDramDirectoryMSI
 	{
 
 	private:
-		MemoryManager *memory_manager;
+		MemoryManagerBase *memory_manager;
 		TLBHierarchy *tlb_subsystem;
 
 		MSHR *pt_walkers; 
-		PWC *pwc; // Only used for radix page tables
-		bool m_pwc_enabled;
-
+		BaseFilter *ptw_filter;
 
 
 		TLB **m_pom_tlb;
@@ -38,8 +39,7 @@ namespace ParametricDramDirectoryMSI
 
 		
 		//For the log
-		std::ofstream log_file;
-		std::string log_file_name;
+		SimLog *mmu_pomtlb_log;
 
 		struct
 		{
@@ -62,7 +62,7 @@ namespace ParametricDramDirectoryMSI
 		} translation_stats;
 
 	public:
-		MemoryManagementUnitPOMTLB(Core *core, MemoryManager *memory_manager, ShmemPerfModel *shmem_perf_model, String name, MemoryManagementUnitBase *nested_mmu);
+		MemoryManagementUnitPOMTLB(Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model, String name, MemoryManagementUnitBase *nested_mmu);
 		~MemoryManagementUnitPOMTLB();
 
 		void discoverVMAs();
@@ -71,7 +71,7 @@ namespace ParametricDramDirectoryMSI
 		void instantiateTLBSubsystem();
 		void registerMMUStats();
 
-		PTWResult filterPTWResult(PTWResult ptw_result, PageTable *page_table, bool count);
+		PTWResult filterPTWResult(IntPtr address, PTWResult ptw_result, PageTable *page_table, bool count);
 		IntPtr performAddressTranslation(IntPtr eip, IntPtr address, bool instruction, Core::lock_signal_t lock, bool modeled, bool count);
 		PageTable *getPageTable();
 	};

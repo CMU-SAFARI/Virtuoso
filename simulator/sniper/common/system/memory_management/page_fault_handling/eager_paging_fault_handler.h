@@ -1,22 +1,22 @@
 
-#pragma once
-#include "physical_memory_allocator.h"
-#include "page_fault_handler_base.h"
-#include <iostream>
-#include <fstream>
+// #pragma once
+// #include "memory_management/physical_memory_allocators/physical_memory_allocator.h"
+// #include "page_fault_handler_base.h"
+// #include <iostream>
+// #include <fstream>
 
-using namespace std;
+// using namespace std;
 
-class EagerPagingFaultHandler : public PageFaultHandlerBase
-{
-    private:
-        std::ofstream log_file;
-        std::string log_file_name;
-    public:
-        EagerPagingFaultHandler(PhysicalMemoryAllocator *allocator);
-        ~EagerPagingFaultHandler();
+// class EagerPagingFaultHandler : public PageFaultHandlerBase
+// {
+//     private:
+//         std::ofstream log_file;
+//         std::string log_file_name;
+//     public:
+//         EagerPagingFaultHandler(PhysicalMemoryAllocator *allocator);
+//         ~EagerPagingFaultHandler();
 
-        void allocatePagetableFrames(UInt64 address, UInt64 core_id, UInt64 ppn, int page_size, int frame_number);
-        void handlePageFault(UInt64 address, UInt64 core_id, int frames);
-};
+//         void allocatePagetableFrames(UInt64 address, UInt64 core_id, UInt64 ppn, int page_size, int frame_number);
+//         void handlePageFault(UInt64 address, UInt64 core_id, int frames);
+// };
 

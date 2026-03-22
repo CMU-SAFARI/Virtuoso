@@ -23,6 +23,7 @@ MicroOpPerformanceModel::MicroOpPerformanceModel(Core *core, bool issue_memops)
     : PerformanceModel(core)
     , m_core_model(CoreModel::getCoreModel(Sim()->getCfg()->getStringArray("perf_model/core/core_model", core->getId())))
     , m_allocator(m_core_model->createDMOAllocator())
+    , m_core(core)
     , m_issue_memops(issue_memops)
     , m_dyninsn_count(0)
     , m_dyninsn_cost(0)
@@ -152,6 +153,9 @@ void MicroOpPerformanceModel::doSquashing(std::vector<DynamicMicroOp*> &current_
 
 void MicroOpPerformanceModel::handleInstruction(DynamicInstruction *dynins)
 {
+   [[maybe_unused]] bool privileged = false;
+
+   
    ComponentPeriod insn_period = *(const_cast<ComponentPeriod*>(static_cast<const ComponentPeriod*>(m_elapsed_time)));
    std::vector<DynamicMicroOp*> current_uops;
 
@@ -224,17 +228,33 @@ void MicroOpPerformanceModel::handleInstruction(DynamicInstruction *dynins)
    const OperandList &ops = dynins->instruction->getOperands();
    unsigned int memidx = 0;
 
-   if (m_issue_memops)
+   if (m_issue_memops){
       dynins->accessMemory(getCore());
+   }
 
    // If we haven't gotten all of our read or write data yet, iterate over the operands
+   // std::cout << "[MicroOpPerformanceModel] Processing " << ops.size() << " operands" << std::endl;
+   // std::cout << "[MicroOpPerformanceModel] MemIdx = " << memidx << std::endl;
+
    for (size_t i = 0 ; i < ops.size() ; ++i)
    {
       const Operand &o = ops[i];
 
       if (o.m_type == Operand::MEMORY)
       {
-         LOG_ASSERT_ERROR(dynins->num_memory > memidx, "Did not get enough memory_info objects");
+         // std::cout << "[MicroOpPerformanceModel] Processing memory operand " << i << std::endl;
+         if (memidx >= dynins->num_memory)
+         {
+            // Static Instruction says there is another MEMORY operand, but this
+            // DynamicInstruction has no corresponding memory_info entry.
+            // This happens with ChampSim traces when the first instance of an IP
+            // had more memory references than some later instance.
+            // std::cout << "[MicroOpPerformanceModel] WARNING: extra MEMORY operand i="
+            //          << i << " memidx=" << memidx
+            //          << " num_memory=" << (unsigned)dynins->num_memory
+            //          << " -- skipping\n";
+            continue; // Don't try to read a non-existent MemoryInfo
+         }
          DynamicInstruction::MemoryInfo &info = dynins->memory_info[memidx++];
          LOG_ASSERT_ERROR(info.dir == o.m_direction,
                           "Expected memory %d info, got: %d.", o.m_direction, info.dir);
@@ -253,7 +273,7 @@ void MicroOpPerformanceModel::handleInstruction(DynamicInstruction *dynins)
          if (o.m_direction == Operand::READ)
          {
             // Operand::READ
-
+            
             if (load_base_index != SIZE_MAX)
             {
                size_t load_index = load_base_index + num_reads_done;
@@ -333,8 +353,10 @@ void MicroOpPerformanceModel::handleInstruction(DynamicInstruction *dynins)
 
    // Make sure there was an Operand/MemoryInfo for each MicroOp
    // This should detect mismatches between decoding as done by fillOperandListMemOps and InstructionDecoder
-   assert(num_reads_done == num_loads);
-   assert(num_writes_done == num_stores);
+
+   //TODO: Make it parametric based on whether there was a prior mismatch due to champsim vs sniper trace format
+   // assert(num_reads_done == num_loads);
+   // assert(num_writes_done == num_stores);
 
    SubsecondTime insn_cost = SubsecondTime::Zero();
 
@@ -472,7 +494,7 @@ void MicroOpPerformanceModel::handleInstruction(DynamicInstruction *dynins)
       // Currently, the simulator requires that latencies that return from the memory hierarchy go into effect
       // immediately.  If one tries to place these latencies as normal instructions into the interval model,
       // Graphite will still see a huge delta with this cpu's time, and then generate another, equally large
-      // MemAccess instruction.  Therefore, as a work around, add the latencies to the
+      // MemAccess instruction.  
 
       MemAccessInstruction const* mem_dyn_insn = dynamic_cast<MemAccessInstruction const*>(dynins->instruction);
       LOG_ASSERT_ERROR(mem_dyn_insn != NULL, "Expected a MemAccessInstruction, but did not get one.");

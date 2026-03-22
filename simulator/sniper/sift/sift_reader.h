@@ -3,16 +3,32 @@
 
 #include "sift.h"
 #include "sift_format.h"
+#include "sift_utils.h"
 
 #include <unordered_map>
 #include <fstream>
 #include <cassert>
+#include <memory>
 
 class vistream;
 class vostream;
 
 namespace Sift
 {
+   // Additional trace formats beyond the native SIFT encoding.
+   enum class TraceFormat
+   {
+      Auto,
+      Sift,
+      ChampSim,
+   };
+
+   const uint32_t CHAMPSIM_MAX_SRC_ADDRESSES = 4;
+   const uint32_t CHAMPSIM_MAX_DEST_ADDRESSES = 2;
+   const uint32_t CHAMPSIM_MAX_SRC_REGISTERS = 4;
+   const uint32_t CHAMPSIM_MAX_DEST_REGISTERS = 2;
+   const uint32_t CHAMPSIM_DEFAULT_INST_SIZE = 4;
+   const uint32_t CHAMPSIM_DEFAULT_MEM_SIZE = 4;
    // Static information
    class StaticInstruction
    {
@@ -36,6 +52,17 @@ namespace Sift
       bool is_predicate;
       bool executed;
       int isa;
+
+      // ChampSim-specific metadata (only valid when read from a ChampSim trace)
+      bool is_champsim;
+      uint8_t num_src_addresses;
+      uint8_t num_dest_addresses;
+      uint64_t src_addresses[CHAMPSIM_MAX_SRC_ADDRESSES];
+      uint64_t dest_addresses[CHAMPSIM_MAX_DEST_ADDRESSES];
+      uint8_t num_src_registers;
+      uint8_t num_dest_registers;
+      uint8_t src_registers[CHAMPSIM_MAX_SRC_REGISTERS];
+      uint8_t dest_registers[CHAMPSIM_MAX_DEST_REGISTERS];
    } Instruction;
 
    class Reader
@@ -51,6 +78,12 @@ namespace Sift
       typedef void (*HandleRoutineChange)(void* arg, Sift::RoutineOpType event, uint64_t eip, uint64_t esp, uint64_t callEip);
       typedef void (*HandleRoutineAnnounce)(void* arg, uint64_t eip, const char *name, const char *imgname, uint64_t offset, uint32_t line, uint32_t column, const char *filename);
       typedef int32_t (*HandleForkFunc)(void* arg);
+
+      public:
+      struct ChampSimStream {
+         virtual ~ChampSimStream() {}
+         virtual size_t read_bytes(void *dst, size_t len) = 0;
+      };
 
       private:
          vistream *input;
@@ -92,18 +125,23 @@ namespace Sift
          bool m_trace_has_pa;
          bool m_seen_end;
          const StaticInstruction *m_last_sinst;
-         
+
          int m_isa;
+         TraceFormat m_format;
+         std::unique_ptr<ChampSimStream> m_champsim_stream;
 
          bool initResponse();
          const Sift::StaticInstruction* staticInfoInstruction(uint64_t addr, uint8_t size);
          const Sift::StaticInstruction* getStaticInstruction(uint64_t addr, uint8_t size);
+         const Sift::StaticInstruction* getChampSimStaticInstruction(uint64_t addr);
          void sendSyscallResponse(uint64_t return_code);
          void sendEmuResponse(bool handled, EmuReply res);
          void sendSimpleResponse(RecOtherType type, void *data = NULL, uint32_t size = 0);
+         bool readChampSim(Instruction &inst);
+         void resetStream();
 
       public:
-         Reader(const char *filename, const char *response_filename = "", uint32_t id = 0);
+         Reader(const char *filename, const char *response_filename = "", uint32_t id = 0, TraceFormat format = TraceFormat::Auto);
          ~Reader();
          bool initStream();
          bool Read(Instruction&);
@@ -123,7 +161,27 @@ namespace Sift
          uint64_t getPosition();
          uint64_t getLength();
          bool getTraceHasPhysicalAddresses() const { return m_trace_has_pa; }
+         bool isChampSimTrace() const { return m_format == TraceFormat::ChampSim; }
+         TraceFormat getFormat() const { return m_format; }
          uint64_t va2pa(uint64_t va);
+         void sendResponseAfterContextSwitch()
+         {
+            uint64_t ack = 0;
+            sendSimpleResponse(RecOtherMagicInstructionResponse, &ack, sizeof(ack)); // Send a pointer as a response
+         }
+
+         char* getFilename() const { 
+            return m_filename;
+         } 
+
+         char* getResponseFilename() const { 
+            return m_response_filename;
+         } 
+
+         int getId() const {
+            return m_id;
+         }
+
 
 	 void frontEndStop();
    };

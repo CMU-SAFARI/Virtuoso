@@ -17,7 +17,7 @@
 
 #include <sys/syscall.h>
 #include "os_compat.h"
-// #define DEBUG_MANAGER
+#define DEBUG_MANAGER
 
 const char* ThreadManager::stall_type_names[] = {
    "unscheduled", "broken", "join", "mutex", "cond", "barrier", "futex", "pause", "sleep", "syscall"
@@ -78,8 +78,9 @@ Thread* ThreadManager::createThread(app_id_t app_id, thread_id_t creator_thread_
 Thread* ThreadManager::createThread_unlocked(app_id_t app_id, thread_id_t creator_thread_id)
 {
    thread_id_t thread_id = m_threads.size();
+
    #ifdef DEBUG_MANAGER
-      std::cout << "ThreadManager::createThread_unlocked: " << thread_id << std::endl;
+      std::cout << "[Thread Manager] ThreadManager::createThread_unlocked: " << thread_id << std::endl;
    #endif
 
    Thread *thread = new Thread(thread_id, app_id);
@@ -88,11 +89,18 @@ Thread* ThreadManager::createThread_unlocked(app_id_t app_id, thread_id_t creato
    m_thread_state[thread->getId()].status = Core::INITIALIZING;
 
    core_id_t core_id = m_scheduler->threadCreate(thread_id);
+
+   std::cout << "[Thread Manager] Tried to schedule thread_id: " << thread_id << " core_id: " << core_id << std::endl;
+
    if (core_id != INVALID_CORE_ID)
    {
+      std::cout << "[Thread Manager] Thread " << thread_id << " scheduled to core " << core_id << std::endl;
       Core *core = Sim()->getCoreManager()->getCoreFromID(core_id);
       thread->setCore(core);
       core->setState(Core::INITIALIZING);
+   }
+   else{
+      std::cout << "[Thread Manager] Thread " << thread_id << " not scheduled to any core" << std::endl;
    }
 
    Sim()->getStatsManager()->logEvent(StatsManager::EVENT_THREAD_CREATE, SubsecondTime::MaxTime(), core_id, thread_id, app_id, creator_thread_id, "");
@@ -417,7 +425,7 @@ void ThreadManager::printInfo()
    std::cout << "Info-------------------------------" << std::endl;
    std::cout << "Threads: " <<  m_thread_state.size() << std::endl;
 
-   for(int tid = 0; tid < m_thread_state.size();tid++){
+   for(size_t tid = 0; tid < m_thread_state.size(); tid++){
       ThreadState ts = m_thread_state.at(tid);
 
 

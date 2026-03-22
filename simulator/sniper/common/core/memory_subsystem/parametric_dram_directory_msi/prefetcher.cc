@@ -6,6 +6,10 @@
 #include "ghb_prefetcher.h"
 #include "stream_prefetcher.h"
 #include "ip_stride_prefetcher.h"
+#include "prefetchers/spp_prefetcher.h"
+#include "prefetchers/sms_prefetcher.h"
+#include "prefetchers/berti_prefetcher.h"
+#include "prefetchers/ipcp_prefetcher.h"
 
 Prefetcher* Prefetcher::createPrefetcher(String type, String configName, core_id_t core_id, UInt32 shared_cores)
 {
@@ -19,6 +23,14 @@ Prefetcher* Prefetcher::createPrefetcher(String type, String configName, core_id
       return new IPStridePrefetcher(configName, core_id);
    else if (type == "streamer")
       return new Streamer(configName, core_id);
+   else if (type == "spp" || type == "spp_dev")
+      return new SPPPrefetcher(configName, core_id);
+   else if (type == "sms")
+      return new SMSPrefetcher(configName, core_id);
+   else if (type == "berti")
+      return new BertiPrefetcher(configName, core_id);
+   else if (type == "ipcp")
+      return new IPCPPrefetcher(configName, core_id);
 
    LOG_PRINT_ERROR("Invalid prefetcher type %s", type.c_str());
 }

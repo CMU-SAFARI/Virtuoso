@@ -6,6 +6,7 @@
 #include "hooks_manager.h"
 
 #include <vector>
+#include <atomic>
 
 class CoreManager;
 
@@ -16,6 +17,7 @@ class BarrierSyncServer : public ClockSkewMinimizationServer
       SubsecondTime m_next_barrier_time;
       std::vector<SubsecondTime> m_local_clock_list;
       std::vector<bool> m_barrier_acquire_list;
+      std::vector<std::atomic<bool>> m_core_parked;  // parked cores are skipped by isBarrierReached()
       std::vector<ConditionVariable*> m_core_cond;
       std::vector<core_id_t> m_to_release;
       std::vector<core_id_t> m_core_group;
@@ -60,6 +62,18 @@ class BarrierSyncServer : public ClockSkewMinimizationServer
       SubsecondTime getBarrierInterval() const { return m_barrier_interval; }
 
       void printState(void);
+
+      // Park/unpark a core for the barrier.  A parked core doesn't BLOCK
+      // isBarrierReached() but *does* count as "reached" (because its
+      // m_local_clock_list is set to MaxTime).  This prevents deadlock both
+      // when a core spins on s_page_fault_lock (can't call synchronize())
+      // and when ALL cores are simultaneously parked (single_core_barrier_reached
+      // must stay true so the barrier can keep advancing).
+      void parkCore(core_id_t core_id) {
+         m_local_clock_list[core_id] = SubsecondTime::MaxTime();
+         m_core_parked[core_id].store(true, std::memory_order_release);
+      }
+      void unparkCore(core_id_t core_id) { m_core_parked[core_id].store(false, std::memory_order_release); }
 };
 
 #endif /* __BARRIER_SYNC_SERVER_H__ */

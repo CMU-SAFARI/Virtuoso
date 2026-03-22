@@ -19,7 +19,7 @@ class DramCntlrInterface
       ShmemPerfModel* m_shmem_perf_model;
       UInt32 m_cache_block_size;
 
-      UInt32 getCacheBlockSize() { return m_cache_block_size; }
+      
       MemoryManagerBase* getMemoryManager() { return m_memory_manager; }
       ShmemPerfModel* getShmemPerfModel() { return m_shmem_perf_model; }
 
@@ -40,7 +40,7 @@ class DramCntlrInterface
 
       virtual boost::tuple<SubsecondTime, HitWhere::where_t> getDataFromDram(IntPtr address, core_id_t requester, Byte* data_buf, SubsecondTime now, ShmemPerf *perf,bool is_matadata) = 0;
       virtual boost::tuple<SubsecondTime, HitWhere::where_t> putDataToDram(IntPtr address, core_id_t requester, Byte* data_buf, SubsecondTime now,bool is_matadata) = 0;
-
+      UInt32 getCacheBlockSize() { return m_cache_block_size; }
       void handleMsgFromTagDirectory(core_id_t sender, PrL1PrL2DramDirectoryMSI::ShmemMsg* shmem_msg);
 };
 

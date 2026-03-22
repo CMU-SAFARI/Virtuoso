@@ -6,9 +6,16 @@
 #include <vector>
 #include <fstream>
 #include <iostream>
+#include "cwc.h"
+#include "pmd_cwt_entry.h"
+
 
 namespace ParametricDramDirectoryMSI
 {
+
+    // Forward declaration of CWCRow
+    struct CWCRow;
+
 	class PageTableCuckoo : public PageTable
 	{
 	private:
@@ -16,7 +23,7 @@ namespace ParametricDramDirectoryMSI
 		{
 			IntPtr tag;
 			bool validityBits[8];
-			IntPtr frames[8];
+			IntPtr frames[8]; // Final PPN for the page, can be up to 8 frames 
 
 			Element(int t = -1) : tag(t)
 			{
@@ -31,6 +38,7 @@ namespace ParametricDramDirectoryMSI
 		Element ***tables;
 		UInt64 **table_ppns;
 
+
 		int *numItems;
 		double loadFactor;
 		int *m_page_table_sizes;
@@ -38,6 +46,9 @@ namespace ParametricDramDirectoryMSI
 		float m_scale;
 
 		std::vector<Element> nonResidentEntries;
+
+
+
 
 		struct
 		{
@@ -52,9 +63,15 @@ namespace ParametricDramDirectoryMSI
 		std::ofstream log_file;
 		std::string log_file_name;
 
+		Element *last_walked_element;
+
 		void accessTable(IntPtr address);
 
 	public:
+
+		std::unordered_map<IntPtr, PmdCwtEntry> pmd_cwt_entries;
+
+
 		PageTableCuckoo(int core_id, String name, String type, int page_sizes, int *page_size_list,
 						int *page_table_sizes, double rehash_threshold, float scale, int ways, bool is_guest = false);
 
@@ -84,7 +101,11 @@ namespace ParametricDramDirectoryMSI
 		IntPtr getPhysicalSpace(int size);
 		bool rehash(int page_size_index, int new_size);
 		double currentLoadFactor(int page_size_index) const;
+		Element *getLastWalkedElement() const { return last_walked_element; }
 
+		CwtSectionHeader retrieveCWTentry(IntPtr address);
+		PmdCwtEntry 	 retrieveCWTrow(IntPtr address);
+		
 		void display() const;
 		void deletePage(IntPtr address);
 	};

@@ -5,8 +5,9 @@
 #include "magic_server.h"
 #include "syscall_model.h"
 #include "sim_api.h"
+#include "stats.h"
 #include <ios>
-#include "trace_manager.h"
+#include <unistd.h>
 
 static SInt64 hookCallbackResult(PyObject *pResult)
 {
@@ -22,19 +23,27 @@ static SInt64 hookCallbackResult(PyObject *pResult)
 }
 
 static void check_and_abort(){
+	static bool aborting = false;
+	if(aborting) return;          // prevent re-entry from nested hooks
 	if(HooksPy::need_to_abort()){
-		// Exit now, cleaning up as best as possible
+		aborting = true;
+		// Exit now, cleaning up as best as possible.
 		// For benchmarks where, after ROI, functionally simulating until the end takes too long.
 		
 		// If we're still in ROI, make sure we end it properly
 		Sim()->getMagicServer()->setPerformance(false);
-		// Ends front-end, such that it does not hang waiting for response.
-		Sim()->getTraceManager()->endFrontEnd();
+		
+		// Record final statistics to the SQLite database
+		Sim()->getStatsManager()->recordStats("stop");
+		Sim()->getHooksManager()->callHooks(HookType::HOOK_SIM_END, 0);
 		
 		LOG_PRINT("Application exit.");
-		Simulator::release();
 		
-		exit(0);
+		// Use _exit() to terminate immediately without running C++ destructors.
+		// This avoids races with the main thread (which TraceManager::stop()
+		// would unblock) and prevents "pure virtual method called" crashes
+		// from trace threads still referencing destroyed objects.
+		_exit(0);
 	}
 }
 

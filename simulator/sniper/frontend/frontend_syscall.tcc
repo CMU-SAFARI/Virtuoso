@@ -155,7 +155,7 @@ void FrontendSyscallModelBase <T>::doSyscall
                   std::cerr << "[FRONTEND] Clone thread: going to create new thread" << std::endl;
                }
                /* New thread */
-               m_thread_data[threadid].output->NewThread(true);   
+               m_thread_data[threadid].output->NewThread();
                if (m_options->get_verbose())
                {
                   std::cerr << "[FRONTEND] New thread created" << std::endl;

@@ -25,16 +25,26 @@ class DramPerfModel
    protected:
       bool m_enabled;
       UInt64 m_num_accesses;
+      String m_suffix;  // Per-instance suffix for unique stat names (e.g., "-numa1")
 
    public:
-      static DramPerfModel* createDramPerfModel(core_id_t core_id, UInt32 cache_block_size,AddressHomeLookup* address_home_lookup);
+      // Factory methods
+      static DramPerfModel* createDramPerfModel(core_id_t core_id, UInt32 cache_block_size, 
+                                                 AddressHomeLookup* address_home_lookup);
+      
+      // Factory with explicit type parameter (for tiered/heterogeneous memory)
+      static DramPerfModel* createDramPerfModel(core_id_t core_id, UInt32 cache_block_size,
+                                                 AddressHomeLookup* address_home_lookup,
+                                                 const String& type,
+                                                 const String& suffix = "");
 
-      DramPerfModel(core_id_t core_id, UInt64 cache_block_size) : m_enabled(false), m_num_accesses(0) {}
+      DramPerfModel(core_id_t core_id, UInt64 cache_block_size, const String& suffix = "")
+         : m_enabled(false), m_num_accesses(0), m_suffix(suffix) {}
       virtual ~DramPerfModel() {}
       virtual SubsecondTime getAccessLatency(SubsecondTime pkt_time, UInt64 pkt_size, core_id_t requester, IntPtr address, DramCntlrInterface::access_t access_type, ShmemPerf *perf,bool is_metadata) = 0;
       void enable() { m_enabled = true; }
       void disable() { m_enabled = false; }
-
+        virtual SubsecondTime getAccessLatencyUnmodelled(SubsecondTime pkt_time,UInt64 pkt_size, core_id_t requester,IntPtr address){return SubsecondTime::Zero();};
       UInt64 getTotalAccesses() { return m_num_accesses; }
 };
 

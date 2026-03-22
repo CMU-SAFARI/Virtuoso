@@ -45,7 +45,7 @@ bool handleAccessMemory(void *arg, Sift::MemoryLockType lock_signal, Sift::Memor
 VOID emulateSyscallFunc(THREADID threadid, CONTEXT *ctxt)
 {
    // If we haven't set our tid yet, do this now
-   if (thread_data[threadid].should_send_threadinfo && !KnobRecordMultithreaded.Value())
+   if (thread_data[threadid].should_send_threadinfo)
    {
       thread_data[threadid].should_send_threadinfo = false;
 
@@ -113,7 +113,7 @@ VOID emulateSyscallFunc(THREADID threadid, CONTEXT *ctxt)
                tidptrs.push_back(tidptr);
                PIN_ReleaseLock(&new_threadid_lock);
                /* New thread */
-               thread_data[threadid].output->NewThread(KnobRecordMultithreaded.Value());
+               thread_data[threadid].output->NewThread();
             }
             else
             {
@@ -140,7 +140,7 @@ VOID emulateSyscallFunc(THREADID threadid, CONTEXT *ctxt)
                tidptrs.push_back(tidptr);
                PIN_ReleaseLock(&new_threadid_lock);
                /* New thread */
-               thread_data[threadid].output->NewThread(KnobRecordMultithreaded.Value());
+               thread_data[threadid].output->NewThread();
             }
             else
             {

@@ -16,7 +16,7 @@ Barrier::~Barrier()
 
 void Barrier::wait()
 {
-   while((volatile int)m_leaving > 0)
+   while(m_leaving.load(std::memory_order_relaxed) > 0)
       sched_yield(); // Not everyone has left, wait a bit
 
    m_lock.acquire();
@@ -25,14 +25,14 @@ void Barrier::wait()
    if (m_arrived == m_count)
    {
       m_arrived = 0;
-      m_leaving = m_count - 1;
+      m_leaving.store(m_count - 1, std::memory_order_relaxed);
       m_lock.release();
       m_cond.broadcast();
    }
    else
    {
       m_cond.wait(m_lock);
-      --m_leaving;
+      m_leaving.fetch_sub(1, std::memory_order_relaxed);
       m_lock.release();
    }
 }

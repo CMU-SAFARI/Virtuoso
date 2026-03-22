@@ -11,7 +11,7 @@
 #include <fstream>
 #include "pagetable_hdc.h"
 #include "simulator.h"
-#include "physical_memory_allocator.h"
+#include "memory_management/physical_memory_allocators/physical_memory_allocator.h"
 #include "mimicos.h"
 
 // #define DEBUG
@@ -55,8 +55,20 @@ namespace ParametricDramDirectoryMSI
 							   int *page_table_sizes,
 							   bool is_guest)
 		: PageTable(core_id, name, type, page_sizes, page_size_list, is_guest),
-		  m_page_table_sizes(page_table_sizes)
+		  m_page_table_sizes(page_table_sizes),
+		  m_resize_threshold(0.6),
+		  m_resize_factor(2)
 	{
+		// Read resize parameters from config (with defaults)
+		try {
+			m_resize_threshold = Sim()->getCfg()->getFloat("perf_model/" + name + "/resize_threshold");
+		} catch (...) { m_resize_threshold = 0.6; }
+		try {
+			m_resize_factor = Sim()->getCfg()->getInt("perf_model/" + name + "/resize_factor");
+		} catch (...) { m_resize_factor = 2; }
+
+		m_entry_count = new int[page_sizes]();
+
 		// Create a log file for debugging/tracing
 		log_file_name = "page_table_hdc.log";
 		log_file_name = std::string(Sim()->getConfig()->getOutputDirectory().c_str()) + "/" + log_file_name;
@@ -108,6 +120,7 @@ namespace ParametricDramDirectoryMSI
 		stats.page_table_walks = new uint64[m_page_sizes];
 		stats.num_accesses = new uint64[m_page_sizes];
 		stats.collisions = new uint64[m_page_sizes];
+		stats.resizes = new uint64[m_page_sizes]();
 
 		// Register the metrics so they can be logged externally
 		for (int i = 0; i < m_page_sizes; i++)
@@ -123,6 +136,10 @@ namespace ParametricDramDirectoryMSI
 			registerStatsMetric(name, core_id,
 								("collisions_" + std::to_string(m_page_size_list[i])).c_str(),
 								&stats.collisions[i]);
+
+			registerStatsMetric(name, core_id,
+								("resizes_" + std::to_string(m_page_size_list[i])).c_str(),
+								&stats.resizes[i]);
 		}
 
 #ifdef LOG_MEAN_STD
@@ -260,7 +277,7 @@ namespace ParametricDramDirectoryMSI
 					ppn = current_entry->ppn[block_offset];
 					page_size_result = m_page_size_list[i];
 
-					visited_addresses.emplace_back(make_tuple(
+					visited_addresses.emplace_back(PTWAccess(
 						i,
 						depth,
 						(IntPtr)(emulated_table_address[i] + 64 * hash_function_result + block_offset),
@@ -281,7 +298,7 @@ namespace ParametricDramDirectoryMSI
 					if (count)
 						stats.num_accesses[i]++;
 
-					visited_addresses.emplace_back(make_tuple(
+					visited_addresses.emplace_back(PTWAccess(
 						i,
 						depth,
 						(IntPtr)(emulated_table_address[i] + 64 * hash_function_result + block_offset),
@@ -300,11 +317,11 @@ namespace ParametricDramDirectoryMSI
 
 #ifdef DEBUG
 					log_file << "[HDC] Collision at depth " << depth << std::endl;
-					log_file << "[HDC] Switching to next entry: "
-							 << (hash_function_result + 1) % m_page_table_sizes[i]
-							 << std::endl;
+log_file << "[HDC] Switching to next entry: "
+									 << (hash_function_result + 1) % m_page_table_sizes[i]
+									 << std::endl;
 #endif
-					visited_addresses.emplace_back(make_tuple(
+					visited_addresses.emplace_back(PTWAccess(
 						i,
 						depth,
 						(IntPtr)(emulated_table_address[i] + 64 * hash_function_result + block_offset),
@@ -333,16 +350,19 @@ namespace ParametricDramDirectoryMSI
 #endif
 			is_pagefault_in_every_page_size = true;
 
-			if (restart_walk_after_fault)
-				Sim()->getMimicOS()->handle_page_fault(address, core_id, 0);
+			if (restart_walk_after_fault) {
+                // TODO @vlnitu: handle page fault in ExceptionHandler
+                // Sim()->getMimicOS()->handle_page_fault(address, core_id, 0);
+			}
 
 #ifdef DEBUG
 			log_file << "[HDC] Page fault resolved" << std::endl;
 #endif
 			if (restart_walk_after_fault)
 				goto restart_walk;
-			else
+			else {
 				return PTWResult(page_size_result, visited_addresses, ppn, SubsecondTime::Zero(), is_pagefault_in_every_page_size);
+			}
 		}
 
 		if (page_size_result != -1)
@@ -465,14 +485,22 @@ namespace ParametricDramDirectoryMSI
 			if (current_entry->tag == static_cast<IntPtr>(-1))
 			{
 #ifdef DEBUG
-				log_file << "[HDC] Found empty entry at depth " << depth 
-						 << " in page size " << m_page_size_list[page_size_index] 
+				log_file << "[HDC] Found empty entry at depth " << depth
+						 << " in page size " << m_page_size_list[page_size_index]
 						 << " at index " << hash_function_result << std::endl;
 #endif
 				current_entry->tag = tag;
 				current_entry->valid[block_offset] = true;
 				current_entry->ppn[block_offset] = ppn;
 				current_entry->distance_from_root = depth;
+				m_entry_count[page_size_index]++;
+
+				// Check if resize is needed
+				double occupancy = static_cast<double>(m_entry_count[page_size_index]) / m_page_table_sizes[page_size_index];
+				if (occupancy >= m_resize_threshold)
+				{
+					resizeTable(page_size_index);
+				}
 				break;
 			}
 			// If the tag matches but that particular offset is not valid, we can claim it
@@ -569,6 +597,78 @@ namespace ParametricDramDirectoryMSI
 				break;
 			}
 		}
+	}
+
+	/*
+	 * resizeTable(page_size_index):
+	 *   - Doubles (or multiplies by resize_factor) the table for the given page size.
+	 *   - Allocates a new Entry array, rehashes all valid entries from the old table.
+	 *   - Frees the old table and updates page_tables[page_size_index].
+	 */
+	void PageTableHDC::resizeTable(int page_size_index)
+	{
+		int old_size = m_page_table_sizes[page_size_index];
+		int new_size = old_size * m_resize_factor;
+
+		std::cout << "[HDC] Resizing table for page size " << m_page_size_list[page_size_index]
+				  << " from " << old_size << " to " << new_size
+				  << " (occupancy: " << m_entry_count[page_size_index] << "/" << old_size << ")" << std::endl;
+
+		// Allocate new table
+		Entry *new_table = (Entry *)malloc(sizeof(Entry) * new_size);
+		for (int j = 0; j < new_size; j++)
+		{
+			for (int k = 0; k < 8; k++)
+			{
+				new_table[j].valid[k] = false;
+				new_table[j].ppn[k] = 0;
+			}
+			new_table[j].tag = -1;
+			new_table[j].distance_from_root = -1;
+		}
+
+		// Allocate physical space for the new table
+		IntPtr new_pa = Sim()->getMimicOS()->getMemoryAllocator()->handle_page_table_allocations(new_size * 64);
+
+		// Rehash all valid entries from old table into new table
+		Entry *old_table = page_tables[page_size_index];
+		for (int j = 0; j < old_size; j++)
+		{
+			if (old_table[j].tag == static_cast<IntPtr>(-1))
+				continue;
+
+			IntPtr tag = old_table[j].tag;
+			UInt64 idx = hashFunction(tag, new_size);
+
+			// Linear probe in new table
+			int depth = 0;
+			while (depth < new_size)
+			{
+				if (new_table[idx].tag == static_cast<IntPtr>(-1))
+				{
+					// Copy the entire entry
+					new_table[idx].tag = tag;
+					new_table[idx].distance_from_root = depth;
+					for (int k = 0; k < 8; k++)
+					{
+						new_table[idx].valid[k] = old_table[j].valid[k];
+						new_table[idx].ppn[k] = old_table[j].ppn[k];
+					}
+					break;
+				}
+				idx = (idx + 1) % new_size;
+				depth++;
+			}
+		}
+
+		// Swap
+		free(old_table);
+		page_tables[page_size_index] = new_table;
+		m_page_table_sizes[page_size_index] = new_size;
+		emulated_table_address[page_size_index] = new_pa;
+		stats.resizes[page_size_index]++;
+
+		log_file << "[HDC] Resize complete: new size = " << new_size << std::endl;
 	}
 
 } // namespace ParametricDramDirectoryMSI

@@ -17,6 +17,7 @@
 #include "mmu_base.h"
 
 #include <map>
+#include <unordered_set>
 
 class DramCache;
 class ShmemPerf;
@@ -29,9 +30,10 @@ namespace ParametricDramDirectoryMSI
 	
 	class MemoryManagementUnitBase;
 	class MemoryManagementUnitPOMTLB;
-	class MemoryManagementUnitUtopia;
+	// class MemoryManagementUnitUtopia;
 	class MemoryManagementUnitNested;
 	class MemoryManagementUnitRange;
+	class PAEFixedHardware;
 	
 
 	class MemoryManager : public MemoryManagerBase
@@ -46,7 +48,8 @@ namespace ParametricDramDirectoryMSI
 		AddressHomeLookup *m_dram_controller_home_lookup;
 
 		MemoryManagementUnitBase *m_mmu; //	Responsible for handling address translation
-		String mmu_type; // MMU type (Default, Range, Midgard, POMTLB, Utopia)
+		String mmu_type; // MMU type (Default, Range, POMTLB, Utopia, DMT, Nested, Speculative)
+
 		bool m_native_environment; // Native execution
 		bool m_virtualized_environment; // We are running in a virtualized environment
 
@@ -87,10 +90,19 @@ namespace ParametricDramDirectoryMSI
 			UInt64 translation_cache_memory_dram; // Translation required cache access and memory access required DRAM access
 			UInt64 translation_cache_memory_cache; // Translation required cache access and memory access required cache access
 
+			SubsecondTime latency_translation_dram_memory_dram;
+			SubsecondTime latency_translation_dram_memory_cache;
+			SubsecondTime latency_translation_cache_memory_dram;
+			SubsecondTime latency_translation_cache_memory_cache;
+			
 			UInt64 translation_slower_than_memory_access;
 			UInt64 translation_faster_than_memory_access;
+			UInt64 unique_data_cache_lines;
 
 		} memory_access_stats;
+
+		// Track unique data cache lines accessed
+		std::unordered_set<IntPtr> m_unique_data_cache_lines;
 
 	public:
 		MemoryManager(Core *core, Network *network, ShmemPerfModel *shmem_perf_model);
@@ -112,11 +124,15 @@ namespace ParametricDramDirectoryMSI
 		AddressHomeLookup *getTagDirectoryHomeLookup() { return m_tag_directory_home_lookup; }
 		AddressHomeLookup *getDramControllerHomeLookup() { return m_dram_controller_home_lookup; }
 		// void updateTranslationCounters(TranslationResult trResult, HitWhere::where_t dataResult);
-		CacheCntlr *getCacheCntlrAt(core_id_t core_id, MemComponent::component_t mem_component) { return m_all_cache_cntlrs[CoreComponentType(core_id, mem_component)]; }
+		CacheCntlr *getCacheCntlrAt(core_id_t core_id, MemComponent::component_t mem_component) override { return m_all_cache_cntlrs[CoreComponentType(core_id, mem_component)]; }
 		void setCacheCntlrAt(core_id_t core_id, MemComponent::component_t mem_component, CacheCntlr *cache_cntlr) { m_all_cache_cntlrs[CoreComponentType(core_id, mem_component)] = cache_cntlr; }
 		NucaCache *getNucaCache() { return m_nuca_cache; }
 		void measureNucaStats();
-		MemoryManagementUnitBase *getMMU() { return m_mmu; }
+		MemoryManagementUnitBase *getMMU() override { return m_mmu; }
+		
+		// Getters for stall tracking (used by MPLRU controller)
+		SubsecondTime getTranslationLatency() const { return memory_access_stats.m_translation_latency; }
+		SubsecondTime getMemoryAccessLatency() const { return memory_access_stats.m_memory_access_latency; }
 
 		HitWhere::where_t coreInitiateMemoryAccess(
 			IntPtr eip,
@@ -129,7 +145,7 @@ namespace ParametricDramDirectoryMSI
 
 		void handleMsgFromNetwork(NetPacket &packet);
 
-		void sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::msg_t msg_type, MemComponent::component_t sender_mem_component, MemComponent::component_t receiver_mem_component, core_id_t requester, core_id_t receiver, IntPtr address, Byte *data_buf = NULL, UInt32 data_length = 0, HitWhere::where_t where = HitWhere::UNKNOWN, ShmemPerf *perf = NULL, ShmemPerfModel::Thread_t thread_num = ShmemPerfModel::NUM_CORE_THREADS, CacheBlockInfo::block_type_t block_type = CacheBlockInfo::block_type_t::NON_PAGE_TABLE);
+		void sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::msg_t msg_type, MemComponent::component_t sender_mem_component, MemComponent::component_t receiver_mem_component, core_id_t requester, core_id_t receiver, IntPtr address, Byte *data_buf = NULL, UInt32 data_length = 0, HitWhere::where_t where = HitWhere::UNKNOWN, ShmemPerf *perf = NULL, ShmemPerfModel::Thread_t thread_num = ShmemPerfModel::NUM_CORE_THREADS, CacheBlockInfo::block_type_t block_type = CacheBlockInfo::block_type_t::DATA);
 
 		void broadcastMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::msg_t msg_type, MemComponent::component_t sender_mem_component, MemComponent::component_t receiver_mem_component, core_id_t requester, IntPtr address, Byte *data_buf = NULL, UInt32 data_length = 0, ShmemPerf *perf = NULL, ShmemPerfModel::Thread_t thread_num = ShmemPerfModel::NUM_CORE_THREADS);
 
@@ -153,7 +169,7 @@ namespace ParametricDramDirectoryMSI
 			return ((PrL1PrL2DramDirectoryMSI::ShmemMsg *)pkt_data)->getModeledLength();
 		}
 
-		void tagCachesBlockType(IntPtr address, CacheBlockInfo::block_type_t btype)
+		void tagCachesBlockType(IntPtr address, CacheBlockInfo::block_type_t btype) override
 		{
 			if (m_nuca_cache)
 				m_nuca_cache->markTranslationMetadata(address, btype);

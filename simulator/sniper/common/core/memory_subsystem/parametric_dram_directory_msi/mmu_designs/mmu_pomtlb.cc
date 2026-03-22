@@ -1,3 +1,60 @@
+// ============================================================================
+// MMU Part-of-Memory TLB (POM-TLB) Implementation
+// ============================================================================
+//
+// This file implements an MMU variant with a Part-of-Memory TLB (POM-TLB)
+// for the Sniper multi-core simulator. The POM-TLB is a software-managed TLB
+// that stores translations in main memory, providing much larger capacity
+// than hardware TLBs at the cost of memory access latency.
+//
+// Reference:
+// ~~~~~~~~~~
+//   Ryoo et al. "Rethinking TLB designs in virtualized environments:
+//   A very large part-of-memory TLB" - ISCA 2017
+//   https://ieeexplore.ieee.org/document/8192494
+//
+// Key Features:
+// ~~~~~~~~~~~~~
+//   1. Standard hardware TLB hierarchy (L1 iTLB, L1 dTLB, L2 TLB)
+//   2. Software-managed TLB stored in main memory (POM-TLB)
+//   3. One POM-TLB per supported page size (4KB, 2MB, etc.)
+//   4. Falls back to full page table walk only on POM-TLB miss
+//
+// Architecture Overview:
+// ~~~~~~~~~~~~~~~~~~~~~~
+//   +--------+     +-----------+     +------------+
+//   |  Core  | --> |  MMU POM  | --> |   Memory   |
+//   +--------+     +-----------+     +------------+
+//                       |
+//         +-------------+-------------+
+//         |             |             |
+//    +----v----+   +----v----+   +----v----+
+//    |   TLB   |   | POM-TLB |   |   PTW   |
+//    | Subsys  |   | (DRAM)  |   |         |
+//    +---------+   +---------+   +---------+
+//         |             |             |
+//         +------+------+             |
+//                |                    |
+//         Fast   |                    |  Slow
+//         (SRAM) |                    |  (DRAM)
+//                v                    v
+//
+// Translation Flow:
+// ~~~~~~~~~~~~~~~~~
+//   1. Lookup hardware TLB hierarchy
+//   2. On HW TLB miss: Lookup POM-TLB (parallel lookup for each page size)
+//   3. On POM-TLB miss: Perform full page table walk
+//   4. Allocate translation in both HW TLBs and POM-TLBs
+//
+// POM-TLB Memory Layout:
+// ~~~~~~~~~~~~~~~~~~~~~~
+//   - Each POM-TLB is set-associative, stored contiguously in DRAM
+//   - Entry size = tag_size + 52 bits (physical address + metadata)
+//   - Tag size = 48 - page_offset - log2(num_sets)
+//   - Base address stored in software_tlb_base_register[]
+//
+// ============================================================================
+
 #include "mmu_pomtlb.h"
 #include "mmu_base.h"
 #include "tlb.h"
@@ -10,121 +67,131 @@
 #include "thread.h"
 #include "mimicos.h"
 #include "instruction.h"
+#include "misc/exception_handler_base.h"
+#include "sniper_space_exception_handler.h"
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include "filter_factory.h"
 
-//#define DEBUG_MMU
+// #define DEBUG_MMU  // Uncomment for verbose debug logging
 
 using namespace std;
 
 namespace ParametricDramDirectoryMSI
 {
-	// # Based on Ryoo et al. "Rethinking TLB designs in virtualized environments: 
-	// # A very large part-of-memory TLB" https://ieeexplore.ieee.org/document/8192494
-   
-	/* Implementation of 
-	 * MemoryManagementUnitPOMTLB class:
-	 *   - Extends MemoryManagementUnitBase to include a specialized "software-managed" TLB
-	 *     system (m_pom_tlb). 
-	 *   - The "POM" TLB is an additional TLB that is allocated in software (like a table in memory)
-	 *     and accessed after conventional hardware TLB misses.
-	 *   - If both the hardware TLB and POM TLB miss, it performs a full page table walk (PTW).
-	 *
-	 * Key data structures / fields:
-	 *   - tlb_subsystem: the normal hardware TLB hierarchy.
-	 *   - m_pom_tlb[]: an array of TLB pointers for software-managed TLBs, one per page size.
-	 *   - software_tlb_base_register[]: base addresses in memory where each software TLB is allocated.
-	 *   - translation_stats: accumulates statistics like total walk latency, TLB latency, etc.
-	 *   - pt_walkers: an MSHR-like structure that tracks concurrency for page table walks.
-	 *   - pwc (Page Walk Cache): if enabled, can filter out memory accesses for intermediate page-table entries.
-	 */
 
+// ============================================================================
+// Construction / Destruction
+// ============================================================================
+
+    /**
+     * @brief Construct the POM-TLB MMU.
+     *
+     * Initializes an MMU with a Part-of-Memory TLB that stores translations
+     * in main memory. This provides much larger translation coverage than
+     * hardware TLBs, at the cost of DRAM access latency.
+     *
+     * @param _core           Pointer to the core this MMU belongs to
+     * @param _memory_manager Memory manager for cache access
+     * @param _shmem_perf_model Performance model for timing
+     * @param _name           Configuration name prefix
+     * @param _nested_mmu     Optional nested MMU for virtualization
+     */
 	MemoryManagementUnitPOMTLB::MemoryManagementUnitPOMTLB(Core *_core, 
-	                                                       MemoryManager *_memory_manager, 
+	                                                       MemoryManagerBase *_memory_manager, 
 	                                                       ShmemPerfModel *_shmem_perf_model, 
 	                                                       String _name, 
 	                                                       MemoryManagementUnitBase *_nested_mmu)
-	: MemoryManagementUnitBase(_core, _memory_manager, _shmem_perf_model, _name, _nested_mmu)
+	: MemoryManagementUnitBase(_core, _memory_manager, _shmem_perf_model, _name, _nested_mmu),
+	  m_pom_tlb(nullptr),
+	  software_tlb_base_register(nullptr),
+	  m_size(nullptr),
+	  m_associativity(nullptr)
 	{
-		log_file_name = "mmu_pomtlb.log." + std::to_string(core->getId());
-		log_file_name = std::string(Sim()->getConfig()->getOutputDirectory().c_str()) + "/" + log_file_name;
-		log_file.open(log_file_name.c_str());
+		// SimLog for debug output
+		mmu_pomtlb_log = new SimLog("MMU_POMTLB", core->getId(), DEBUG_MMU_POMTLB);
 
-		// Build the page table walker and the TLB subsystem, then register stats
-		instantiatePageTableWalker();
-		instantiateTLBSubsystem();
-		registerMMUStats();
+		instantiatePageTableWalker();  // Creates PWC filter and PTW MSHRs
+		instantiateTLBSubsystem();     // Creates HW TLB hierarchy and POM-TLBs
+		registerMMUStats();            // Registers statistics with Sniper
 	}
 
-	/*
-	 * instantiatePageTableWalker(...):
-	 *   - Checks configuration for the OS (mimicos_name) and page table type (e.g., "radix").
-	 *   - If PWC (page walk cache) is enabled, sets up a PWC object.
-	 *   - Also creates an MSHR object 'pt_walkers' for concurrency in page table walks.
-	 */
+    /**
+     * @brief Destroy the POM-TLB MMU.
+     *
+     * Cleans up all allocated resources including TLBs, POM-TLBs, and walkers.
+     */
+	MemoryManagementUnitPOMTLB::~MemoryManagementUnitPOMTLB()
+	{
+		delete mmu_pomtlb_log;
+		delete tlb_subsystem;
+		delete pt_walkers;
+		delete[] translation_stats.tlb_latency_per_level;
+		delete[] translation_stats.tlb_hit_page_sizes;
+		delete[] m_pom_tlb;
+		delete[] software_tlb_base_register;
+		delete[] m_size;
+		delete[] m_associativity;
+	}
+
+// ============================================================================
+// Initialization Methods
+// ============================================================================
+
+    /**
+     * @brief Initialize the Page Table Walker and Page Walk Cache.
+     *
+     * Creates the PWC filter for caching intermediate page table entries
+     * and the MSHR structure for tracking concurrent page table walks.
+     */
 	void MemoryManagementUnitPOMTLB::instantiatePageTableWalker()
 	{
 		String mimicos_name = Sim()->getMimicOS()->getName();
 		String page_table_type = Sim()->getCfg()->getString("perf_model/"+mimicos_name+"/page_table_type");
 		String page_table_name = Sim()->getCfg()->getString("perf_model/"+mimicos_name+"/page_table_name");
 
-		if (page_table_type == "radix")
-		{
-			int levels = Sim()->getCfg()->getInt("perf_model/"+mimicos_name+"/"+page_table_name+"/levels");
-			m_pwc_enabled = Sim()->getCfg()->getBool("perf_model/"+name+"/pwc/enabled");
+		// Create Page Walk Cache filter
+		String filter_type = Sim()->getCfg()->getString("perf_model/" + name + "/ptw_filter_type");
+		ptw_filter = FilterPTWFactory::createFilterPTWBase(filter_type, name, core);
 
-			if (m_pwc_enabled)
-			{
-				std::cout << "[MMU:POM-TLB] Page walk caches are enabled" << std::endl;
-
-				UInt32 *entries = (UInt32 *)malloc(sizeof(UInt64) * (levels - 1));
-				UInt32 *associativities = (UInt32 *)malloc(sizeof(UInt64) * (levels - 1));
-				for (int i = 0; i < levels - 1; i++)
-				{
-					entries[i] = Sim()->getCfg()->getIntArray("perf_model/" + name + "/pwc/entries", i);
-					associativities[i] = Sim()->getCfg()->getIntArray("perf_model/" + name + "/pwc/associativity", i);
-				}
-
-				ComponentLatency pwc_access_latency = ComponentLatency(core->getDvfsDomain(),
-					Sim()->getCfg()->getInt("perf_model/" + name + "/pwc/access_penalty"));
-				ComponentLatency pwc_miss_latency = ComponentLatency(core->getDvfsDomain(),
-					Sim()->getCfg()->getInt("perf_model/" + name + "/pwc/miss_penalty"));
-
-				pwc = new PWC("pwc",
-				              "perf_model/" + name + "/pwc",
-				              core->getId(),
-				              associativities,
-				              entries,
-				              levels - 1,
-				              pwc_access_latency,
-				              pwc_miss_latency,
-				              false /* not a victim cache */ );
-			}
-		}
-
-		// 'pt_walkers' is an MSHR-based structure that ensures we can do N concurrent PT walks
+		// Create MSHRs for N concurrent page table walks
 		pt_walkers = new MSHR(Sim()->getCfg()->getInt("perf_model/"+name+"/page_table_walkers"));
 	}
 
-	/*
-	 * instantiateTLBSubsystem(...):
-	 *   - Builds the normal TLBHierarchy object that includes L1 TLBs, L2 TLB, etc.
-	 *   - Also reads config for "perf_model/pom_tlb" to set up the software TLB(s) that 
-	 *     correspond to each possible page size.
-	 *   - Each software TLB is allocated in memory (via handle_page_table_allocations) 
-	 *     and stored in m_pom_tlb[i].
-	 */
+    /**
+     * @brief Instantiate metadata table (not used in POM-TLB variant).
+     */
+	void MemoryManagementUnitPOMTLB::instantiateMetadataTable()
+	{
+		// No metadata table for this MMU variant
+	}
+
+    /**
+     * @brief Initialize the TLB hierarchy and POM-TLBs.
+     *
+     * Creates two components:
+     * 1. Hardware TLB hierarchy (L1 iTLB, L1 dTLB, L2 TLB, etc.)
+     * 2. Part-of-Memory TLBs - one per page size
+     *
+     * Each POM-TLB is allocated in physical memory and configured with:
+     * - Number of entries and associativity from config
+     * - Entry size calculated from tag bits + 52 bits for PPN
+     * - Base address stored in software_tlb_base_register[]
+     */
 	void MemoryManagementUnitPOMTLB::instantiateTLBSubsystem()
 	{
+		// Create standard hardware TLB hierarchy
 		tlb_subsystem = new TLBHierarchy(name, core, memory_manager, shmem_perf_model);
 
+		// Read POM-TLB configuration
 		int page_sizes = Sim()->getCfg()->getInt("perf_model/pom_tlb/page_sizes");
 
-		// software_tlb_base_register[i] is the memory base address for TLB i
+		// Allocate arrays for POM-TLB tracking
 		software_tlb_base_register = new IntPtr[page_sizes];
 		m_pom_tlb = new TLB*[page_sizes];
 
+		// Create one POM-TLB per page size
 		for (int i = 0; i < page_sizes; i++)
 		{
 			int page_size = Sim()->getCfg()->getIntArray("perf_model/pom_tlb/page_size_list", i);
@@ -137,19 +204,14 @@ namespace ParametricDramDirectoryMSI
 
 			int num_sets = entries / assoc;
 
-			/*
-			 * We assume a 48-bit address space. 
-			 * The 'tag_size' is computed as the remaining bits after subtracting the index bits 
-			 * (log2(num_sets)) and the page offset bits (page_size).
-			 * The entry_size is the total bits needed for the TLB entry (e.g., tag_size + physical address bits).
-			 */
+			// Calculate entry size for POM-TLB
+			// Tag = 48-bit VA - page_offset - log2(num_sets)
+			// Entry = tag + 52 bits (PPN + metadata)
 			int tag_size   = (48 - page_size - log2(num_sets)); 
-			int entry_size = tag_size + 52; // e.g. 52 bits might represent physical address + valid bits, etc.
+			int entry_size = tag_size + 52;
 
-			/*
-			 * The actual memory allocated for the TLB is entries * entry_size (bits), 
-			 * but we must convert to bytes, and handle alignment by rounding up.
-			 */
+			// Allocate memory for POM-TLB in physical memory
+			// Size = entries * entry_size bits, converted to bytes
 			software_tlb_base_register[i] = Sim()->getMimicOS()->getMemoryAllocator()->handle_page_table_allocations(
 				ceil(entries * entry_size / 8.0));
 
@@ -165,31 +227,40 @@ namespace ParametricDramDirectoryMSI
 			std::cout << "[MMU:POM-TLB] Allocate on miss: " << allocate_on_miss << std::endl;
 			std::cout << "[MMU:POM-TLB] Base register: " << software_tlb_base_register[i] << std::endl;
 
-			// Build the TLB object for the software-managed TLB
+			// Create the POM-TLB object (no fixed latency - latency comes from DRAM access)
 			m_pom_tlb[i] = new TLB(name,
 			                       "perf_model/pom_tlb",
 			                       core->getId(),
-			                       ComponentLatency(core->getDvfsDomain(), 0) /* no fixed TLB latency here*/,
+			                       ComponentLatency(core->getDvfsDomain(), 0),
 			                       entries,
 			                       assoc,
 			                       page_size_list,
-			                       1 /* #page sizes in this TLB*/,
+			                       1,  // #page sizes in this TLB
 			                       type,
 			                       allocate_on_miss);
 		}
 	}
 
-	/*
-	 * registerMMUStats(...):
-	 *   - Initializes the memory translation stats structure (translation_stats),
-	 *   - Adds the counters for page faults, table walks, TLB latency, software TLB latency, etc.
-	 *   - Also registers per-level TLB latencies in TLB subsystem.
-	 */
+// ============================================================================
+// Statistics Registration
+// ============================================================================
+
+    /**
+     * @brief Register all MMU statistics with Sniper's statistics framework.
+     *
+     * Statistics include:
+     * - page_faults: Pages not present in memory
+     * - total_table_walk_latency: Cumulative PTW time
+     * - total_fault_latency: Time handling page faults
+     * - total_tlb_latency: Cumulative hardware TLB lookup time
+     * - total_translation_latency: End-to-end translation time
+     * - total_software_tlb_latency: Time spent in POM-TLB lookups
+     * - total_walk_delay_latency: Time waiting for PTW MSHRs
+     */
 	void MemoryManagementUnitPOMTLB::registerMMUStats()
 	{
 		bzero(&translation_stats, sizeof(translation_stats));
 
-		// Basic counters for this MMU
 		registerStatsMetric(name, core->getId(), "page_faults", &translation_stats.page_faults);
 		registerStatsMetric(name, core->getId(), "total_table_walk_latency", &translation_stats.total_walk_latency);
 		registerStatsMetric(name, core->getId(), "total_fault_latency", &translation_stats.total_fault_latency);
@@ -198,22 +269,61 @@ namespace ParametricDramDirectoryMSI
 		registerStatsMetric(name, core->getId(), "total_software_tlb_latency", &translation_stats.software_tlb_latency);
 		registerStatsMetric(name, core->getId(), "total_walk_delay_latency", &translation_stats.total_walk_delay_latency);
 
-		// Per-level TLB latency stats
+		// Per-level TLB latency statistics
 		translation_stats.tlb_latency_per_level = new SubsecondTime[tlb_subsystem->getTLBSubsystem().size()];
 		for (UInt32 i = 0; i < tlb_subsystem->getTLBSubsystem().size(); i++)
 			registerStatsMetric(name, core->getId(), "tlb_latency_" + itostr(i), &translation_stats.tlb_latency_per_level[i]);
 	}
 
-	/*
-	 * performAddressTranslation(...):
-	 *   - The main function that performs a translation for the given address. 
-	 *   - Tries the hardware TLBs first. If that misses, tries the "software" TLB(s). 
-	 *   - If both fail, does a page table walk (PTW). 
-	 *   - Accumulates latencies for each step (hardware TLB, software TLB, PTW, page fault).
-	 *   - Finally, inserts the new translation into TLB(s) and/or the software TLB if needed.
-	 *
-	 * Returns the final physical address as an IntPtr.
-	 */
+// ============================================================================
+// Address Translation - Core MMU Operation
+// ============================================================================
+
+    /**
+     * @brief Perform virtual-to-physical address translation with POM-TLB.
+     *
+     * This is the main entry point for address translation. The POM-TLB MMU
+     * extends the standard translation flow with a software-managed TLB layer.
+     *
+     * ┌─────────────────────────────────────────────────────────────────────┐
+     * │                  POM-TLB TRANSLATION FLOW                            │
+     * ├─────────────────────────────────────────────────────────────────────┤
+     * │                                                                      │
+     * │   Virtual Addr ──► HW TLB Lookup ──┬──► HIT ──► Physical Address     │
+     * │                                    │                                 │
+     * │                                    └──► MISS                         │
+     * │                                          │                           │
+     * │                                          ▼                           │
+     * │                                    POM-TLB Lookup                    │
+     * │                                    (parallel for each page size)     │
+     * │                                          │                           │
+     * │                              +-----------+----------+                │
+     * │                              ▼                      ▼                │
+     * │                            HIT                    MISS               │
+     * │                              │                      │                │
+     * │                              │                      ▼                │
+     * │                              │             Page Table Walk           │
+     * │                              │                      │                │
+     * │                              │                      ▼                │
+     * │                              │           Allocate in POM-TLB         │
+     * │                              │                      │                │
+     * │                              +----------+-----------+                │
+     * │                                         │                            │
+     * │                                         ▼                            │
+     * │                              Allocate in HW TLBs                     │
+     * │                                         │                            │
+     * │                                         ▼                            │
+     * │                                  Physical Address                    │
+     * └─────────────────────────────────────────────────────────────────────┘
+     *
+     * @param eip          Instruction pointer causing this access
+     * @param address      Virtual address to translate
+     * @param instruction  True if this is an instruction fetch
+     * @param lock         Cache coherence lock signal
+     * @param modeled      True to model timing
+     * @param count        True to update statistics
+     * @return Physical address
+     */
 	IntPtr MemoryManagementUnitPOMTLB::performAddressTranslation(IntPtr eip,
 	                                                             IntPtr address,
 	                                                             bool instruction,
@@ -221,26 +331,29 @@ namespace ParametricDramDirectoryMSI
 	                                                             bool modeled,
 	                                                             bool count)
 	{
-#ifdef DEBUG_MMU
-		log_file << std::endl;
-		log_file << "[MMU:POM-TLB] ---- Starting address translation for virtual address: "
-		         << address <<  " ---- at time "
-		         << shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
-#endif
+		// Track DRAM accesses for power/performance analysis
+		dram_accesses_during_last_walk = 0;
+
+		mmu_pomtlb_log->debug("[MMU:POM-TLB] ---- Starting address translation for virtual address: %lx ---- at time %s",
+			address, shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS());
 
 		int number_of_page_sizes = Sim()->getMimicOS()->getNumberOfPageSizes();
 		int *page_size_list = Sim()->getMimicOS()->getPageSizeList();
 
 		SubsecondTime time = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD);
 
-		// Clear completed PTW MSHR entries that have finished
+		// Cleanup completed PTW entries from MSHR
 		pt_walkers->removeCompletedEntries(time);
 
 		if (count)
 			translation_stats.num_translations++;
 
-		// Normal hardware TLB hierarchy
+		// Get reference to hardware TLB hierarchy
 		TLBSubsystem tlbs = tlb_subsystem->getTLBSubsystem();
+
+		// ====================================================================
+		// PHASE 1: Hardware TLB Lookup
+		// ====================================================================
 
 		bool tlb_hit   = false;
 		TLB *hit_tlb   = NULL;
@@ -248,18 +361,13 @@ namespace ParametricDramDirectoryMSI
 		CacheBlockInfo *tlb_block_info     = NULL; 
 		int hit_level  = -1;
 
-		int page_size_result = -1; // Will track the discovered page size in bits (e.g. 12 or 21).
-		IntPtr ppn_result     = 0; // Physical Page Number
+		int page_size_result = -1;
+		IntPtr ppn_result    = 0;
 
-		/*
-		 * 1) Try each TLB level in the hardware TLB subsystem. If we get a match, we break out
-		 *    after setting tlb_hit = true.
-		 */
+		// Search hardware TLB hierarchy
 		for (UInt32 i = 0; i < tlbs.size(); i++)
 		{
-#ifdef DEBUG_MMU
-			log_file << "[MMU] Searching TLB at level: " << i << std::endl;
-#endif
+			mmu_pomtlb_log->debug("[MMU] Searching TLB at level: %u", i);
 			for (UInt32 j = 0; j < tlbs[i].size(); j++)
 			{
 				bool tlb_stores_instructions = ((tlbs[i][j]->getType() == TLBtype::Instruction) ||
@@ -267,7 +375,6 @@ namespace ParametricDramDirectoryMSI
 
 				if (tlb_stores_instructions && instruction)
 				{
-					// We pass "NULL" for the page table pointer as it is not used in the modern TLB code
 					tlb_block_info = tlbs[i][j]->lookup(address, time, count, lock, eip, modeled, count, NULL);
 					if (tlb_block_info != NULL)
 					{
@@ -295,37 +402,30 @@ namespace ParametricDramDirectoryMSI
 			}
 			if (tlb_hit)
 			{
-#ifdef DEBUG_MMU
-				log_file << "[MMU] TLB Hit at level: " << hit_level 
-				         << " at TLB " << hit_tlb->getName() << std::endl;
-#endif
+				mmu_pomtlb_log->debug("[MMU] TLB Hit at level: %d at TLB %s", hit_level, hit_tlb->getName().c_str());
 				break;
 			}
 		}
 
+		// ====================================================================
+		// PHASE 2: Charge Hardware TLB Latency
+		// ====================================================================
+
 		SubsecondTime charged_tlb_latency = SubsecondTime::Zero();
 
-		/*
-		 * 2) If TLB hit, gather TLB latencies from each level up to the level that hit 
-		 *    (similar to a multi-level cache).
-		 */
 		if (tlb_hit)
 		{
+			// ----- HW TLB HIT: Charge latency up to hit level -----
 			page_size_result = tlb_block_info_hit->getPageSize();
 			ppn_result       = tlb_block_info_hit->getPPN();
 
-#ifdef DEBUG_MMU
-			log_file << "[MMU] TLB Hit ? " << tlb_hit << " at level: " << hit_level
-			         << " at TLB: " << hit_tlb->getName() << std::endl;
-#endif
+			mmu_pomtlb_log->debug("[MMU] TLB Hit ? %d at level: %d at TLB: %s", tlb_hit, hit_level, hit_tlb->getName().c_str());
 
-			// Retrieve the instruction or data TLB path
 			if (instruction)
 				tlbs = tlb_subsystem->getInstructionPath();
 			else
 				tlbs = tlb_subsystem->getDataPath();
 
-			// We track the "slowest" TLB component at each level up to hit_level
 			SubsecondTime tlb_latency[hit_level + 1];
 
 			for (int i = 0; i < hit_level; i++)
@@ -334,16 +434,12 @@ namespace ParametricDramDirectoryMSI
 				{
 					tlb_latency[i] = max(tlbs[i][j]->getLatency(), tlb_latency[i]);
 				}
-#ifdef DEBUG_MMU
-				log_file << "[MMU] Charging TLB Latency: " << tlb_latency[i]
-				         << " at level: " << i << std::endl;
-#endif
+				mmu_pomtlb_log->debug("[MMU] Charging TLB Latency: %lu at level: %d", tlb_latency[i].getNS(), i);
 				translation_stats.total_tlb_latency += tlb_latency[i];
 				translation_stats.tlb_latency_per_level[i] += tlb_latency[i];
 				charged_tlb_latency += tlb_latency[i];
 			}
 
-			// For the actual TLB that hit, add its latency as well
 			for (UInt32 j = 0; j < tlbs[hit_level].size(); j++)
 			{
 				if (tlbs[hit_level][j] == hit_tlb)
@@ -351,11 +447,7 @@ namespace ParametricDramDirectoryMSI
 					translation_stats.total_tlb_latency += hit_tlb->getLatency();
 					charged_tlb_latency += hit_tlb->getLatency();
 					translation_stats.tlb_latency_per_level[hit_level] += hit_tlb->getLatency();
-#ifdef DEBUG_MMU
-					log_file << "[MMU] Charging TLB Hit Latency: "
-					         << hit_tlb->getLatency() << " at level: "
-					         << hit_level << std::endl;
-#endif
+					mmu_pomtlb_log->debug("[MMU] Charging TLB Hit Latency: %lu at level: %d", hit_tlb->getLatency().getNS(), hit_level);
 				}
 			}
 
@@ -364,11 +456,7 @@ namespace ParametricDramDirectoryMSI
 			if (count)
 				translation_stats.total_translation_latency += charged_tlb_latency;
 
-#ifdef DEBUG_MMU
-			log_file << "[MMU] New time after charging TLB latency: "
-			         << shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD)
-			         << std::endl;
-#endif
+			mmu_pomtlb_log->debug("[MMU] New time after charging TLB latency: %lu", shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS());
 		}
 		else
 		{
@@ -376,9 +464,7 @@ namespace ParametricDramDirectoryMSI
 			 * 2a) TLB Miss => sum the latency for all TLB levels. We do not break out at a 
 			 *     partial level because we "visited" them all searching for a hit.
 			 */
-#ifdef DEBUG_MMU
-			log_file << "[MMU] TLB Miss" << std::endl;
-#endif
+			mmu_pomtlb_log->debug("[MMU] TLB Miss");
 			SubsecondTime tlb_latency[tlbs.size()];
 
 			for (UInt32 i = 0; i < tlbs.size(); i++)
@@ -387,10 +473,7 @@ namespace ParametricDramDirectoryMSI
 				{
 					tlb_latency[i] = max(tlbs[i][j]->getLatency(), tlb_latency[i]);
 				}
-#ifdef DEBUG_MMU
-				log_file << "[MMU] Charging TLB Latency: "
-				         << tlb_latency[i] << " at level: " << i << std::endl;
-#endif
+				mmu_pomtlb_log->debug("[MMU] Charging TLB Latency: %lu at level: %u", tlb_latency[i].getNS(), i);
 				translation_stats.total_tlb_latency += tlb_latency[i];
 				charged_tlb_latency += tlb_latency[i];
 			}
@@ -399,11 +482,7 @@ namespace ParametricDramDirectoryMSI
 			if (count)
 				translation_stats.total_translation_latency += charged_tlb_latency;
 
-#ifdef DEBUG_MMU
-			log_file << "[MMU] New time after charging TLB latency: "
-			         << shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD)
-			         << std::endl;
-#endif
+			mmu_pomtlb_log->debug("[MMU] New time after charging TLB latency: %lu", shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS());
 		}
 
 		/*
@@ -425,23 +504,14 @@ namespace ParametricDramDirectoryMSI
 
 		if (!tlb_hit)
 		{
-#ifdef DEBUG_MMU
-			log_file << "[MMU] TLB Miss, checking software TLB" << std::endl;
-#endif
+			mmu_pomtlb_log->debug("[MMU] TLB Miss, checking software TLB");
 			for (int page_size = 0; page_size < number_of_page_sizes; page_size++)
 			{
-#ifdef DEBUG_MMU
-				log_file << "[MMU] Searching software TLB for page size: "
-				         << page_size_list[page_size] << std::endl;
-#endif
+				mmu_pomtlb_log->debug("[MMU] Searching software TLB for page size: %d", page_size_list[page_size]);
 				TLB* pom = m_pom_tlb[page_size];
 				software_tlb_block_info = pom->lookup(address, time, count, lock, eip, modeled, count, NULL);
 
-#ifdef DEBUG_MMU
-				log_file << "[MMU] Software TLB Hit ? "
-				         << (software_tlb_block_info != NULL)
-				         << " at TLB: " << pom->getName() << std::endl;
-#endif
+				mmu_pomtlb_log->debug("[MMU] Software TLB Hit ? %d at TLB: %s", (software_tlb_block_info != NULL), pom->getName().c_str());
 
 				// Simulate the memory access that the software TLB structure does
 				translationPacket packet;
@@ -450,35 +520,24 @@ namespace ParametricDramDirectoryMSI
 				packet.lock_signal  = lock;
 				packet.modeled      = modeled;
 				packet.count        = count;
-				packet.type         = CacheBlockInfo::block_type_t::TLB_ENTRY;
+				// Software TLB metadata access
+				packet.type         = CacheBlockInfo::block_type_t::PAGE_TABLE_DATA;
 
 				IntPtr tag;
 				UInt32 set_index;
 				pom->getCache().splitAddressTLB(address, tag, set_index, page_size_list[page_size]);
 
-#ifdef DEBUG_MMU
-				log_file << "[MMU] Software TLB Lookup: " << address
-				         << " at page size: " << page_size_list[page_size]
-				         << " with tag: " << tag
-				         << " and set index: " << set_index
-				         << " and base address: "
-				         << software_tlb_base_register[page_size]*4096 << std::endl;
-#endif
+				mmu_pomtlb_log->debug("[MMU] Software TLB Lookup: %lx at page size: %d with tag: %lx and set index: %u and base address: %lx",
+					address, page_size_list[page_size], tag, set_index, software_tlb_base_register[page_size]*4096);
 				packet.address = software_tlb_base_register[page_size]*4096
 				                 + pom->getAssoc()* pom->getEntrySize() * set_index;
 
-#ifdef DEBUG_MMU
-				log_file << "[MMU] Software TLB Address: " << packet.address << std::endl;
-#endif
+				mmu_pomtlb_log->debug("[MMU] Software TLB Address: %lx", packet.address);
 
-				software_tlb_latency[page_size] = accessCache(packet, time_before_software_tlb);
+                    HitWhere::where_t sw_hit_where = HitWhere::UNKNOWN;
+                    software_tlb_latency[page_size] = accessCache(packet, time_before_software_tlb, false, sw_hit_where);
 
-#ifdef DEBUG_MMU
-				log_file << "[MMU] Software TLB Latency: " 
-				         << software_tlb_latency[page_size]
-				         << " at page size: " << page_size_list[page_size] 
-				         << std::endl;
-#endif
+				mmu_pomtlb_log->debug("[MMU] Software TLB Latency: %lu at page size: %d", software_tlb_latency[page_size].getNS(), page_size_list[page_size]);
 
 				if (software_tlb_block_info != NULL)
 				{
@@ -487,25 +546,18 @@ namespace ParametricDramDirectoryMSI
 					software_tlb_hit = true;
 					ppn_result = software_tlb_block_info->getPPN();
 					page_size_result = software_tlb_block_info->getPageSize();
-#ifdef DEBUG_MMU
-					log_file << "[MMU] Software TLB Hit at page size: "
-					         << page_size_result << std::endl;
-					log_file << "[MMU] Software TLB Hit PPN: " << ppn_result << std::endl;
-					log_file << "[MMU] Software TLB Hit VPN: "
-					         << (address >> page_size_result) << std::endl;
-					log_file << "[MMU] Software TLB Hit Tag: " << tag << std::endl;
-					log_file << "[MMU] Software TLB Hit Latency: "
-					         << final_software_tlb_latency << std::endl;
-#endif
+					mmu_pomtlb_log->debug("[MMU] Software TLB Hit at page size: %d", page_size_result);
+					mmu_pomtlb_log->debug("[MMU] Software TLB Hit PPN: %lx", ppn_result);
+					mmu_pomtlb_log->debug("[MMU] Software TLB Hit VPN: %lx", (address >> page_size_result));
+					mmu_pomtlb_log->debug("[MMU] Software TLB Hit Tag: %lx", tag);
+					mmu_pomtlb_log->debug("[MMU] Software TLB Hit Latency: %lu", final_software_tlb_latency.getNS());
 				}
 			}
 
 			if (!software_tlb_hit)
 			{
 				// If all software TLBs missed, we take the max of the latencies
-#ifdef DEBUG_MMU
-				log_file << "[MMU] Software TLB Miss" << std::endl;
-#endif
+				mmu_pomtlb_log->debug("[MMU] Software TLB Miss");
 				SubsecondTime max_software_tlb_latency = SubsecondTime::Zero();
 				for (int page_size = 0; page_size < number_of_page_sizes; page_size++)
 				{
@@ -523,10 +575,7 @@ namespace ParametricDramDirectoryMSI
 					translation_stats.software_tlb_latency += final_software_tlb_latency;
 			}
 
-#ifdef DEBUG_MMU
-			log_file << "[MMU] Final Software TLB Latency: "
-			         << final_software_tlb_latency << std::endl;
-#endif
+			mmu_pomtlb_log->debug("[MMU] Final Software TLB Latency: %lu", final_software_tlb_latency.getNS());
 
 			// Advance the clock by the final software TLB latency
 			shmem_perf_model->setElapsedTime(ShmemPerfModel::_USER_THREAD,
@@ -534,11 +583,7 @@ namespace ParametricDramDirectoryMSI
 			if (count)
 				translation_stats.total_translation_latency += final_software_tlb_latency;
 
-#ifdef DEBUG_MMU
-			log_file << "[MMU] New time after charging Software TLB latency: "
-			         << shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD)
-			         << std::endl;
-#endif
+			mmu_pomtlb_log->debug("[MMU] New time after charging Software TLB latency: %lu", shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS());
 		}
 
 		/*
@@ -562,44 +607,66 @@ namespace ParametricDramDirectoryMSI
 			if(count)
 				translation_stats.total_translation_latency += delay;
 
-#ifdef DEBUG_MMU
-			log_file << "[MMU] New time after charging the PT walker allocation delay: "
-			         << shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD)
-			         << std::endl;
-#endif
+			mmu_pomtlb_log->debug("[MMU] New time after charging the PT walker allocation delay: %lu ns", shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS());
 
 			// Perform the PT walk
 			int app_id = core->getThread()->getAppId();
 			PageTable* page_table = Sim()->getMimicOS()->getPageTable(app_id);
+			bool userspace_mimicos_enabled = Sim()->getMimicOS()->isUserspaceMimicosEnabled();
 
-			const bool restart_walk_upon_page_fault = true;
-			auto ptw_result = performPTW(address, modeled, count, false, eip, lock, page_table, restart_walk_upon_page_fault);
+			// @kanellok: restart_walk_after_fault is now false by default
+			// The MMU handles page faults and restarts the walk itself
+			const bool restart_walk_upon_page_fault = false;
+			bool caused_page_fault = false;
+			bool had_page_fault = false;  // Persists across loop iterations for fault latency tracking
+			
+			// Declare ptw_result outside the loop so it's accessible after
+			PTWOutcome ptw_result;
 
-#ifdef DEBUG_MMU
-			log_file << "[MMU] PTW Result: "
-			         << get<0>(ptw_result) << " "
-			         << get<1>(ptw_result) << " "
-			         << get<2>(ptw_result) << " "
-			         << get<3>(ptw_result) << std::endl;
-#endif
+			// Loop to handle page faults: perform PTW, handle fault if needed, retry
+			do {
+				ptw_result = performPTW(address, modeled, count, false, eip, lock, page_table, restart_walk_upon_page_fault, instruction);
 
-			total_walk_latency = get<0>(ptw_result);
+mmu_pomtlb_log->debug("[MMU] PTW Result: %lu %d %lx %d", ptw_result.latency.getNS(), ptw_result.page_fault, ptw_result.ppn, ptw_result.page_size);
+
+			total_walk_latency = ptw_result.latency;
 			if (count)
 			{
 				translation_stats.total_walk_latency += total_walk_latency;
 				translation_stats.page_table_walks++;
 			}
 
-			bool caused_page_fault = get<1>(ptw_result);
+			caused_page_fault = ptw_result.page_fault;
 			if (caused_page_fault)
 			{
-#ifdef DEBUG_MMU
-				log_file << "[MMU] Page Fault occured" << std::endl;
-#endif
+				had_page_fault = true;  // Track that a fault occurred
+				mmu_pomtlb_log->debug("[MMU] Page Fault occured");
+				translation_stats.page_faults++;
+				
+				// Handle page fault at MMU level (sniper-space mode)
+				if (!userspace_mimicos_enabled)
+				{
+					mmu_pomtlb_log->debug("[MMU] Handling page fault in sniper-space mode, calling exception handler");
+					ExceptionHandlerBase *handler = Sim()->getCoreManager()->getCoreFromID(core->getId())->getExceptionHandler();
+
+					ExceptionHandlerBase::FaultCtx fault_ctx{};
+					fault_ctx.vpn = address >> 12;
+					fault_ctx.page_table = page_table;
+					fault_ctx.alloc_in.metadata_frames = ptw_result.requested_frames;
+					handler->handle_page_fault(fault_ctx);
+					
+					mmu_pomtlb_log->debug("[MMU] Page fault handled, restarting PTW for address: %lx", address);
+					// Loop will retry PTW after fault is handled
+				}
+			}
+			} while (caused_page_fault && !userspace_mimicos_enabled);
+			
+			// Calculate fault latency for timing (after loop, fault should be resolved)
+			if (had_page_fault && !userspace_mimicos_enabled)
+			{
 				SubsecondTime m_page_fault_latency = Sim()->getMimicOS()->getPageFaultLatency();
 				if (count)
 				{
-					translation_stats.page_faults++;
 					translation_stats.total_fault_latency += m_page_fault_latency;
 				}
 				total_fault_latency = m_page_fault_latency;
@@ -612,7 +679,7 @@ namespace ParametricDramDirectoryMSI
 			pt_walkers->allocate(pt_walker_entry);
 
 			// Move the time to the end of the PTW + possible page fault
-			if (caused_page_fault)
+			if (had_page_fault && !userspace_mimicos_enabled)
 			{
 				PseudoInstruction *i = new PageFaultRoutineInstruction(total_fault_latency);
 				getCore()->getPerformanceModel()->queuePseudoInstruction(i);
@@ -627,20 +694,14 @@ namespace ParametricDramDirectoryMSI
 					translation_stats.total_translation_latency += total_walk_latency;
 			}
 
-			ppn_result       = get<2>(ptw_result);
-			page_size_result = get<3>(ptw_result);
+			ppn_result       = ptw_result.ppn;
+			page_size_result = ptw_result.page_size;
 
-#ifdef DEBUG_MMU
-			log_file << "[MMU] New time after charging the PT walker completion time: "
-			         << shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD)
-			         << std::endl;
-#endif
+mmu_pomtlb_log->debug("[MMU] New time after charging the PT walker completion time: %lu", shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS());
 		}
 
-#ifdef DEBUG_MMU
-		log_file << "[MMU] Total Walk Latency: " << total_walk_latency << std::endl;
-		log_file << "[MMU] Total Fault Latency: " << total_fault_latency << std::endl;
-#endif
+mmu_pomtlb_log->debug("[MMU] Total Walk Latency: %lu", total_walk_latency.getNS());
+		mmu_pomtlb_log->debug("[MMU] Total Fault Latency: %lu", total_fault_latency.getNS());
 
 		// 5) Allocate the translation in intermediate TLB levels (if needed).
 		if (instruction)
@@ -648,8 +709,7 @@ namespace ParametricDramDirectoryMSI
 		else
 			tlbs = tlb_subsystem->getDataPath();
 
-		std::map<int, vector<tuple<IntPtr,IntPtr,int>>> evicted_translations;
-
+		std::map<int, vector<EvictedTranslation>> evicted_translations;
 		int tlb_levels = tlbs.size();
 
 		// Some TLB hierarchies might have a "prefetch" TLB, skipping the last level for 
@@ -657,75 +717,59 @@ namespace ParametricDramDirectoryMSI
 		if (tlb_subsystem->isPrefetchEnabled())
 		{
 			tlb_levels = tlbs.size() - 1;
-#ifdef DEBUG_MMU
-			log_file << "[MMU] Prefetching is enabled" << std::endl;
-#endif
+			mmu_pomtlb_log->debug("[MMU] Prefetching is enabled");
 		}
 
 		// For each TLB level, we insert or attempt to insert the final translation 
 		// if "allocate on miss" is set and if it supports our page size.
 		for (int i = 0; i < tlb_levels; i++)
 		{
-			// We will check where we need to allocate the page
-
 			for (UInt32 j = 0; j < tlbs[i].size(); j++)
 			{
-				// We need to check if there are any evicted translations from the previous level and allocate them
-				if ((i > 0) && (evicted_translations[i - 1].size() != 0))
+				// If there's any "evicted" translation from the previous level, we attempt to place it here
+				if ((i > 0) && (!evicted_translations[i - 1].empty()))
 				{
+					TLBAllocResult result;
 
-#ifdef DEBUG_MMU
-					log_file << "[MMU] There are evicted translations from level: " << i - 1 << std::endl;
-#endif
-					// iterate through the evicted translations and allocate them in the current TLB
-					for (UInt32 k = 0; k < evicted_translations[i - 1].size(); k++)
+					mmu_pomtlb_log->debug("[MMU] There are evicted translations from level: %d", (i - 1));
+					for (const EvictedTranslation &evicted : evicted_translations[i - 1])
 					{
-#ifdef DEBUG_MMU
-						log_file << "[MMU] Evicted Translation: " << get<0>(evicted_translations[i - 1][k]) << std::endl;
-#endif
-						// We need to check if the TLB supports the page size of the evicted translation
-						if (tlbs[i][j]->supportsPageSize(get<2>(evicted_translations[i - 1][k])))
+						mmu_pomtlb_log->debug("[MMU] Evicted Translation: %lx", evicted.address);
+						IntPtr evicted_address = evicted.address;
+						int evicted_page_size = evicted.page_size;
+						IntPtr evicted_ppn = evicted.ppn;
+						if (tlbs[i][j]->supportsPageSize(evicted_page_size))
 						{
-#ifdef DEBUG_MMU
-							log_file << "[MMU] Allocating evicted entry in TLB: Level = " << i << " Index =  " << j << std::endl;
-#endif
+							mmu_pomtlb_log->debug("[MMU] Allocating evicted entry in TLB: Level = %d Index =  %d", i, j);
+							result = tlbs[i][j]->allocate(evicted_address, time, count, lock,
+							                              evicted_page_size, evicted_ppn);
 
-							auto result = tlbs[i][j]->allocate(get<0>(evicted_translations[i - 1][k]), time, count, lock, get<2>(evicted_translations[i - 1][k]), get<1>(evicted_translations[i - 1][k]));
-
-							// If the allocation was successful and we have an evicted translation, 
-							// we need to add it to the evicted translations vector for
-
-							if (get<0>(result) == true)
+							if (result.evicted)
 							{
-								evicted_translations[i].push_back(make_tuple(get<1>(result), get<2>(result), get<3>(result)));
+								evicted_translations[i].push_back(
+									EvictedTranslation(result.address, result.page_size, result.ppn));
 							}
 						}
 					}
 				}
 
-				// We need to allocate the current translation in the TLB if:
-				// 1) The TLB supports the page size of the translation
-				// 2) The TLB is an "allocate on miss" TLB
-				// 3) There was a TLB miss or the TLB hit was at a higher level and you need to allocate the translation in the current level
-				
-				if (tlbs[i][j]->supportsPageSize(page_size_result) && tlbs[i][j]->getAllocateOnMiss() && (!tlb_hit || (tlb_hit && hit_level > i)))
+				// If the TLB can store this page size, is "allocate on miss," and we either missed 
+				// or want to replicate the translation in lower levels:
+				if (tlbs[i][j]->supportsPageSize(page_size_result)
+				    && tlbs[i][j]->getAllocateOnMiss()
+				    && (!tlb_hit || (tlb_hit && hit_level > i)))
 				{
-					
-#ifdef DEBUG_MMU
-					log_file << "[MMU] " << tlbs[i][j]->getName() << " supports page size: " << page_size_result << std::endl;
-					log_file << "[MMU] Allocating in TLB: Level = " << i << " Index = " << j << " with page size: " << page_size_result << " and VPN: " << (address >> page_size_result) << std::endl;
-#endif
-
-					auto result = tlbs[i][j]->allocate(address, time, count, lock, page_size_result, ppn_result);
-					if (get<0>(result) == true)
+					mmu_pomtlb_log->debug("[MMU] %s supports page size: %d", tlbs[i][j]->getName().c_str(), page_size_result);
+					mmu_pomtlb_log->debug("[MMU] Allocating in TLB: Level = %d Index = %d with page size: %d and VPN: %lx", i, j, page_size_result, (address >> page_size_result));
+					TLBAllocResult result = tlbs[i][j]->allocate(address, time, count, lock, page_size_result, ppn_result);
+					if (result.evicted)
 					{
-						evicted_translations[i].push_back(make_tuple(get<1>(result), get<2>(result), get<3>(result)));
+						evicted_translations[i].push_back(
+							EvictedTranslation(result.address, result.page_size, result.ppn));
 					}
 				}
-
 			}
 		}
-
 
 		/*
 		 * 6) Allocate the translation in the software TLB if we had a miss there. 
@@ -738,102 +782,75 @@ namespace ParametricDramDirectoryMSI
 				TLB* pom = m_pom_tlb[page_size];
 				if (pom->supportsPageSize(page_size_result) && pom->getAllocateOnMiss())
 				{
-#ifdef DEBUG_MMU
-					log_file << "[MMU] Allocating in Software TLB: Page Size = "
-					         << page_size_list[page_size]
-					         << " with VPN: " << (address >> page_size_result)
-					         << " with PPN: " << ppn_result << std::endl;
-#endif
+					mmu_pomtlb_log->debug("[MMU] Allocating in Software TLB: Page Size = %d with VPN: %lx with PPN: %lx", page_size_list[page_size], (address >> page_size_result), ppn_result);
 					pom->allocate(address, time, count, lock, page_size_result, ppn_result);
 				}
 			}
 		}
 
-		/*
-		 * 7) Compute the final physical address:
-		 *    final_physical_address = (ppn_result << 12) + (offset)  if page_size_result=12
-		 *    or similarly with 2MB offset for bigger pages. 
-		 *    We use 'address % page_size_in_bytes' for the offset, 
-		 *    and 'ppn_result * base_page_size_in_bytes' for the base.
-		 */
-		int page_size_in_bytes = pow(2, page_size_result);
-		int base_page_size_in_bytes = pow(2, 12);
+		// ====================================================================
+		// PHASE 6: Calculate Physical Address
+		// ====================================================================
+
+		// Physical address = PPN * base_page_size + offset
+		// PPN is always at 4KB granularity
+		// Offset is extracted based on actual page size (4KB or 2MB)
+
+		const int page_size_in_bytes = 1 << page_size_result;      // 2^page_size (optimized from pow())
+		constexpr int base_page_size_in_bytes = 1 << 12;           // 4KB base page
 
 		IntPtr final_physical_address = (ppn_result * base_page_size_in_bytes)
 		                                + (address % page_size_in_bytes);
 
-#ifdef DEBUG_MMU
-		log_file << "[MMU] Offset: " << (address % page_size_in_bytes) << std::endl;
-		log_file << "[MMU] Physical Address: " << final_physical_address
-		         << " PPN: " << ppn_result*base_page_size_in_bytes
-		         << " Page Size: " << page_size_result << std::endl;
-		log_file << "[MMU] Physical Address: " << bitset<64>(final_physical_address)
-		         << " PPN:" << bitset<64>(ppn_result*base_page_size_in_bytes)
-		         << " Offset: " << bitset<64>(address % page_size_in_bytes) << std::endl;
-		log_file << "[MMU] Total translation latency: "
-		         << charged_tlb_latency + final_software_tlb_latency + total_walk_latency
-		         << std::endl;
-		log_file << "[MMU] Total fault latency: " << total_fault_latency << std::endl;
-		log_file << "[MMU] ---- Ending address translation for virtual address: "
-		         << address << " ----" << std::endl;
-#endif
+mmu_pomtlb_log->debug("[MMU] Offset: %lx", (address % page_size_in_bytes));
+		mmu_pomtlb_log->debug("[MMU] Physical Address: %lx PPN: %lx Page Size: %d", final_physical_address, ppn_result*base_page_size_in_bytes, page_size_result);
+		mmu_pomtlb_log->debug("[MMU] Total translation latency: %lu", (charged_tlb_latency + final_software_tlb_latency + total_walk_latency).getNS());
+		mmu_pomtlb_log->debug("[MMU] Total fault latency: %lu", total_fault_latency.getNS());
+		mmu_pomtlb_log->debug("[MMU] ---- Ending address translation for virtual address: %lx ----", address);
 
 		return final_physical_address;
 	}
 
-	/*
-	 * filterPTWResult(...):
-	 *   - A helper function that "filters" out PTW accesses that are served by the Page Walk Cache (PWC),
-	 *     removing them from the list of actual memory accesses needed for the page table walk.
-	 *   - If m_pwc_enabled is true, it checks each PT walk-level address. If found in PWC, we skip it.
-	 *   - This can reduce the number of memory accesses needed by the final PTW result.
-	 */
-	PTWResult MemoryManagementUnitPOMTLB::filterPTWResult(PTWResult ptw_result,
+// ============================================================================
+// Page Table Walk Support
+// ============================================================================
+
+    /**
+     * @brief Filter PTW result through Page Walk Cache (PWC).
+     *
+     * Removes intermediate page table entries that are already cached in the
+     * PWC, reducing the effective walk latency.
+     *
+     * @param address     Virtual address being translated
+     * @param ptw_result  Raw PTW result from page table
+     * @param page_table  Page table being walked
+     * @param count       Whether to count statistics
+     * @return Filtered PTW result with cached entries removed
+     */
+	PTWResult MemoryManagementUnitPOMTLB::filterPTWResult(IntPtr address, PTWResult ptw_result,
 	                                                      PageTable *page_table,
 	                                                      bool count)
 	{
-		accessedAddresses ptw_accesses;
-
-		if (m_pwc_enabled)
-		{
-			accessedAddresses original_ptw_accesses = get<1>(ptw_result);
-			for (UInt32 i = 0; i < get<1>(ptw_result).size(); i++)
-			{
-				bool pwc_hit = false;
-
-				int level = get<1>(original_ptw_accesses[i]);
-				IntPtr pwc_address = get<2>(original_ptw_accesses[i]);
-
-#ifdef DEBUG_MMU
-				log_file << "[MMU] Checking PWC for address: "
-				         << pwc_address << " at level: " << level << std::endl;
-#endif
-				if (level < 3)
-				{
-					// If the level is not the first, we see if the PWC has it
-					pwc_hit = pwc->lookup(pwc_address, SubsecondTime::Zero(), true, level, count);
-				}
-
-#ifdef DEBUG_MMU
-				log_file << "[MMU] PWC HIT: " << pwc_hit
-				         << " level: " << level << std::endl;
-#endif
-				if (!pwc_hit)
-				{
-					// If not in PWC, we keep it in the final list (ptw_accesses) 
-					ptw_accesses.push_back(get<1>(ptw_result)[i]);
-				}
-			}
-		}
-		// Return an updated PTWResult with the filtered addresses
-		return PTWResult(get<0>(ptw_result), ptw_accesses,
-		                 get<2>(ptw_result), get<3>(ptw_result), get<4>(ptw_result));
+		return ptw_filter->filterPTWResult(address, ptw_result, page_table, count);
 	}
 
-	/*
-	 * discoverVMAs(...):
-	 *   - Hook for the OS to discover Virtual Memory Areas. Not currently implemented.
-	 */
+    /**
+     * @brief Get the page table for the current thread.
+     *
+     * @return Pointer to the current thread's page table
+     */
+	PageTable *MemoryManagementUnitPOMTLB::getPageTable()
+	{
+		int app_id = core->getThread()->getAppId();
+		return Sim()->getMimicOS()->getPageTable(app_id);
+	}
+
+    /**
+     * @brief Discover Virtual Memory Areas (VMAs).
+     *
+     * Not implemented for this MMU variant. VMAs are used by range-based
+     * MMUs for coalescing translations.
+     */
 	void MemoryManagementUnitPOMTLB::discoverVMAs()
 	{
 	}

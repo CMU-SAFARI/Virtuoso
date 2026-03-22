@@ -40,7 +40,7 @@ CacheSetSRRIP::getReplacementIndex(CacheCntlr *cntlr)
          // Prepare way for a new line: set prediction to 'long'
          m_rrip_bits[i] = m_rrip_insert;
          
-         if(m_cache_block_info_array[i]->isTLBBlock() && m_srrip_tlb_enabled){
+         if(m_cache_block_info_array[i]->isPageTableBlock() && m_srrip_tlb_enabled){
             m_rrip_bits[i] = 0;
          }
          return i;
@@ -79,9 +79,9 @@ CacheSetSRRIP::getReplacementIndex(CacheCntlr *cntlr)
                continue;
             }
 
-            if(m_cache_block_info_array[index]->isTLBBlock() && m_srrip_tlb_enabled && attempt_goforit){
+            if(m_cache_block_info_array[index]->isPageTableBlock() && m_srrip_tlb_enabled && attempt_goforit){
                
-              // std::cout << "Updating TLB Block inside the set while searching for replacement" << std::endl;
+              // std::cout << "Updating metadata block inside the set while searching for replacement" << std::endl;
 
                m_rrip_bits[index] = 0;
                cntlr->incrementQBSLookupCost();
@@ -97,8 +97,8 @@ CacheSetSRRIP::getReplacementIndex(CacheCntlr *cntlr)
             m_set_info->incrementAttempt(attempt);
 
             LOG_ASSERT_ERROR(isValidReplacement(index), "SRRIP selected an invalid replacement candidate" );
-            // if(m_cache_block_info_array[index]->isTLBBlock() && m_srrip_tlb_enabled){
-            //    std::cout << "Evicting a block which is TLB entry " << m_cache_block_info_array[index]->isTLBBlock() << std::endl;
+            // if(m_cache_block_info_array[index]->isPageTableBlock() && m_srrip_tlb_enabled){
+            //    std::cout << "Evicting a metadata block " << m_cache_block_info_array[index]->isPageTableBlock() << std::endl;
             // }
             return index;
          }
@@ -124,9 +124,9 @@ CacheSetSRRIP::updateReplacementIndex(UInt32 accessed_index)
 {
    m_set_info->increment(m_rrip_bits[accessed_index]);
 
-   if(m_cache_block_info_array[accessed_index]->isTLBBlock() && m_srrip_tlb_enabled){
+   if(m_cache_block_info_array[accessed_index]->isPageTableBlock() && m_srrip_tlb_enabled){
       m_rrip_bits[accessed_index] = 0;
-      //std::cout << "Updating TLB Block inside the set" << std::endl;
+      //std::cout << "Updating metadata block inside the set" << std::endl;
 
       return;
    }

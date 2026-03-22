@@ -1,0 +1,910 @@
+# Virtuoso Experiment Configuration List
+# ==========================================
+
+# Traces
+trace_suite:
+  all_vm:
+    tracelist_base_path: "vm_tlist/"
+
+    tracelists:
+      - cvp1.tlist
+      - dpc3.tlist
+      - gap.tlist
+      - google.tlist
+      - huawei.tlist
+      - ml.tlist
+      - safari.tlist
+      - victima.tlist
+
+  victima:
+    tracelist_base_path: "vm_tlist/"
+
+    tracelists:
+      - victima.tlist
+  
+  randacc:
+    tracelist_base_path: "vm_tlist/"
+
+    tracelists:
+      - randacc.tlist
+
+  top250:
+    tracelist_base_path: "vm_tlist/"
+
+    tracelists:
+      - top250_cvp1.tlist
+      - top250_dpc3.tlist
+      - top250_gap.tlist
+      - top250_google.tlist
+      - top250_huawei.tlist
+      - top250_safari.tlist
+      - top250_ml.tlist
+      - top250_virtuoso.tlist
+
+  google_delta_single:
+    tracelist_base_path: "vm_tlist/"
+
+    tracelists:
+      - google_delta_single.tlist
+
+# Available configurations
+# Each config has:
+#   - name: unique config name
+#   - file: the base .cfg file
+#   - extends: list of -g options to add
+#   - sweeps: list of parameter sweeps; each sweep has: sweep identifier, sweep option, list of values to sweep
+#   - description: human-readable description
+
+configs:
+  configs_base_path: "../simulator/sniper/config/address_translation_schemes/"
+
+  # No translation (sanity check / upper bound)
+  no-translation:
+    name: "no-translation"
+    file: "no_translation.cfg"
+    description: "No address translation (sanity baseline)"
+
+  # SpOT allocator
+  spot:
+    name: "spot"
+    file: "spot.cfg"
+    description: "SpOT contiguity-aware allocator with speculative engine"
+
+  # Utopia allocator
+  utopia:
+    name: "utopia"
+    file: "utopia.cfg"
+    description: "Utopia allocator with RestSeg and range translation"
+
+  # ASAP allocator
+  asap:
+    name: "asap"
+    file: "asap.cfg"
+    description: "ASAP eager THP allocator"
+
+  # Spec Oracle + ReserveTHP
+  spec-oracle:
+    name: "spec-oracle"
+    file: "spec_oracle_reservethp.cfg"
+    description: "Oracle speculation engine with ReserveTHP allocator"
+
+  # POM-TLB MMU
+  pomtlb:
+    name: "pomtlb"
+    file: "reservethp_pomtlb.cfg"
+    description: "POM-TLB MMU design with ReserveTHP allocator"
+
+  # Page table variants
+  ech-baseline:
+    name: "ech-baseline"
+    file: "ech_baseline_alloc.cfg"
+    description: "Elastic Cuckoo Hash page table with baseline allocator"
+
+  hdc-baseline:
+    name: "hdc-baseline"
+    file: "hdc_baseline_alloc.cfg"
+    description: "Hash Don't Cache page table with baseline allocator"
+
+  ht-baseline:
+    name: "ht-baseline"
+    file: "ht_baseline_alloc.cfg"
+    description: "Hash Table (chaining) page table with baseline allocator"
+
+  # Userspace MimicOS (page faults handled by VirtuOS process)
+  userspace-reservethp:
+    name: "userspace-reservethp"
+    file: "userspace_reservethp.cfg"
+    description: "Userspace MimicOS with ReserveTHP allocator"
+
+  userspace-baseline:
+    name: "userspace-baseline"
+    file: "userspace_baseline.cfg"
+    description: "Userspace MimicOS with baseline allocator"
+
+  # DMT (Direct Memory Translation)
+  dmt:
+    name: "dmt"
+    file: "dmt.cfg"
+    description: "Direct Memory Translation MMU design"
+
+  # RMM (Redundant Memory Mappings)
+  rmm:
+    name: "rmm"
+    file: "rmm.cfg"
+    description: "Redundant Memory Mappings"
+
+  # SpecTLB + ReserveTHP
+  spectlb:
+    name: "spectlb"
+    file: "spectlb_reservethp.cfg"
+    description: "SpecTLB speculation engine with ReserveTHP allocator"
+
+  # ReserveTHP + alternative page tables
+  reservethp-ech:
+    name: "reservethp-ech"
+    file: "reservethp_ech.cfg"
+    description: "ReserveTHP allocator with Elastic Cuckoo Hash page table"
+
+  reservethp-hdc:
+    name: "reservethp-hdc"
+    file: "reservethp_hdc.cfg"
+    description: "ReserveTHP allocator with Hash Don't Cache page table"
+
+  reservethp-ht:
+    name: "reservethp-ht"
+    file: "reservethp_ht.cfg"
+    description: "ReserveTHP allocator with Hash Table (chaining) page table"
+
+  # Perfect Translation
+  perfect-translation:
+    name: "perfect-translation"
+    file: "perfect_translation.cfg"
+    description: "Perfect translation with no page faults"
+
+  # Perfect Translation with 1-cycle TLB latency
+  perfect-translation-1c-tlb:
+    name: "perfect-translation-1c-tlb"
+    file: "perfect_translation_1c_tlb.cfg"
+    description: "Perfect translation but with realistic 1-cycle L1 TLB latency"
+
+  # THP-based allocators
+  reservethp-full-fragmentation:
+    name: "reservethp-frag0.0"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Reservation-based THP allocator with full fragmentation"
+    
+  reservethp-no-fragmentation:
+    name: "reservethp-frag1.0"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+    description: "Reservation-based THP with no fragmentation"
+
+  reservethp:
+    name: "reservethp"
+    file: "reservethp.cfg"
+    sweeps:
+      - identifier: ["frag", "promotionthresh"]
+        option: ["--perf_model/reserve_thp/target_fragmentation=", "--perf_model/reserve_thp/threshold_for_promotion="]
+        values: [[0.0, 0.25, 0.5, 0.75, 1.0], [0.0, 0.0, 0.0, 0.0, 0.0]]
+    description: "Reservation-based THP allocator"
+
+  # Sweep configurations
+  outstanding-loads-sweep:
+    name: "outstanding-loads-sweep"
+    file: "reservethp.cfg"
+    sweeps:
+      - identifier: ["outstanding-loads"]
+        option: ["--perf_model/core/rob_timer/outstanding_loads="]
+        values: [[150,200,250,500]]
+      - identifier: ["frag"]
+        option: ["--perf_model/reserve_thp/target_fragmentation="]
+        values: [[0.0, 1.0]]
+    description: "Outstanding loads sweep (MLP) with reservethp allocator"
+
+  window-size-sweep:
+    name: "window-size-sweep"
+    file: "reservethp.cfg"
+    sweeps:
+      - identifier: ["window-size"]
+        option: ["--perf_model/core/interval_timer/window_size="]
+        values: [[1024, 2048, 4096]]
+      - identifier: ["frag"]
+        option: ["--perf_model/reserve_thp/target_fragmentation="]
+        values: [[0.0, 1.0]]
+    description: "ROB window size sweep with reservethp allocator"
+
+  l2-cache-size-sweep:
+    name: "l2-cache-size-sweep"
+    file: "reservethp.cfg"
+    sweeps:
+      - identifier: ["l2-size"]
+        option: ["--perf_model/l2_cache/cache_size="]
+        values: [[4096, 8192, 16384, 32768]]
+      - identifier: ["frag"]
+        option: ["--perf_model/reserve_thp/target_fragmentation="]
+        values: [[0.0, 1.0]]
+    description: "L2 cache size sweep (KB) with reservethp allocator"
+
+  nuca-cache-size-sweep:
+    name: "nuca-cache-size-sweep"
+    file: "reservethp.cfg"
+    sweeps:
+      - identifier: ["nuca-size"]
+        option: ["--perf_model/nuca/cache_size="]
+        values: [[16384, 32768, 65536]]
+      - identifier: ["frag"]
+        option: ["--perf_model/reserve_thp/target_fragmentation="]
+        values: [[0.0, 1.0]]
+    description: "NUCA/LLC cache size sweep (KB) with reservethp allocator"
+
+  l2-tlb-size-sweep:
+    name: "l2-tlb-size-sweep"
+    file: "reservethp.cfg"
+    sweeps:
+      - identifier: ["l2-tlb-size"]
+        option: ["--perf_model/mmu/tlb_level_2/tlb1/size="]
+        values: [[4096, 8192, 16384, 32768, 65536, 131072]]
+      - identifier: ["frag"]
+        option: ["--perf_model/reserve_thp/target_fragmentation="]
+        values: [[0.0, 1.0]]
+    description: "L2 TLB size sweep with reservethp allocator"
+
+  high-fragmentation-sweep:
+    name: "fragmentation-sweep"
+    file: "reservethp.cfg"
+    sweeps:
+      - identifier: ["frag"]
+        option: ["--perf_model/reserve_thp/target_fragmentation="]
+        values: [[0.001,0.002,0.003,0.004,0.005,0.006,0.007,0.008,0.009,0.01]]
+    description: "High-level fragmentation sweep with reservethp allocator"
+
+  mid-fragmentation-sweep:
+    name: "mid-fragmentation-sweep"
+    file: "reservethp.cfg"
+    sweeps:
+      - identifier: ["frag"]
+        option: ["--perf_model/reserve_thp/target_fragmentation="]
+        values: [[0.01,0.02,0.03,0.04,0.05,0.06,0.07,0.08,0.09,0.1]]
+    description: "Mid-level fragmentation sweep with reservethp allocator"
+
+
+
+  asp-lookahead-degree-sweep:
+    name: "asp-sweep"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    sweeps:
+      - identifier: ["lookahead"]
+        option: ["--perf_model/tlb_prefetch/pq1/asp_prefetcher/lookahead="]
+        values: [[1, 2, 4, 8]]
+      - identifier: ["degree"]
+        option: ["--perf_model/tlb_prefetch/pq1/asp_prefetcher/degree="]
+        values: [[1, 2, 4, 8]]
+    description: "ASP (PC-based stride) prefetcher, frag=0.0, sweep lookahead {1,2,4,8} × degree {1,2,4,8}"
+
+  asp-threshold-sweep:
+    name: "asp-thresh"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    sweeps:
+      - identifier: ["threshold"]
+        option: ["--perf_model/tlb_prefetch/pq1/asp_prefetcher/prefetch_threshold="]
+        values: [[0, 1, 2, 4]]
+    description: "ASP (PC-based stride) prefetcher, frag=0.0, sweep prefetch_threshold {0,1,2,4}"
+
+  # ============================================================================
+  # STRIDE (NEXT-PAGE) PREFETCHER CONFIGURATIONS
+  # ============================================================================
+
+  stride-length-sweep:
+    name: "stride-sweep"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/tlb_prefetch/pq1/prefetcher_list=stride"
+    sweeps:
+      - identifier: ["length"]
+        option: ["--perf_model/tlb_prefetch/pq1/stride_prefetcher/length="]
+        values: [[1, 2, 4, 8, 16]]
+    description: "Stride (next-page) prefetcher, frag=0.0, sweep length {1,2,4,8,16}"
+
+  # --------------------------------------------------------------------------
+  # Detailed Telemetry with iCache Modeling On
+  # --------------------------------------------------------------------------
+
+  reservethp-full-fragmentation-icache-on:
+    name: "reservethp-frag0.0-icache"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--general/enable_icache_modeling=true"
+    description: "Reservation-based THP allocator with full fragmentation and iCache modeling enabled"
+
+  reservethp-no-fragmentation-icache-on:
+    name: "reservethp-frag1.0-icache"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+      - "--general/enable_icache_modeling=true"
+    description: "Reservation-based THP with no fragmentation and iCache modeling enabled"
+
+  # ============================================================================
+  # UTOPIA CONFIGURATIONS
+  # ============================================================================
+
+
+  # --------------------------------------------------------------------------
+  # RestSeg Size Sweeps (no speculation, no migration)
+  # --------------------------------------------------------------------------
+
+  # 2MB-RestSeg size sweep (fixed 1GB 4KB-RestSeg)
+  utopia-2mb-restseg-sweep:
+    name: "utopia-2mb-sweep"
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/speculation/enabled=false"
+      - "--perf_model/utopia/migration_cost_topk/enabled=0"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    sweeps:
+      - identifier: ["rs2mb"]
+        option: ["--perf_model/utopia/restseg/size="]
+        values: [["32,1024","64,1024","128,1024","256,1024", "512,1024", "1024,1024", "2048,1024", "4096,1024"]]
+    description: "2MB-RestSeg size sweep: 32MB to 8GB (fixed 1GB 4KB-RestSeg)"
+
+  # 4KB-RestSeg size sweep (fixed 64MB 2MB-RestSeg)
+  utopia-4kb-restseg-sweep:
+    name: "utopia-4kb-sweep"
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/speculation/enabled=false"
+      - "--perf_model/utopia/migration_cost_topk/enabled=0"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    sweeps:
+      - identifier: ["rs4kb"]
+        option: ["--perf_model/utopia/restseg/size="]
+        values: [["64,256", "64,512", "64,1024", "64,2048", "64,4096", "64,8192"]]
+    description: "4KB-RestSeg size sweep: 256MB to 8GB (fixed 64MB 2MB-RestSeg)"
+
+
+
+
+  # --------------------------------------------------------------------------
+  # Comparison: No Spec vs Aggressive Spec vs Medium Spec
+  # --------------------------------------------------------------------------
+
+
+  # 4KB-RestSeg sweep with aggressive speculation
+  utopia-small-4kb-restseg-sweep-very-agg-migration-on:
+    name: "utopia-small-4kb-very-agg-mig"
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=6"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=64"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=128"
+      - "--perf_model/utopia/migration_cost_topk/sticky_threshold=2"
+      - "--perf_model/utopia/migration_cost_topk/cooldown_epochs=2"
+      - "--perf_model/utopia/migration_cost_topk/ranking_epoch_translations=16384"
+      - "--perf_model/utopia/migration_cost_topk/credit_epoch_translations=1024"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    sweeps:
+      - identifier: ["rs4kb"]
+        option: ["--perf_model/utopia/restseg/size="]
+        values: [["16,8","16,16","16,32","16,64","16,128","16,256","16,512"]]
+    description: "4KB-RestSeg sweep with very aggressive migration (no speculation)"
+
+
+  # 4KB-RestSeg sweep with aggressive speculation
+  utopia-small-4kb-restseg-sweep-agg-migration-on:
+    name: "utopia-small-4kb-agg--mig"
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=6"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=64"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=32"
+      - "--perf_model/utopia/migration_cost_topk/sticky_threshold=2"
+      - "--perf_model/utopia/migration_cost_topk/cooldown_epochs=2"
+      - "--perf_model/utopia/migration_cost_topk/ranking_epoch_translations=4096"
+      - "--perf_model/utopia/migration_cost_topk/credit_epoch_translations=1024"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    sweeps:
+      - identifier: ["rs4kb"]
+        option: ["--perf_model/utopia/restseg/size="]
+        values: [["16,8","16,16","16,32","16,64","16,128","16,256","16,512"]]
+    description: "4KB-RestSeg sweep with aggressive migration (no speculation)"
+
+  utopia-large-4kb-restseg-sweep-very-agg-migration-on:
+    name: "utopia-large-4kb-very-agg-mig"
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=6"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=64"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=128"
+      - "--perf_model/utopia/migration_cost_topk/sticky_threshold=2"
+      - "--perf_model/utopia/migration_cost_topk/cooldown_epochs=2"
+      - "--perf_model/utopia/migration_cost_topk/ranking_epoch_translations=16384"
+      - "--perf_model/utopia/migration_cost_topk/credit_epoch_translations=1024"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    sweeps:
+      - identifier: ["rs4kb"]
+        option: ["--perf_model/utopia/restseg/size="]
+        values: [["64,256","64,512","64,1024","64,2048","64,4096","64,8192"]]
+    description: "4KB-RestSeg large sweep with very aggressive migration (no speculation)"
+
+
+  # 4KB-RestSeg sweep with aggressive speculation
+  utopia-large-4kb-restseg-sweep-agg-migration-on:
+    name: "utopia-large-4kb-agg--mig"
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/migration_cost_topk/migrate_threshold=6"
+      - "--perf_model/utopia/migration_cost_topk/topk_entries=64"
+      - "--perf_model/utopia/migration_cost_topk/credits_max=32"
+      - "--perf_model/utopia/migration_cost_topk/sticky_threshold=2"
+      - "--perf_model/utopia/migration_cost_topk/cooldown_epochs=2"
+      - "--perf_model/utopia/migration_cost_topk/ranking_epoch_translations=4096"
+      - "--perf_model/utopia/migration_cost_topk/credit_epoch_translations=1024"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    sweeps:
+      - identifier: ["rs4kb"]
+        option: ["--perf_model/utopia/restseg/size="]
+        values: [["64,256","64,512","64,1024","64,2048","64,4096","64,8192"]]
+    description: "4KB-RestSeg large sweep with aggressive migration (no speculation)"
+
+  utopia-small-4kb-restseg-sweep-migration-off:
+    name: "utopia-small-4kb"
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/speculation/enabled=false"
+      - "--perf_model/utopia/migration_cost_topk/enabled=0"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    sweeps:
+      - identifier: ["rs4kb"]
+        option: ["--perf_model/utopia/restseg/size="]
+        values: [["16,8","16,16","16,32","16,64","16,128","16,256","16,512"]]
+    description: "4KB-RestSeg size sweep: 8MB up to 512MB (fixed 16MB 2MB-RestSeg, no migration, no speculation)"
+
+
+  # --------------------------------------------------------------------------
+  # Migration Aggressiveness Sweep (no speculation)
+  # --------------------------------------------------------------------------
+  
+  # Sweep migration aggressiveness: aggressive, mediocre, conservative
+  # Fixed RestSeg size: 64MB 2MB-RestSeg + 1GB 4KB-RestSeg
+  utopia-migration-aggressiveness-sweep:
+    name: "utopia-mig-sweep"
+    file: "utopia.cfg"
+    extends:
+      - "--perf_model/utopia/restseg/size=64,1024"
+      - "--perf_model/utopia/speculation/enabled=false"
+      - "--perf_model/utopia/migration_cost_topk/enabled=1"
+      - "--perf_model/utopia/legacy_migration_enabled=0"
+    sweeps:
+      # Sweep: aggressive (low threshold, high credits), mediocre, conservative (high threshold, low credits)
+      - identifier: ["mig_thresh", "mig_topk", "mig_credits", "mig_credit_epoch"]
+        option: ["--perf_model/utopia/migration_cost_topk/migrate_threshold=", "--perf_model/utopia/migration_cost_topk/topk_entries=", "--perf_model/utopia/migration_cost_topk/credits_max=", "--perf_model/utopia/migration_cost_topk/credit_epoch_translations="]
+        values: [
+          [6, 64, 32, 1024],      # aggressive: low threshold, many entries, many credits, fast refill
+          [16, 64, 32, 1024],      # mediocre: medium threshold, medium entries, medium credits
+          [64, 64, 32, 1024]      # conservative: high threshold, few entries, few credits, slow refill
+        ]
+    description: "Migration aggressiveness sweep: aggressive/mediocre/conservative (no speculation)"
+
+
+  # ============================================================================
+  # AGILE TLB PREFETCHER (ATP + SBFP) CONFIGURATIONS
+  # ============================================================================
+
+  atp-baseline:
+    name: "atp-baseline"
+    file: "baseline_atp.cfg"
+    description: "ATP + SBFP baseline with paper design points (PQ=64, Sampler=64, FPQ=16, FDT 10-bit/100 threshold)"
+
+  atp-fdt-threshold-sweep:
+    name: "atp-fdt-thresh"
+    file: "baseline_atp.cfg"
+    sweeps:
+      - identifier: ["fdtT"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/atp_prefetcher/fdt_threshold="]
+        values: [[0, 50, 100, 200, 500]]
+    description: "ATP with FDT threshold sweep: controls aggressiveness of SBFP free-prefetch admission"
+
+  atp-vs-baseline:
+    name: "atp-vs-baseline"
+    file: "baseline_atp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "ATP + SBFP prefetcher vs baseline (full fragmentation for max TLB pressure)"
+
+  # ============================================================================
+  # DISTANCE TLB PREFETCHER (DP) CONFIGURATIONS
+  # ============================================================================
+
+  # --- Baseline distance prefetcher (256 rows, 8 slots, 4-way assoc) ---
+  dp-baseline:
+    name: "dp-baseline"
+    file: "baseline_distance.cfg"
+    description: "Distance TLB prefetcher: 256 rows, 8 slots, 4-way associative, prefetch walks modeled"
+
+  # --- DP with no prefetch walk modeling (ideal walks) ---
+  dp-no-prefetch-walks:
+    name: "dp-no-walks"
+    file: "baseline_distance.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/dp_prefetcher/model_prefetch_walks=false"
+    description: "Distance TLB prefetcher with prefetch PTWs not modeled (ideal-walk upper bound)"
+
+  # --- DP table size sweep (num_rows, keeping 8 slots, 4-way) ---
+  dp-table-size-sweep:
+    name: "dp-table"
+    file: "baseline_distance.cfg"
+    sweeps:
+      - identifier: ["rows"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/dp_prefetcher/num_rows="]
+        values: [[64, 128, 512, 1024]]
+    description: "DP table size sweep: 64/128/512/1024 rows (8 slots, 4-way)"
+
+  # ============================================================================
+  # RECENCY TLB PREFETCHER CONFIGURATIONS
+  # ============================================================================
+
+  # --- Baseline recency prefetcher (all directions, pointer chase modeled) ---
+  recency-baseline:
+    name: "recency-baseline"
+    file: "baseline_recency.cfg"
+    description: "Recency TLB prefetcher: same/minus1/plus1, pointer chase modeled through cache hierarchy"
+
+  # --- Pointer chase modeling on vs off ---
+  recency-no-pointer-chase:
+    name: "recency-no-pc"
+    file: "baseline_recency.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/model_pointer_chase=false"
+    description: "Recency TLB prefetcher with pointer chase latency disabled (ideal pointer access)"
+
+  # --- Prediction direction ablation: individual directions ---
+  recency-minus1-only:
+    name: "recency-minus1"
+    file: "baseline_recency.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_same_recency=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_recency_plus_1=false"
+    description: "Recency prefetcher: recency-minus-1 prediction only"
+
+  recency-plus1-only:
+    name: "recency-plus1"
+    file: "baseline_recency.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_same_recency=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_recency_minus_1=false"
+    description: "Recency prefetcher: recency-plus-1 prediction only"
+
+  # --- Prediction direction ablation: pairs ---
+  recency-same-minus1:
+    name: "recency-same-m1"
+    file: "baseline_recency.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_recency_plus_1=false"
+    description: "Recency prefetcher: same + minus-1 predictions"
+
+  recency-same-plus1:
+    name: "recency-same-p1"
+    file: "baseline_recency.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_recency_minus_1=false"
+    description: "Recency prefetcher: same + plus-1 predictions"
+
+  # --- Prefetch on TLB hit ---
+  recency-prefetch-on-hit:
+    name: "recency-on-hit"
+    file: "baseline_recency.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_on_tlb_hit=true"
+    description: "Recency prefetcher: also prefetch on TLB hits (more aggressive)"
+
+  # --- Model prefetch walks off (free PTWs for prefetched pages) ---
+  recency-no-prefetch-walks:
+    name: "recency-no-walks"
+    file: "baseline_recency.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/model_prefetch_walks=false"
+    description: "Recency prefetcher: prefetch PTWs not modeled (ideal-walk upper bound)"
+
+  # --- PQ size sweep ---
+  recency-pq-size-sweep:
+    name: "recency-pq-size"
+    file: "baseline_recency.cfg"
+    sweeps:
+      - identifier: ["pq_size"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/size="]
+        values: [[64, 256, 512, 1024, 2048]]
+    description: "Recency prefetcher: PQ size sweep"
+
+  # --- Direction × pointer-chase cross sweep ---
+  recency-direction-pointer-chase-sweep:
+    name: "recency-dir-pc"
+    file: "baseline_recency.cfg"
+    sweeps:
+      - identifier: ["same", "minus1", "plus1"]
+        option: [
+          "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_same_recency=",
+          "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_recency_minus_1=",
+          "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_recency_plus_1="
+        ]
+        values: [
+          [true, true, true, false, false],
+          [true, true, false, true, false],
+          [true, false, true, false, true]
+        ]
+      - identifier: ["pc"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/model_pointer_chase="]
+        values: [[true, false]]
+    description: "Recency prefetcher: direction combos × pointer chase on/off"
+
+
+
+
+## Experiment suites
+
+# Experiment directory is named after the suite
+# Each experiment suite has:
+#  - description: human-readable description
+#  - configs: list of config names to run
+#  - trace_suite: which trace suite to use
+#  - instruction_count: number of instructions to simulate per trace
+
+experiment_suites:
+
+  perfect_translation:
+    description: "Perfect Translation"
+    configs: [perfect-translation]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  perfect_translation_1c_tlb:
+    description: "Perfect Translation with 1-cycle TLB latency"
+    configs: [perfect-translation-1c-tlb]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  detailed_telemetry:
+    description: "Detailed telemetry collection with reservethp allocator"
+    configs: [reservethp-full-fragmentation, reservethp-no-fragmentation]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+
+  tlb-size-sweep:
+    description: "L2 TLB Size Sweep with reservethp allocator"
+    configs: [l2-tlb-size-sweep]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  fragmentation-sweep:
+    description: "Fragmentation Sweep with reservethp allocator"
+    configs: [reservethp-full-fragmentation, reservethp-no-fragmentation, high-fragmentation-sweep, mid-fragmentation-sweep]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+
+
+  # ==========================================================================
+  # UTOPIA EXPERIMENT SUITES
+  # ==========================================================================
+
+  utopia-baseline:
+    description: "Utopia baseline: 4KB-RestSeg size sweep (no migration, no speculation)"
+    configs: [utopia-4kb-restseg-sweep]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+
+  utopia-with-migration:
+    description: "Utopia with aggressive migration (no speculation)"
+    configs: [utopia-small-4kb-restseg-sweep-very-agg-migration-on, utopia-small-4kb-restseg-sweep-agg-migration-on, utopia-small-4kb-restseg-sweep-migration-off]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  utopia-large-with-migration:
+    description: "Utopia with aggressive migration (no speculation)"
+    configs: [utopia-large-4kb-restseg-sweep-very-agg-migration-on, utopia-large-4kb-restseg-sweep-agg-migration-on]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  utopia-baseline-2mb:
+    description: "Utopia baseline: 2MB-RestSeg size sweep (no migration, no speculation)"
+    configs: [utopia-2mb-restseg-sweep]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+
+  baseline-icache-enabled:
+    description: "Detailed telemetry with iCache modeling enabled"
+    configs: [reservethp-full-fragmentation-icache-on, reservethp-no-fragmentation-icache-on]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  # ==========================================================================
+  # ASP & STRIDE PREFETCHER EXPERIMENT SUITES
+  # ==========================================================================
+
+  asp-sweep:
+    description: "ASP (PC-based stride) prefetcher: lookahead × degree sweep"
+    configs: [asp-lookahead-degree-sweep, asp-threshold-sweep]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  stride-sweep:
+    description: "Stride (next-page) prefetcher: length sweep"
+    configs: [stride-length-sweep]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  # ==========================================================================
+  # AGILE TLB PREFETCHER (ATP) EXPERIMENT SUITES
+  # ==========================================================================
+
+  atp-baseline:
+    description: "ATP + SBFP baseline (paper design points) across top250 workloads"
+    configs: [atp-baseline]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  atp-fdt-sweep:
+    description: "ATP FDT threshold sweep: how aggressive should free-prefetch admission be?"
+    configs: [atp-fdt-threshold-sweep]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  atp-smoke-test:
+    description: "Quick ATP smoke test with 1M instructions on randacc"
+    configs: [atp-baseline, reservethp-full-fragmentation]
+    trace_suite: randacc
+    instruction_count: 1000000  # 1M instructions
+
+  atp-vs-baseline:
+    description: "ATP vs baseline reservethp comparison on victima traces"
+    configs: [atp-vs-baseline, reservethp-full-fragmentation]
+    trace_suite: victima
+    instruction_count: 10000000  # 10M instructions
+
+  # ==========================================================================
+  # RECENCY TLB PREFETCHER EXPERIMENT SUITES
+  # ==========================================================================
+
+  recency-smoke-test:
+    description: "Quick recency prefetcher smoke test with 1M instructions"
+    configs: [recency-baseline, reservethp-full-fragmentation]
+    trace_suite: randacc
+    instruction_count: 1000000  # 1M instructions
+
+  recency-baseline:
+    description: "Recency TLB prefetcher baseline (all directions, pointer chase modeled)"
+    configs: [recency-baseline]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  recency-vs-baseline:
+    description: "Recency prefetcher vs no-prefetcher baseline"
+    configs: [recency-baseline, reservethp-full-fragmentation]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  recency-direction-ablation:
+    description: "Recency prefetcher direction ablation: individual and pairs"
+    configs: [recency-baseline, recency-minus1-only, recency-plus1-only, recency-same-minus1, recency-same-plus1]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  recency-pointer-chase-study:
+    description: "Recency prefetcher: pointer chase modeled vs ideal vs no-prefetch-walks"
+    configs: [recency-baseline, recency-no-pointer-chase, recency-no-prefetch-walks]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  recency-pq-size:
+    description: "Recency prefetcher: PQ size sweep"
+    configs: [recency-pq-size-sweep]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  recency-aggressiveness:
+    description: "Recency prefetcher aggressiveness: prefetch on hit vs miss-only"
+    configs: [recency-baseline, recency-prefetch-on-hit]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  recency-full-sweep:
+    description: "Recency prefetcher: direction combos × pointer chase on/off"
+    configs: [recency-direction-pointer-chase-sweep]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  recency-vs-atp:
+    description: "Recency TLB prefetcher vs ATP head-to-head"
+    configs: [recency-baseline, atp-baseline]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  # ==========================================================================
+  # DISTANCE TLB PREFETCHER (DP) EXPERIMENT SUITES
+  # ==========================================================================
+
+  dp-smoke-test:
+    description: "Quick DP smoke test with 5M instructions on a Google trace"
+    configs: [dp-baseline, reservethp-full-fragmentation]
+    trace_suite: google_delta_single
+    instruction_count: 5000000  # 5M instructions
+
+  dp-baseline-suite:
+    description: "DP baseline (256 rows, 8 slots, 4-way) across top250 workloads"
+    configs: [dp-baseline]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  dp-vs-baseline:
+    description: "DP prefetcher vs no-prefetcher baseline"
+    configs: [dp-baseline, reservethp-full-fragmentation]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  dp-table-size:
+    description: "DP table size sweep: 64/128/256(baseline)/512/1024 rows"
+    configs: [dp-baseline, dp-table-size-sweep]
+    trace_suite: top250
+    instruction_count: 300000000  # 300M instructions
+
+  # ==========================================================================
+  # SMOKE TESTS (2M instructions, single trace — quick validation)
+  # ==========================================================================
+
+  smoke-test-allocators:
+    description: "Smoke test: baseline vs reservethp vs spot vs utopia vs asap (2M instr)"
+    configs: [no-translation, reservethp-full-fragmentation, reservethp-no-fragmentation, spot, utopia, asap]
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  smoke-test-prefetchers:
+    description: "Smoke test: TLB prefetchers — ATP, distance, recency (2M instr)"
+    configs: [atp-baseline, dp-baseline, recency-baseline, reservethp-full-fragmentation]
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  smoke-test-spec-engines:
+    description: "Smoke test: speculative engines — SpOT, oracle (2M instr)"
+    configs: [spot, spec-oracle]
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  smoke-test-page-tables:
+    description: "Smoke test: page table variants — radix, ECH, HDC, HT + ReserveTHP combos (2M instr)"
+    configs: [reservethp-full-fragmentation, ech-baseline, hdc-baseline, ht-baseline, reservethp-ech, reservethp-hdc, reservethp-ht]
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  smoke-test-mmu-designs:
+    description: "Smoke test: MMU designs — base, spec, pomtlb, dmt, spectlb, rmm (2M instr)"
+    configs: [reservethp-full-fragmentation, spec-oracle, pomtlb, dmt, spectlb, rmm]
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  smoke-test-userspace:
+    description: "Smoke test: userspace MimicOS — baseline and reservethp (2M instr)"
+    configs: [userspace-baseline, userspace-reservethp]
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  smoke-test-all:
+    description: "Comprehensive smoke test: all major configs including userspace MimicOS (2M instr)"
+    configs: [no-translation, reservethp-full-fragmentation, reservethp-no-fragmentation, spot, utopia, asap, atp-baseline, dp-baseline, recency-baseline, spec-oracle, pomtlb, dmt, spectlb, rmm, ech-baseline, hdc-baseline, ht-baseline, reservethp-ech, reservethp-hdc, reservethp-ht, userspace-baseline, userspace-reservethp]
+    trace_suite: randacc
+    instruction_count: 2000000
+

@@ -57,7 +57,7 @@ def generate_simout(jobid = None, resultsdir = None, partial = None, output = sy
     for c in range(ncores)
   ]
   results['performance_model.idle_elapsed_percent'] = [
-    results['performance_model.idle_elapsed_time'][c] / float(time0)
+    results['performance_model.idle_elapsed_time'][c] / float(time0) if time0 else 0.
     for c in range(ncores)
   ]
 

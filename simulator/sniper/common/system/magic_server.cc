@@ -1,3 +1,5 @@
+#include <iostream>
+
 #include "magic_server.h"
 #include "sim_api.h"
 #include "simulator.h"
@@ -13,8 +15,12 @@
 #include "timer.h"
 #include "thread.h"
 #include "mimicos.h"
-#include <iostream>
-#include "nic.h"
+#include "trace_thread.h"
+#include "trace_manager.h"
+
+#include "misc/exception_handler_base.h"
+
+#include "debug_config.h"
 
 MagicServer::MagicServer()
     : m_performance_enabled(false)
@@ -34,7 +40,11 @@ UInt64 MagicServer::Magic(thread_id_t thread_id, core_id_t core_id, UInt64 cmd, 
 
 UInt64 MagicServer::Magic_unlocked(thread_id_t thread_id, core_id_t core_id, UInt64 cmd, UInt64 arg0, UInt64 arg1)
 {
-   // std::cout << "[Virtuoso] We are in Magic_unlocked" << std::endl;
+
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+   std::cout << "[Virtuoso] We are in Magic_unlocked" << std::endl;
+#endif
+
    switch (cmd)
    {
    case SIM_CMD_ROI_TOGGLE:
@@ -90,22 +100,128 @@ UInt64 MagicServer::Magic_unlocked(thread_id_t thread_id, core_id_t core_id, UIn
       Sim()->getThreadManager()->getThreadFromID(thread_id)->setName(str);
       return 0;
    }
-   case SIM_CMD_VIRTUOS_ALLOCATE:
+   case SIM_CMD_CONTEXT_SWITCH:
    {
-      // std::cout << "[Sniper] We received the completion request from VirtuOS" << std::endl;
-      // PhysicalMemoryAllocator *virtuos_com = (Sim()->getVirtuOS()->getMemoryAllocator());
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+      std::cout << "[Virtuoso: Magic Instruction] We received a context switch command" << std::endl;
+#endif
+      Core *core = Sim()->getCoreManager()->getCoreFromID(core_id);
+      core->getPerformanceModel()->drain();
 
-      // virtuos_com->postAllocation(virtuos_com->sem);
-      // std::cout << "[Sniper] Allocation request completed" << std::endl;
+      // We are returning from Context Switch...
+      const core_id_t BEEFY_CORE   = 0L;
+      const core_id_t WIMPY_CORE   = 1L;
+      auto trace_thread = Sim()->getTraceManager()->getTraceThread(0, 0);
+      auto thread = trace_thread->getThread();
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+      std::cout << "[Virtuoso: Magic Instruction] Thread with ID =  " << thread->getId()
+                << " is currently running on core: " << (thread->getCore()->getId() == 0 ? "beefy" : "wimpy") << std::endl;
+#endif
+      // PF Handling was done in user-space MimicOS (kernel), so on BEEFY_CORE (in software, as usual)
+      assert(thread->getCore()->getId() == BEEFY_CORE);
+      // No migration b/w cores needed...
+
+      // Resotre the current Sift Reader to be the App one...
+      trace_thread->setCurrentSiftReader(trace_thread->getAppSiftReader());
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+      std::cout << "[Virtuoso: Magic Instruction] Current SiftReader set to APP" << std::endl;
+#endif
+      return 42;
+   }
+   case SIM_CMD_RECEIVE_MESSAGE:
+   {
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+      std::cout << "[Virtuoso: Magic Instruction] We need to read the message from Sniper's MimicOS" << std::endl;
+#endif
+      Core *core = Sim()->getCoreManager()->getCoreFromID(core_id);
+      MimicOS_NS::Message* message = Sim()->getMimicOS()->getMessage();
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+      std::cout << "[Virtuoso: Magic Instruction] Received message with " << message->argc << " arguments" << std::endl;
+#endif
+      //Write the message to the core's memory - First write argc
+      core->accessMemory(Core::NONE, Core::WRITE, arg0, (char*)&message->argc, sizeof(int), Core::MEM_MODELED_NONE);
+
+      // Then write argv
+      for (int i = 0; i < message->argc; i++)
+      {
+         core->accessMemory(Core::NONE, Core::WRITE, arg1 + i * sizeof(uint64_t), (char*)&message->argv[i], sizeof(uint64_t), Core::MEM_MODELED_NONE);
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+         std::cout << "[Virtuoso: Magic Instruction] Argument " << i << ": " << message->argv[i] << std::endl;
+#endif
+      }
+
       return 0;
    }
-   case SIM_CMD_SIGNAL_VIRTUOS:
+   case SIM_CMD_MIMICOS_RESULT:
    {
-      // std::cout << "Core ID: " << core_id << std::endl;
-      // std::cout << "[VirtuOS] We need to receive a signal in VirtuOS" << std::endl;
-      // PhysicalMemoryAllocator *virtuos_com = (Sim()->getVirtuOS()->getMemoryAllocator());
-      // virtuos_com->wait_for_allocation(virtuos_com->sem_virtuos);
-      // std::cout << "[VirtuOS] Going to allocate the memory" << std::endl;
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+      // This is a result from the MimicOS, we can process it here
+      // @vlnitu: Interpret the message based on the protocol
+      std::cout << "[Virtuoso: Magic Instruction] [magic_server.cc] Trace-based app received a MimicOS result command" << std::endl;
+      std::cout << "[Virtuoso: Magic Instruction] We interpret the result based on the Page Fault - Response protocol" << std::endl;
+#endif
+      Core *core = Sim()->getCoreManager()->getCoreFromID(core_id);
+
+
+      // We need to access the memory to get the result
+      Sift::Message msg;
+      msg.argc = arg0;
+
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+      std::cout << "[Virtuoso: Magic Instruction] Page Fault - Reponse protocol: argc = " << msg.argc << std::endl;
+#endif
+
+      msg.argv = new uint64_t[msg.argc];
+
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+      std::cout << "[Virtuoso: Magic Instruction] Page Fault - Reponse protocol: argv_ptr = " << std::hex << arg1 << std::dec << std::endl;
+#endif
+
+
+
+      for (int i = 0; i < (msg.argc); i++)
+      {
+         core->accessMemory(Core::NONE, Core::READ, arg1+ i * sizeof(uint64_t), (char*)&msg.argv[i], sizeof(uint64_t));
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+         std::cout << "[Virtuoso: Magic Instruction] Argument " << i << ": " << msg.argv[i] << std::endl;
+#endif
+      }
+
+      // @vlnitu: virtuos.cc/poll_for_signal defines this protocol
+      int exception_type_code = msg.argv[0];
+      // The following arguments are deserialized in handle_exception
+      uint64_t vpn = msg.argv[1];
+      uint64_t ppn = msg.argv[2];
+      uint64_t page_size = msg.argv[3];
+      std::vector<UInt64> frames;
+      int num_requested_frames = msg.argc - 4; // 4 for exception_type
+      frames.reserve(num_requested_frames);
+      for (int i = 0; i < num_requested_frames; i++ )
+      {
+         frames.push_back(msg.argv[4 + i]);
+      }
+      
+#if DEBUG_MAGIC_SERVER >= DEBUG_BASIC
+      std::cout << "[Virtuoso: Magic Instruction] Page Fault - Response protocol: argv[0] = exception_type_code = " << exception_type_code << std::endl;
+      std::cout << "[Virtuoso: Magic Instruction] Page Fault - Response protocol: argv[1] = vpn = " << vpn << std::endl;
+      std::cout << "[Virtuoso: Magic Instruction] Page Fault - Response protocol: argv[2] = ppn = " << ppn << std::endl;
+      std::cout << "[Virtuoso: Magic Instruction] Page Fault - Response protocol: argv[3] = page_size = " << page_size << std::endl;
+
+      std::cout << "[Virtuoso: Magic Instruction] Page Fault - Response protocol: argv[4] = frames.size() = " << frames.size() << std::endl;
+      for (int i = 0; i < frames.size(); i++)
+      {
+         std::cout << "[Virtuoso: Magic Instruction] Page Fault - Response protocol: argv[4 + " << i << "] = frames[" << i << "] = " << frames[i] << std::endl;
+      }  
+#endif
+      (void)vpn;
+      (void)ppn;
+      (void)page_size;
+
+      // Invoke page fault handler
+      // @vnitu: Invoke Exception Handler, w/ param0 = exception_type (i.e.,  PAGE_FAULT) + forward argv to exception_handler,
+      // @vlnitu: on the exception handler side, argv will be interpreted differently, depending on the protocol (i.e., PAGE_FAULT)
+      
+      core->getExceptionHandler()->handle_exception(exception_type_code, msg.argc, msg.argv);
       return 0;
    }
    case SIM_CMD_MARKER:
@@ -121,8 +237,13 @@ UInt64 MagicServer::Magic_unlocked(thread_id_t thread_id, core_id_t core_id, UIn
       core->accessMemory(Core::NONE, Core::READ, arg0, str, 256, Core::MEM_MODELED_NONE);
       str[255] = '\0';
 
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
       std::cout << "[Virtuoso: Magic Instruction] Starting process: " << str << std::endl;
+#endif
       Sim()->getTraceManager()->createTraceBasedApplication(SubsecondTime::Zero(), str, thread_id);
+#if DEBUG_MAGIC_SERVER >= DEBUG_DETAILED
+      std::cout << "[Virtuoso: Magic Instruction] Process started" << std::endl;
+#endif
       Sim()->getThreadManager()->printInfo();
       return 0;
    }
@@ -130,47 +251,6 @@ UInt64 MagicServer::Magic_unlocked(thread_id_t thread_id, core_id_t core_id, UIn
    {
       MagicMarkerType args = {thread_id : thread_id, core_id : core_id, arg0 : arg0, arg1 : arg1, str : NULL};
       return Sim()->getHooksManager()->callHooks(HookType::HOOK_MAGIC_USER, (UInt64)&args, true /* expect return value */);
-   }
-   case SIM_CMD_RECEIVE_FROM_NIC:
-   {
-      // std::cout << "[Magic Instruction] We need to check the NIC for incoming data" << std::endl;
-
-      // NIC::BasicNIC *nic = Sim()->getNIC();
-
-      // NIC::Packet pkt;
-
-      // Core *core = Sim()->getCoreManager()->getCoreFromID(core_id);
-
-      // nic->receivePacket(pkt, core->getPerformanceModel()->getElapsedTime());
-
-      return 0;
-   }
-   case SIM_CMD_SEND_TO_NIC:
-   {
-      // std::cout << "[Magic Instruction] We need to send data to the NIC" << std::endl;
-
-      // std::cout << "[Magic Instruction] The size of the data is: " << arg1 << std::endl;
-
-      // char message_data[arg1+1]; 
-
-      // Core *core = Sim()->getCoreManager()->getCoreFromID(core_id);
-
-      // core->accessMemory(Core::NONE, Core::READ, arg0, message_data, arg1, Core::MEM_MODELED_NONE);
-      // message_data[arg1] = '\0';
-
-      // std::cout << "[Magic Instruction] The message is: " << message_data << std::endl;
-
-
-      // NIC::BasicNIC *nic = Sim()->getNIC();
-
-      // NIC::Packet pkt;
-
-      // pkt.data = std::string(message_data);
-      // pkt.length = arg1;
-
-      // nic->sendPacket(pkt);
-
-      return 0;
    }
    case SIM_CMD_INSTRUMENT_MODE:
       return setInstrumentationMode(arg0);

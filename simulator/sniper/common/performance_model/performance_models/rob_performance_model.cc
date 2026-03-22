@@ -8,7 +8,8 @@ RobPerformanceModel::RobPerformanceModel(Core *core)
        m_core_model,
        Sim()->getCfg()->getIntArray("perf_model/branch_predictor/mispredict_penalty", core->getId()),
        Sim()->getCfg()->getIntArray("perf_model/core/interval_timer/dispatch_width", core->getId()),
-       Sim()->getCfg()->getIntArray("perf_model/core/interval_timer/window_size", core->getId())
+       Sim()->getCfg()->getIntArray("perf_model/core/interval_timer/window_size", core->getId()), 
+       m_allocator
     )
 {
 }

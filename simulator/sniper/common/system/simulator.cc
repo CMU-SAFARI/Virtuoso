@@ -28,6 +28,7 @@
 #include "memory_tracker.h"
 #include "circular_log.h"
 #include "mimicos.h"
+#include "mplru_controller_impl.h"
 #include <sstream>
 #include "thread.h"
 #include "simulator.h"
@@ -111,7 +112,7 @@ void Simulator::release()
 }
 
 Simulator::Simulator()
-	: m_config(m_mode), m_log(m_config), m_tags_manager(new TagsManager(m_config_file)), m_stats_manager(new StatsManager), m_transport(NULL), m_core_manager(NULL), m_thread_manager(NULL), m_thread_stats_manager(NULL), m_sim_thread_manager(NULL), m_clock_skew_minimization_manager(NULL), m_fastforward_performance_manager(NULL), m_trace_manager(NULL), m_dvfs_manager(NULL), m_hooks_manager(NULL), m_sampling_manager(NULL), m_faultinjection_manager(NULL), m_rtn_tracer(NULL), m_memory_tracker(NULL), m_running(false), m_inst_mode_output(true)
+	: m_config(m_mode), m_log(m_config), m_tags_manager(new TagsManager(m_config_file)), m_syscall_server(NULL), m_sync_server(NULL), m_magic_server(NULL), m_clock_skew_minimization_server(NULL), m_stats_manager(new StatsManager), m_transport(NULL), m_core_manager(NULL), m_thread_manager(NULL), m_thread_stats_manager(NULL), m_sim_thread_manager(NULL), m_clock_skew_minimization_manager(NULL), m_fastforward_performance_manager(NULL), m_trace_manager(NULL), m_dvfs_manager(NULL), m_hooks_manager(NULL), m_sampling_manager(NULL), m_faultinjection_manager(NULL), m_rtn_tracer(NULL), m_memory_tracker(NULL), m_mimicos(NULL), m_mimicos_vm(NULL), virtualized_system(false), m_running(false), m_inst_mode_output(true)
 {
 }
 
@@ -151,6 +152,17 @@ void Simulator::start()
 	
 	m_core_manager = new CoreManager();
 
+	// Initialize per-core stats in MimicOS (for adaptive policies like MPLRU)
+	assert(m_mimicos != NULL && "MimicOS (host) must be constructed before per-core init");
+	m_mimicos->initPerCoreStats(Sim()->getConfig()->getTotalCores());
+	m_mimicos->initPerCorePageFaultState(Sim()->getConfig()->getTotalCores());
+	if (m_mimicos_vm != NULL) {
+		m_mimicos_vm->initPerCoreStats(Sim()->getConfig()->getTotalCores());
+		m_mimicos_vm->initPerCorePageFaultState(Sim()->getConfig()->getTotalCores());
+	}
+
+	// Initialize MPLRU controller for adaptive cache replacement
+	MPLRUController::initialize(Sim()->getConfig()->getTotalCores());
 
 	CircularLog::enableCallbacks();
 
@@ -199,8 +211,8 @@ void Simulator::start()
 
 Simulator::~Simulator()
 {
-
-
+	// Cleanup MPLRU controller
+	MPLRUController::cleanup();
 
 	// Done with all the Pin stuff, allow using Config::Config again
 	m_config_file_allowed = true;
@@ -219,6 +231,7 @@ Simulator::~Simulator()
 	TotalTimer::reports();
 
 	LOG_PRINT("Simulator dtor starting...");
+
 
 	m_hooks_manager->fini();
 
@@ -275,6 +288,12 @@ Simulator::~Simulator()
 	m_transport = NULL;
 	delete m_stats_manager;
 	m_stats_manager = NULL;
+	if (m_mimicos_vm) {
+		delete m_mimicos_vm;
+		m_mimicos_vm = NULL;
+	}
+	delete m_mimicos;
+	m_mimicos = NULL;
 }
 
 void Simulator::enablePerformanceModels()

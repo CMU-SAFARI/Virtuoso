@@ -60,6 +60,8 @@ class CacheBase
          SRRIP,
          SRRIP_QBS,
          RANDOM,
+         MPLRU,       // Metadata-Priority LRU for NUCA
+         CHIRP,       // Dead-entry predictor (CHiRP) for TLB replacement
          NUM_REPLACEMENT_POLICIES
       };
 

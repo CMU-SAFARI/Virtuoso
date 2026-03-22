@@ -93,8 +93,8 @@ def stats_process(config, results):
   # Since cores can account for time in chunks, per-core time can be
   # both before (``wakeup at future time X'') or after (``sleep until woken up'')
   # the current time.
-  if 'barrier.global_time_begin' in stats:
-    # Most accurate: ask the barrier
+  if 'barrier.global_time_begin' in stats and (stats['barrier.global_time_end'][0] - stats['barrier.global_time_begin'][0]) > 0:
+    # Most accurate: ask the barrier (only when barrier actually fired)
     time0_begin = stats['barrier.global_time_begin'][0]
     time0_end = stats['barrier.global_time_end'][0]
     stats.update({'global.time_begin': time0_begin, 'global.time_end': time0_end, 'global.time': time0_end - time0_begin})

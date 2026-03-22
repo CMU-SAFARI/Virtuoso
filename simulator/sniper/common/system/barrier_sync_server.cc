@@ -16,7 +16,7 @@
 #include <algorithm>
 
 BarrierSyncServer::BarrierSyncServer()
-    : m_local_clock_list(Sim()->getConfig()->getApplicationCores(), SubsecondTime::Zero()), m_barrier_acquire_list(Sim()->getConfig()->getApplicationCores(), false), m_core_cond(Sim()->getConfig()->getApplicationCores(), NULL), m_core_group(Sim()->getConfig()->getApplicationCores(), INVALID_CORE_ID), m_core_thread(Sim()->getConfig()->getApplicationCores(), INVALID_THREAD_ID), m_global_time(SubsecondTime::Zero()), m_fastforward(false), m_disable(false)
+    : m_local_clock_list(Sim()->getConfig()->getApplicationCores(), SubsecondTime::Zero()), m_barrier_acquire_list(Sim()->getConfig()->getApplicationCores(), false), m_core_parked(Sim()->getConfig()->getApplicationCores()), m_core_cond(Sim()->getConfig()->getApplicationCores(), NULL), m_core_group(Sim()->getConfig()->getApplicationCores(), INVALID_CORE_ID), m_core_thread(Sim()->getConfig()->getApplicationCores(), INVALID_THREAD_ID), m_global_time(SubsecondTime::Zero()), m_fastforward(false), m_disable(false)
 {
    try
    {
@@ -29,6 +29,9 @@ BarrierSyncServer::BarrierSyncServer()
 
    for (core_id_t core_id = 0; core_id < (core_id_t)Sim()->getConfig()->getApplicationCores(); ++core_id)
       m_core_cond[core_id] = new ConditionVariable();
+
+   for (core_id_t core_id = 0; core_id < (core_id_t)Sim()->getConfig()->getApplicationCores(); ++core_id)
+      m_core_parked[core_id].store(false, std::memory_order_relaxed);
 
    m_next_barrier_time = m_barrier_interval;
 
@@ -74,11 +77,25 @@ void BarrierSyncServer::synchronize(core_id_t core_id, SubsecondTime time)
 
    if (time < m_next_barrier_time && !m_fastforward)
    {
+      // Update m_local_clock_list even for immediate releases.
+      // Without this, isBarrierReached() sees a stale value for this core
+      // and blocks the barrier indefinitely when the stranded-core fix has
+      // advanced m_next_barrier_time far past this core's last real entry.
+      m_local_clock_list[master_core_id] = time;
       LOG_PRINT("Sent 'SIM_BARRIER_RELEASE' immediately time(%s), m_next_barrier_time(%s)", itostr(time).c_str(), itostr(m_next_barrier_time).c_str());
       // LOG_PRINT_WARNING("core_id(%i), local_clock(%llu), m_next_barrier_time(%llu), m_barrier_interval(%llu)", core_id, time, m_next_barrier_time, m_barrier_interval);
       CLOG("barrier", "Core %d immediate exit", core_id);
       return;
    }
+
+   // ── Auto-unpark ──────────────────────────────────────────────────────
+   // A core that was parked (spinning on the page-fault lock) kept its
+   // m_core_parked flag set so the barrier could advance without it.
+   // Now that its clock has caught up to m_next_barrier_time it can
+   // participate in the barrier again.  Clear the flag here, under the
+   // ThreadManager lock, so isBarrierReached() will see it.
+   if (m_core_parked[master_core_id].load(std::memory_order_acquire))
+      m_core_parked[master_core_id].store(false, std::memory_order_release);
 
    // One thread entered the barrier, another one can resume
    doRelease(1);
@@ -214,16 +231,27 @@ bool BarrierSyncServer::isBarrierReached()
       }
       else if (isCoreRunning(core_id))
       {
-         if (m_local_clock_list[core_id] < m_next_barrier_time)
+         if (m_core_parked[core_id].load(std::memory_order_acquire))
          {
-            // Core running on this core has not reached the barrier
-            // Wait for it to sync
-            return false;
+            // Parked core: never BLOCKS the barrier.  If its
+            // m_local_clock_list >= m_next_barrier_time (e.g. MaxTime from
+            // parkCore), count it as "reached" so single_core_barrier_reached
+            // becomes true even when ALL cores are parked.
+            if (m_local_clock_list[core_id] >= m_next_barrier_time)
+               single_core_barrier_reached = true;
+            // else: catching up, skip (don't block, don't count)
          }
          else
          {
-            // At least one core has reached the barrier
-            single_core_barrier_reached = true;
+            if (m_local_clock_list[core_id] < m_next_barrier_time)
+            {
+               // Core running on this core has not reached the barrier
+               return false;
+            }
+            else
+            {
+               single_core_barrier_reached = true;
+            }
          }
       }
    }
@@ -282,14 +310,11 @@ bool BarrierSyncServer::barrierRelease(thread_id_t caller_id, bool continue_unti
 
       for (core_id_t core_id = 0; core_id < (core_id_t)Sim()->getConfig()->getApplicationCores(); core_id++)
       {
-         if (m_local_clock_list[core_id] < m_next_barrier_time)
+         if (m_barrier_acquire_list[core_id] == true)
          {
-            // Check if this core was running. If yes, release that core
-            if (m_barrier_acquire_list[core_id] == true)
+            if (m_local_clock_list[core_id] < m_next_barrier_time)
             {
-               // Core *core = Sim()->getCoreManager()->getCoreFromID(core_id);
-               // LOG_ASSERT_ERROR(core->getState() == Core::RUNNING || core->getState() == Core::INITIALIZING, "(%i) has acquired barrier, local_clock(%s), m_next_barrier_time(%s), but not initializing or running", core_id, itostr(m_local_clock_list[core_id]).c_str(), itostr(m_next_barrier_time).c_str());
-
+               // Normal release: core's clock is below the new barrier time
                m_barrier_acquire_list[core_id] = false;
                core_resumed = true;
 
@@ -302,6 +327,41 @@ bool BarrierSyncServer::barrierRelease(thread_id_t caller_id, bool continue_unti
                   m_to_release.push_back(core_id);
                }
             }
+            else if (m_local_clock_list[core_id] >= m_next_barrier_time && !m_fastforward)
+            {
+               // Stranded-core release: core overshot the barrier time
+               // (e.g. expensive page walks).  Release it directly so the
+               // while-loop doesn't spin thousands of quanta to catch up.
+               m_barrier_acquire_list[core_id] = false;
+               core_resumed = true;
+
+               if (m_core_thread[core_id] == caller_id)
+                  must_wait = false;
+               else
+               {
+                  Core *core = Sim()->getCoreManager()->getCoreFromID(core_id);
+                  core->getPerformanceModel()->barrierExit();
+                  m_to_release.push_back(core_id);
+               }
+            }
+         }
+      }
+
+      // If no core could be released (all waiting cores have clocks far
+      // ahead, or all cores are parked with MaxTime clocks triggering
+      // isBarrierReached but nobody is actually IN the barrier), break
+      // out to avoid infinite loop.  The barrier time still advanced.
+      if (!core_resumed)
+      {
+         // Check if any core is actually in the barrier
+         bool any_in_barrier = false;
+         for (core_id_t core_id = 0; core_id < (core_id_t)Sim()->getConfig()->getApplicationCores(); core_id++)
+            if (m_barrier_acquire_list[core_id]) { any_in_barrier = true; break; }
+         if (!any_in_barrier)
+         {
+            // All cores are parked with MaxTime clocks; barrier was triggered
+            // by parked cores' "reached" status.  Just advance time and exit.
+            core_resumed = true;
          }
       }
    }
@@ -391,3 +451,5 @@ void BarrierSyncServer::printState(void)
    }
    printf("\n");
 }
+
+// parkCore/unparkCore are now inline in the header (lock-free atomic stores).

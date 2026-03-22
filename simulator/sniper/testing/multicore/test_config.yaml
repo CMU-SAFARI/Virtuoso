@@ -1,0 +1,377 @@
+# Virtuoso Multicore Testing Framework Configuration
+# ====================================================
+# Tests multicore configurations with per-core trace replay.
+# Sniper is invoked with --traces=t0,t1,...,tN-1 (one trace per core),
+# -n <ncores>, --sim-end=last-restart, and static scheduling.
+
+# Base paths
+paths:
+  sniper_root: "${VIRTUOSO_ROOT}/simulator/sniper"
+  traces_dir: "${VIRTUOSO_TRACES}"
+  champsim_traces_dir: "${CHAMPSIM_TRACES}"
+  configs_dir: "./config/address_translation_schemes"
+  results_dir: "./results/multicore_testing"
+
+# Default test parameters
+defaults:
+  instruction_count: 10000000   # 10M instructions per core
+  max_parallel_jobs: 2          # Conservative: multicore sims are heavy
+  timeout_seconds: 7200         # 2 hours (multicore sims take longer)
+  sim_end: "last-restart"       # Restart finished apps until slowest finishes
+
+# ============================================================
+# Core Topologies
+# ============================================================
+# Each topology defines the number of cores and the
+# interconnect/network overrides needed for that scale.
+# The mesh dimensions are sqrt(N) x sqrt(N) for perfect squares,
+# otherwise explicit sizes are given.
+
+topologies:
+  2core:
+    ncores: 2
+    description: "2-core, emesh_hop_counter, 1×2 line"
+    overrides:
+      - "general/total_cores=2"
+      - "network/memory_model_1=emesh_hop_counter"
+
+  4core:
+    ncores: 4
+    description: "4-core, emesh_hop_counter, 2×2 mesh"
+    overrides:
+      - "general/total_cores=4"
+      - "network/memory_model_1=emesh_hop_counter"
+
+  8core:
+    ncores: 8
+    description: "8-core, emesh_hop_counter, 2×4 mesh"
+    overrides:
+      - "general/total_cores=8"
+      - "network/memory_model_1=emesh_hop_counter"
+
+  16core:
+    ncores: 16
+    description: "16-core, emesh_hop_counter, 4×4 mesh"
+    overrides:
+      - "general/total_cores=16"
+      - "network/memory_model_1=emesh_hop_counter"
+
+# ============================================================
+# Available Configurations (same as single-core testing)
+# ============================================================
+configs:
+  baseline:
+    file: "baseline.cfg"
+    description: "Baseline radix page table with 4KB pages"
+
+  no_translation:
+    file: "no_translation.cfg"
+    description: "Translation disabled - VA used directly as PA"
+
+  reservethp_fully_fragmented:
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Reservation-based THP allocator, fully fragmented"
+
+  reservethp_no_fragmentation:
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+    description: "Reservation-based THP with no fragmentation"
+
+  reservethp_4channel:
+    file: "reservethp_4channel.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "ReserveTHP baseline with 4-channel DDR4"
+
+  perfect:
+    file: "perfect_translation.cfg"
+    description: "Perfect translation - zero latency"
+
+  utopia:
+    file: "utopia.cfg"
+    description: "Utopia with RestSeg + FlexSeg and UTLB"
+
+  utopia_mplru:
+    file: "utopia_mplru.cfg"
+    description: "Utopia with MPLRU adaptive replacement policy"
+
+  utopia_mplru_bandit:
+    file: "utopia_mplru_bandit.cfg"
+    description: "Utopia with MPLRU bandit controller"
+
+  dmt:
+    file: "dmt.cfg"
+    description: "Direct Memory Translation"
+
+  asap:
+    file: "asap.cfg"
+    description: "ASAP allocator"
+
+  spot:
+    file: "spot.cfg"
+    description: "SPOT contiguity-aware allocator"
+
+# ============================================================
+# Trace Pools
+# ============================================================
+# Named pools of sift traces used to build per-core assignments.
+# "homogeneous" pools use one trace replicated across all cores.
+# "heterogeneous" pools list distinct traces; the runner picks
+# the first N for an N-core experiment.
+
+trace_pools:
+  # Homogeneous workloads: same trace on every core
+  rnd_homo:
+    type: homogeneous
+    trace: "rnd.sift"
+    description: "Random-access benchmark on every core"
+
+  bfs_homo:
+    type: homogeneous
+    trace: "bfs.sift"
+    description: "BFS graph traversal on every core"
+
+  dlrm_homo:
+    type: homogeneous
+    trace: "dlrm.sift"
+    description: "DLRM recommendation model on every core"
+
+  pr_homo:
+    type: homogeneous
+    trace: "pr.sift"
+    description: "PageRank on every core"
+
+  xs_homo:
+    type: homogeneous
+    trace: "xs.sift"
+    description: "XS benchmark on every core"
+
+  # Heterogeneous workloads: distinct traces per core
+  graph_mix:
+    type: heterogeneous
+    description: "Mix of graph workloads"
+    traces:
+      - "bfs.sift"
+      - "pr.sift"
+      - "cc.sift"
+      - "bc.sift"
+      - "sssp.sift"
+      - "tc.sift"
+      - "kcore.sift"
+      - "gc.sift"
+      - "gen.sift"
+      - "rnd.sift"
+      - "bfs.sift"
+      - "pr.sift"
+      - "cc.sift"
+      - "bc.sift"
+      - "sssp.sift"
+      - "tc.sift"
+
+  ml_graph_mix:
+    type: heterogeneous
+    description: "Mix of ML and graph workloads"
+    traces:
+      - "dlrm.sift"
+      - "xs.sift"
+      - "bfs.sift"
+      - "pr.sift"
+      - "cc.sift"
+      - "bc.sift"
+      - "sssp.sift"
+      - "rnd.sift"
+      - "dlrm.sift"
+      - "xs.sift"
+      - "bfs.sift"
+      - "pr.sift"
+      - "cc.sift"
+      - "bc.sift"
+      - "sssp.sift"
+      - "rnd.sift"
+
+  all_sift:
+    type: heterogeneous
+    description: "All available SIFT traces (up to 12 unique, then wraps)"
+    traces:
+      - "rnd.sift"
+      - "bfs.sift"
+      - "cc.sift"
+      - "bc.sift"
+      - "pr.sift"
+      - "sssp.sift"
+      - "tc.sift"
+      - "dlrm.sift"
+      - "kcore.sift"
+      - "gc.sift"
+      - "gen.sift"
+      - "xs.sift"
+      - "rnd.sift"
+      - "bfs.sift"
+      - "cc.sift"
+      - "bc.sift"
+
+# ============================================================
+# Test Suites
+# ============================================================
+# Each suite specifies:
+#   topology      – key from 'topologies' above
+#   configs       – list of config names
+#   trace_pool    – key from 'trace_pools'
+#   instruction_count – per-core icount (override global default)
+
+suites:
+  # ---- Smoke / Quick Tests ----
+  smoke_2core:
+    description: "Quick 2-core smoke test (homogeneous rnd)"
+    topology: 2core
+    configs: [reservethp_fully_fragmented]
+    trace_pool: rnd_homo
+    instruction_count: 5000000   # 5M
+
+  smoke_4core:
+    description: "Quick 4-core smoke test (homogeneous rnd)"
+    topology: 4core
+    configs: [reservethp_fully_fragmented]
+    trace_pool: rnd_homo
+    instruction_count: 5000000   # 5M
+
+  # ---- Homogeneous Scaling Tests ----
+  # Same trace on all cores; vary core count to measure scaling overhead
+  scaling_rnd:
+    description: "Scaling test with rnd trace across 2/4/8/16 cores"
+    topology: [2core, 4core, 8core, 16core]
+    configs: [reservethp_fully_fragmented, baseline]
+    trace_pool: rnd_homo
+    instruction_count: 10000000  # 10M
+
+  scaling_bfs:
+    description: "Scaling test with bfs trace across 2/4/8/16 cores"
+    topology: [2core, 4core, 8core, 16core]
+    configs: [reservethp_fully_fragmented, baseline]
+    trace_pool: bfs_homo
+    instruction_count: 10000000  # 10M
+
+  scaling_dlrm:
+    description: "Scaling test with dlrm trace across 2/4/8/16 cores"
+    topology: [2core, 4core, 8core, 16core]
+    configs: [reservethp_fully_fragmented, baseline]
+    trace_pool: dlrm_homo
+    instruction_count: 10000000  # 10M
+
+  # ---- Heterogeneous Workload Tests ----
+  hetero_graph_4core:
+    description: "4-core heterogeneous graph workload mix"
+    topology: 4core
+    configs: [baseline, reservethp_fully_fragmented, utopia]
+    trace_pool: graph_mix
+    instruction_count: 10000000  # 10M
+
+  hetero_graph_8core:
+    description: "8-core heterogeneous graph workload mix"
+    topology: 8core
+    configs: [baseline, reservethp_fully_fragmented, utopia]
+    trace_pool: graph_mix
+    instruction_count: 10000000  # 10M
+
+  hetero_graph_16core:
+    description: "16-core heterogeneous graph workload mix"
+    topology: 16core
+    configs: [baseline, reservethp_fully_fragmented, utopia]
+    trace_pool: graph_mix
+    instruction_count: 10000000  # 10M
+
+  hetero_mlgraph_4core:
+    description: "4-core ML + graph mix"
+    topology: 4core
+    configs: [baseline, reservethp_fully_fragmented, utopia]
+    trace_pool: ml_graph_mix
+    instruction_count: 10000000  # 10M
+
+  hetero_mlgraph_8core:
+    description: "8-core ML + graph mix"
+    topology: 8core
+    configs: [baseline, reservethp_fully_fragmented, utopia]
+    trace_pool: ml_graph_mix
+    instruction_count: 10000000  # 10M
+
+  # ---- Translation Scheme Comparison (Multicore) ----
+  translation_comparison_4core:
+    description: "Compare all translation schemes on 4-core heterogeneous mix"
+    topology: 4core
+    configs: [no_translation, baseline, reservethp_fully_fragmented, reservethp_no_fragmentation, utopia, dmt, asap, perfect]
+    trace_pool: graph_mix
+    instruction_count: 20000000  # 20M
+
+  translation_comparison_8core:
+    description: "Compare all translation schemes on 8-core heterogeneous mix"
+    topology: 8core
+    configs: [no_translation, baseline, reservethp_fully_fragmented, reservethp_no_fragmentation, utopia, dmt, asap, perfect]
+    trace_pool: graph_mix
+    instruction_count: 20000000  # 20M
+
+  # ---- MPLRU / Bandit Multicore Tests ----
+  mplru_multicore_4core:
+    description: "MPLRU bandit vs delta on 4-core graph mix"
+    topology: 4core
+    configs: [reservethp_fully_fragmented, utopia, utopia_mplru, utopia_mplru_bandit]
+    trace_pool: graph_mix
+    instruction_count: 20000000  # 20M
+
+  mplru_multicore_8core:
+    description: "MPLRU bandit vs delta on 8-core graph mix"
+    topology: 8core
+    configs: [reservethp_fully_fragmented, utopia, utopia_mplru, utopia_mplru_bandit]
+    trace_pool: graph_mix
+    instruction_count: 20000000  # 20M
+
+  # ---- Long-running Multicore Tests ----
+  long_hetero_graph_4core:
+    description: "Long 4-core heterogeneous graph workload mix"
+    topology: 4core
+    configs: [baseline, reservethp_fully_fragmented, utopia]
+    trace_pool: graph_mix
+    instruction_count: 100000000  # 100M
+
+  long_hetero_graph_8core:
+    description: "Long 8-core heterogeneous graph workload mix"
+    topology: 8core
+    configs: [baseline, reservethp_fully_fragmented, utopia]
+    trace_pool: graph_mix
+    instruction_count: 100000000  # 100M
+
+  # ---- Full Sweep (all topologies × key configs) ----
+  full_sweep_homo:
+    description: "Full sweep: all topologies with rnd (homogeneous)"
+    topology: [2core, 4core, 8core, 16core]
+    configs: [baseline, reservethp_fully_fragmented, utopia, perfect]
+    trace_pool: rnd_homo
+    instruction_count: 10000000  # 10M
+
+  full_sweep_hetero:
+    description: "Full sweep: all topologies with graph mix (heterogeneous)"
+    topology: [2core, 4core, 8core, 16core]
+    configs: [baseline, reservethp_fully_fragmented, utopia, perfect]
+    trace_pool: graph_mix
+    instruction_count: 10000000  # 10M
+
+# ============================================================
+# Metrics to extract from results
+# ============================================================
+metrics:
+  - name: "cycles"
+    pattern: "performance_model.cycle_count"
+  - name: "instructions"
+    pattern: "performance_model.instruction_count"
+  - name: "ipc"
+    pattern: "performance_model.ipc"
+  - name: "tlb_misses"
+    pattern: "dtlb.miss"
+  - name: "page_faults"
+    pattern: "page_fault.count"
+  - name: "page_walks"
+    pattern: "page_table_walker"
+  - name: "noc_traffic"
+    pattern: "network.num-packets"
