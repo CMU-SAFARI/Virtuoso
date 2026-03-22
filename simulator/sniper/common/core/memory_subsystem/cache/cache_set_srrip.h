@@ -14,6 +14,9 @@ class CacheSetSRRIP : public CacheSet
 
       UInt32 getReplacementIndex(CacheCntlr *cntlr);
       void updateReplacementIndex(UInt32 accessed_index);
+      
+      // Override to return RRIP bits (higher = older/less recently used)
+      virtual UInt8 getRecencyBits(UInt32 way) const override { return m_rrip_bits[way]; }
 
    private:
       const UInt8 m_rrip_numbits;

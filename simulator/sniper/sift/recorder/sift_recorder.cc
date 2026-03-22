@@ -231,7 +231,7 @@ int main(int argc, char **argv)
       sift_assert(thread_data[PIN_ThreadId()].output);
       for (UINT32 i = 1 ; i < PIN_GetInitialThreadCount() ; i++)
       {
-         thread_data[PIN_ThreadId()].output->NewThread(KnobRecordMultithreaded.Value());
+         thread_data[PIN_ThreadId()].output->NewThread();
       }
    }
 
@@ -279,11 +279,6 @@ int main(int argc, char **argv)
       }
 
       initSyscallModeling();
-   }
-
-   if (KnobRecordMultithreaded.Value())
-   {
-      std::cout << "[SDE] Exporting multi-threaded application-level traces" << std::endl;
    }
 
    initThreads();

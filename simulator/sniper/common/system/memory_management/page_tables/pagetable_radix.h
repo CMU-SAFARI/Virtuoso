@@ -1,6 +1,7 @@
 
 #pragma once
 #include "pagetable.h"
+#include "sim_log.h"
 
 namespace ParametricDramDirectoryMSI
 {
@@ -17,6 +18,7 @@ namespace ParametricDramDirectoryMSI
 			IntPtr ppn; // Physical page number
 		};
 
+	
 		struct PTEntry
 		{
 			bool is_pte; // Whether the entry is a PTE or a pointer to the next level of the page table
@@ -41,8 +43,7 @@ namespace ParametricDramDirectoryMSI
 
 		// We use 3 page walk caches, one for the first three levels of the radix tree
 
-		std::ofstream log_file; // Log file for the page table
-		std::string log_file_name;
+		SimLog* m_log;    // Logging instance for the page table
 
 		struct Stats
 		{
@@ -56,6 +57,7 @@ namespace ParametricDramDirectoryMSI
 
 	public:
 		PageTableRadix(int core_id, String name, String type, int page_sizes, int *page_size_list, int levels, int frame_size, bool is_guest = false);
+		~PageTableRadix();
 		PTWResult initializeWalk(IntPtr address, bool count, bool is_prefetch = false, bool restart_walk = false);
 		int updatePageTableFrames(IntPtr address, IntPtr core_id, IntPtr ppn, int page_size, std::vector<UInt64> frames);
 		void deletePage(IntPtr address);

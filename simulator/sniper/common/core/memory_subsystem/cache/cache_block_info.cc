@@ -29,7 +29,7 @@ CacheBlockInfo::CacheBlockInfo(IntPtr tag, CacheState::cstate_t cstate, UInt64 o
                                                                                           m_owner(0),
                                                                                           m_used(0),
                                                                                           m_options(options),
-                                                                                          m_block_type(NON_PAGE_TABLE),
+                                                                                          m_block_type(DATA),
                                                                                           m_reuse(0),
                                                                                           utilization(0)
 

@@ -54,7 +54,7 @@ namespace Sift
          void CacheOnly(uint8_t icount, CacheOnlyType type, uint64_t eip, uint64_t address);
          void Output(uint8_t fd, const char *data, uint32_t size);
          uint64_t Syscall(uint16_t syscall_number, const char *data, uint32_t size);
-         int32_t NewThread(bool record_threads);
+         int32_t NewThread();
          int32_t Join(int32_t);
          Mode Sync();
          uint64_t Magic(uint64_t a, uint64_t b, uint64_t c);

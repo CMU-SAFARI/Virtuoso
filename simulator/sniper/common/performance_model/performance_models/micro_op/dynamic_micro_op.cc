@@ -1,13 +1,18 @@
 #include "dynamic_micro_op.h"
 #include "log.h"
 #include "core_model.h"
+#include "instruction.h"
+#include "micro_op.h"
+#include "debug_config.h"
+#include <cstdio>
 
 DynamicMicroOp::DynamicMicroOp(const MicroOp *uop, const CoreModel *core_model, ComponentPeriod period)
    : m_uop(uop)
    , m_core_model(core_model)
+   , m_instruction(nullptr)
    , m_period(period)
 {
-   LOG_ASSERT_ERROR(period != SubsecondTime::Zero(), "MicroOp Period is == SubsecondTime::Zero()");
+   // LOG_ASSERT_ERROR(period != SubsecondTime::Zero(), "MicroOp Period is == SubsecondTime::Zero()");
 
    this->squashed = false;
 
@@ -36,10 +41,55 @@ DynamicMicroOp::DynamicMicroOp(const MicroOp *uop, const CoreModel *core_model, 
 
    first = m_uop->isFirst();
    last = m_uop->isLast();
+
+   // For dynamic instructions (ChampSim traces), add a reference so we can
+   // safely clean up when all DynamicMicroOps from this instruction are freed.
+   // Store direct pointer to Instruction for safe access in destructor
+   // (m_uop may become invalid after another DynamicMicroOp frees the instruction).
+   Instruction* instr = m_uop->getInstruction();
+   if (instr && instr->isDynamic()) {
+      m_instruction = instr;
+      m_instruction->addRef();
+      #if DEBUG_DYNAMIC_MICROOP >= DEBUG_DETAILED
+      printf("[DYNAMIC_MICROOP] CTOR DynamicMicroOp*=%p -> Instruction*=%p addRef() refcount=%d\n",
+             (void*)this, (void*)m_instruction, m_instruction->getRefCount());
+      #endif
+   }
 }
 
 DynamicMicroOp::~DynamicMicroOp()
 {
+   // For dynamic instructions (ChampSim traces), release our reference.
+   // When the last DynamicMicroOp is destroyed, we clean up the Instruction
+   // and all its MicroOps.
+   // Use m_instruction directly (stored in constructor) rather than
+   // m_uop->getInstruction() which may be invalid if another DynamicMicroOp
+   // already freed the instruction and its MicroOps.
+   if (m_instruction) {
+      #if DEBUG_DYNAMIC_MICROOP >= DEBUG_BASIC
+      int old_refcount = m_instruction->getRefCount();
+      #endif
+      if (m_instruction->release()) {
+         // We were the last reference - clean up the instruction and its microops
+         #if DEBUG_DYNAMIC_MICROOP >= DEBUG_BASIC
+         printf("[DYNAMIC_MICROOP] DTOR DynamicMicroOp*=%p -> Instruction*=%p LAST REF (was %d) -> FREEING\n",
+                (void*)this, (void*)m_instruction, old_refcount);
+         #endif
+         const std::vector<const MicroOp*>* uops = m_instruction->getMicroOps();
+         if (uops) {
+            for (const MicroOp* uop : *uops) {
+               delete uop;
+            }
+            delete uops;
+         }
+         delete m_instruction;
+      } else {
+         #if DEBUG_DYNAMIC_MICROOP >= DEBUG_DETAILED
+         printf("[DYNAMIC_MICROOP] DTOR DynamicMicroOp*=%p -> Instruction*=%p release() refcount=%d->%d\n",
+                (void*)this, (void*)m_instruction, old_refcount, m_instruction->getRefCount());
+         #endif
+      }
+   }
 }
 
 void DynamicMicroOp::squash(std::vector<DynamicMicroOp*>* array)

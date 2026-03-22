@@ -8,7 +8,9 @@
 ClockSkewMinimizationObject::Scheme
 ClockSkewMinimizationObject::parseScheme(String scheme)
 {
-   if (scheme == "barrier")
+   if (scheme == "none")
+      return NONE;
+   else if (scheme == "barrier")
       return BARRIER;
    else
    {
@@ -24,6 +26,7 @@ ClockSkewMinimizationClient::create(Core* core)
    switch (scheme)
    {
       case BARRIER:
+      case NONE:
          return new BarrierSyncClient(core);
 
       default:
@@ -39,6 +42,7 @@ ClockSkewMinimizationManager::create()
 
    switch (scheme)
    {
+      case NONE:
       case BARRIER:
          return (ClockSkewMinimizationManager*) NULL;
 
@@ -56,6 +60,7 @@ ClockSkewMinimizationServer::create()
    switch (scheme)
    {
       case BARRIER:
+      case NONE:
          return new BarrierSyncServer();
 
       default:

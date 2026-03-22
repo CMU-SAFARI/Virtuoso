@@ -43,7 +43,6 @@ class Thread
          pid_t tid;
          IntPtr tid_ptr;
          bool clear_tid;
-         bool m_virtuos_app;
       } m_os_info;
 
       thread_id_t getId() const { return m_thread_id; }

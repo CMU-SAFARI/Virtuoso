@@ -3,7 +3,18 @@
 #include "log.h"
 #include "stats.h"
 #include "config.hpp"
+#include "debug_config.h"
 #include <memory>
+#include <fstream>
+#include <tuple>
+#include <iomanip>
+
+// L2 set index logging
+#if DEBUG_L2_SET_INDEX >= DEBUG_BASIC
+static std::ofstream l2_set_index_log;
+static bool l2_log_initialized = false;
+#endif
+
 // #define DEBUG_TLB
 // Cache class
 // constructors/destructors
@@ -40,22 +51,6 @@ int bits_set(uint8_t x)
 
 	return __builtin_popcount(x);
 }
-	float average_data_reuse;
-	float average_metadata_reuse;
-	float average_tlb_reuse;
-
-	UInt64 sum_data_reuse;
-	UInt64 sum_data_utilization;
-
-	UInt64 sum_metadata_reuse;
-	UInt64 sum_metadata_utilization;
-
-	UInt64 sum_tlb_reuse;
-	UInt64 sum_tlb_utilization;
-
-	UInt64 number_of_data_reuse;
-	UInt64 number_of_metadata_reuse;
-	UInt64 number_of_tlb_reuse;
 
 Cache::Cache(
 	String name,
@@ -80,17 +75,17 @@ Cache::Cache(
 	  m_number_of_page_sizes(number_of_page_sizes),
 	  average_data_reuse(0),
 	  average_metadata_reuse(0),
-	  average_tlb_reuse(0),
 	  sum_data_reuse(0),
 	  sum_data_utilization(0),
 	  sum_metadata_reuse(0),
 	  sum_metadata_utilization(0),
-	  sum_tlb_reuse(0),
-	  sum_tlb_utilization(0),
 	  number_of_data_reuse(0),
 	  number_of_metadata_reuse(0),
-	  number_of_tlb_reuse(0),
-	  metadata_passthrough_loc(Sim()->getCfg()->getInt("perf_model/metadata/passthrough_loc"))
+	  metadata_passthrough_loc(Sim()->getCfg()->getInt("perf_model/metadata/passthrough_loc")),
+	  m_core_id(core_id),
+	  m_last_log_access_count(0),
+	  m_content_log_initialized(false),
+	  m_total_accesses(0)
 {
 
 	// Use of unique_ptr to avoid memory leaks
@@ -100,6 +95,18 @@ Cache::Cache(
 		m_pagesizes[i] = page_size[i];
 	}
 
+	for (int i = 0; i < 8; i++)
+		data_util[i] = 0;
+	for (int i = 0; i < 8; i++)
+		metadata_util[i] = 0;
+
+
+	for (int i = 0; i < 5; i++)
+		data_reuse[i] = 0;
+	for (int i = 0; i < 5; i++)
+		metadata_reuse[i] = 0;
+
+
 
 	reuse_levels[0] = 5; // kanellok Fix: these thresholds should be configurable
 	reuse_levels[1] = 10;
@@ -107,13 +114,12 @@ Cache::Cache(
 
 	m_set_info = CacheSet::createCacheSetInfo(name, cfgname, core_id, replacement_policy, m_associativity);
 	m_sets = new CacheSet *[m_num_sets];
-	m_fake_sets = new CacheSet *[1]; // kanellok  Hack: create a fake set for L2 cache to store metadata and "emulate" metadata bypassing
+	m_fake_sets = nullptr; // Only allocate for L2 with metadata passthrough
 	
 	if(!is_tlb)
 		std::cout << "[Memory Hierarchy] Creating " << name << " cache with " << m_num_sets << " sets, " << associativity << "-way associative, " << m_blocksize << "B blocksize" << std::endl;
 
 	
-
 	for (UInt32 i = 0; i < m_num_sets; i++)
 	{
 		m_sets[i] = CacheSet::createCacheSet(cfgname, core_id, replacement_policy, m_cache_type, m_associativity, m_blocksize, m_set_info);
@@ -122,6 +128,7 @@ Cache::Cache(
 	if (name == "L2" && metadata_passthrough_loc > 2)
 	{
 		std::cout << "Creating one fake set for L2 cache since metadata cant be cached in L2" << std::endl;
+		m_fake_sets = new CacheSet *[1]; // kanellok Hack: create a fake set for L2 cache to store metadata and "emulate" metadata bypassing
 		m_fake_sets[0] = CacheSet::createCacheSet(cfgname, core_id, replacement_policy, m_cache_type, 1, m_blocksize, m_set_info);
 	}
 
@@ -132,7 +139,7 @@ Cache::Cache(
 #endif
 
 	m_page_walk_cacheblocks.clear();
-	m_is_tlb = true;
+	m_is_tlb = is_tlb;
 
 	for (int i = 0; i < 5; i++)
 	{
@@ -145,11 +152,7 @@ Cache::Cache(
 		registerStatsMetric(name, core_id, String("metadata-reuse-") + std::to_string(i).c_str(), &metadata_reuse[i]);
 	}
 
-	for (int i = 0; i < 5; i++)
-	{
 
-		registerStatsMetric(name, core_id, String("tlb-reuse-") + std::to_string(i).c_str(), &tlb_reuse[i]);
-	}
 
 	for (int i = 0; i < 8; i++)
 	{
@@ -163,19 +166,12 @@ Cache::Cache(
 		registerStatsMetric(name, core_id, String("metadata-util-") + std::to_string(i).c_str(), &metadata_util[i]);
 	}
 
-	for (int i = 0; i < 8; i++)
-	{
 
-		registerStatsMetric(name, core_id, String("tlb-util-") + std::to_string(i).c_str(), &tlb_util[i]);
-	}
-
-	// registerStatsMetric(name, core_id, String("average_data_reuse"), &average_data_reuse);
-	// registerStatsMetric(name, core_id, String("average_metadata_reuse"), &average_metadata_reuse);
-	// registerStatsMetric(name, core_id, String("average_tlb_reuse"), &average_tlb_reuse);
 }
 
 Cache::~Cache()
 {
+
 
 #ifdef ENABLE_SET_USAGE_HIST
 	printf("Cache %s set usage:", m_name.c_str());
@@ -191,12 +187,26 @@ Cache::~Cache()
 	for (SInt32 i = 0; i < (SInt32)m_num_sets; i++)
 		delete m_sets[i];
 	delete[] m_sets;
-	if (m_name == "L2" && metadata_passthrough_loc > 2)
+	if (m_fake_sets != nullptr)
 	{
-		for (SInt32 i = 0; i < 1; i++)
-			delete m_fake_sets[i];
+		delete m_fake_sets[0];
 		delete[] m_fake_sets;
 	}
+
+#if DEBUG_L2_SET_INDEX >= DEBUG_BASIC
+	// Close the L2 set index log file if this is the L2 cache
+	if (m_name == "L2" && l2_log_initialized) {
+		l2_set_index_log.close();
+		l2_log_initialized = false;
+	}
+#endif
+
+#if DEBUG_L2_CONTENT >= DEBUG_BASIC
+	// Close the L2 content log file
+	if (m_name == "L2" && m_content_log_initialized && m_content_log.is_open()) {
+		m_content_log.close();
+	}
+#endif
 }
 
 Lock &
@@ -232,6 +242,62 @@ bool Cache::invalidateSingleLine(IntPtr addr)
 	return result || fake_result;
 }
 
+bool Cache::invalidateSingleLineTLB(IntPtr addr, int page_size)
+{
+	// Must iterate over ALL page sizes like accessSingleLineTLB does.
+	// The entry could have been inserted with any page size, and the
+	// set_index/tag differ based on page size.
+	bool result = false;
+
+	for (int ps = 0; ps < m_number_of_page_sizes; ps++)
+	{
+		IntPtr tag;
+		UInt32 set_index;
+		int current_page_size = m_pagesizes[ps];
+		
+		splitAddressTLB(addr, tag, set_index, current_page_size);
+		assert(set_index < m_num_sets);
+		
+		// Use TLB-aware invalidate that matches BOTH tag AND page_size
+		// This prevents invalidating entries from different page sizes that
+		// happen to have the same tag (which maps to different VPNs)
+		if (m_sets[set_index]->invalidateTLB(tag, current_page_size))
+		{
+			
+			result = true;
+			// Don't break - there might be entries at multiple page sizes
+			// (though unlikely, being safe)
+		}
+
+	}
+	//Assert if the entry is still present after invalidation attempts
+	assert(!containsTLB(addr, page_size) && "Entry still present in TLB after invalidateSingleLineTLB");
+	return result;
+}
+
+bool Cache::containsTLB(IntPtr addr, int page_size) const
+{
+	// Check if an entry exists for this address at any page size
+	// Similar to invalidateSingleLineTLB but doesn't modify anything
+	for (int ps = 0; ps < m_number_of_page_sizes; ps++)
+	{
+		IntPtr tag;
+		UInt32 set_index;
+		int current_page_size = m_pagesizes[ps];
+		
+		splitAddressTLB(addr, tag, set_index, current_page_size);
+		assert(set_index < m_num_sets);
+		
+		// Use TLB-aware find that matches BOTH tag AND page_size
+		if (m_sets[set_index]->findTLB(tag, current_page_size) != nullptr)
+		{
+			return true;
+		}
+	}
+	
+	return false;
+}
+
 CacheBlockInfo *
 Cache::accessSingleLine(IntPtr addr, access_t access_type,
 						Byte *buff, UInt32 bytes, SubsecondTime now, bool update_replacement, bool tlb_entry, bool is_metadata)
@@ -243,6 +309,7 @@ Cache::accessSingleLine(IntPtr addr, access_t access_type,
 	UInt32 line_index = 0;
 	UInt32 block_offset;
 	splitAddress(addr, tag, set_index, block_offset);
+
 
 	CacheSet *set = m_sets[set_index];
 	CacheBlockInfo *cache_block_info = set->find(tag, &line_index);
@@ -259,7 +326,7 @@ Cache::accessSingleLine(IntPtr addr, access_t access_type,
 			return NULL;
 	}
 
-	if (tlb_entry && !(cache_block_info->isTLBBlock()))
+	if (tlb_entry && !(cache_block_info->isPageTableBlock()))
 		return NULL;
 
 	if (access_type == LOAD)
@@ -279,6 +346,14 @@ Cache::accessSingleLine(IntPtr addr, access_t access_type,
 			m_fault_injector->postWrite(addr, set_index * m_associativity + line_index, bytes, (Byte *)m_sets[set_index]->getDataPtr(line_index, block_offset), now);
 	}
 
+#if DEBUG_L2_CONTENT >= DEBUG_BASIC
+	// Periodically log L2 cache content distribution
+	if (m_name == "L2") {
+		m_total_accesses++;
+		logCacheContentDistribution(m_total_accesses);
+	}
+#endif
+
 	return cache_block_info;
 }
 
@@ -296,17 +371,12 @@ void Cache::insertSingleLine(IntPtr addr, Byte *fill_buff,
 	cache_block_info->setTag(tag);
 	cache_block_info->setBlockType(btype);
 
-	bool metadata_request = (btype == CacheBlockInfo::block_type_t::PAGE_TABLE) ||
-							(btype == CacheBlockInfo::block_type_t::PAGE_TABLE_PASSTHROUGH) ||
-							(btype == CacheBlockInfo::block_type_t::SECURITY) ||
-							(btype == CacheBlockInfo::block_type_t::EXPRESSIVE) ||
-							(btype == CacheBlockInfo::block_type_t::TLB_ENTRY) ||
-							(btype == CacheBlockInfo::block_type_t::TLB_ENTRY_PASSTHROUGH);
+	// Check if this is any type of metadata request using the helper function
+	bool metadata_request = CacheBlockInfo::isMetadataBlockType(btype);
 
 	if (m_name == "L2" && metadata_request && metadata_passthrough_loc > 2)
 	{
 
-		// std::cout << "[L2] Inserting in fake set of L2: " << addr <<std::endl;
 		m_fake_sets[0]->insert(cache_block_info, fill_buff,
 							   eviction, evict_block_info, evict_buff, cntlr);
 	}
@@ -318,18 +388,15 @@ void Cache::insertSingleLine(IntPtr addr, Byte *fill_buff,
 
 	*evict_addr = tagToAddress(evict_block_info->getTag());
 
-	if (m_name == "nuca-cache" && (evict_block_info->getBlockType() == CacheBlockInfo::TLB_ENTRY || evict_block_info->getBlockType() == CacheBlockInfo::TLB_ENTRY_PASSTHROUGH))
-	{
-		*eviction = false;
-		evict_addr = NULL;
-	}
 
 	if ((*eviction) == true)
 	{
 
 		int reuse_value = evict_block_info->getReuse();
 
-		if (evict_block_info->getBlockType() == CacheBlockInfo::block_type_t::NON_PAGE_TABLE)
+		// Simplified block types: DATA for regular data, PAGE_TABLE for all metadata types
+		if (evict_block_info->getBlockType() == CacheBlockInfo::block_type_t::DATA ||
+			evict_block_info->getBlockType() == CacheBlockInfo::block_type_t::INSTRUCTION)
 		{
 
 			if (reuse_value == 0)
@@ -345,13 +412,18 @@ void Cache::insertSingleLine(IntPtr addr, Byte *fill_buff,
 
 			sum_data_reuse += reuse_value;
 			sum_data_utilization += evict_block_info->getUsage();
-			data_util[bits_set(evict_block_info->getUsage())]++;
+			int set_bits = bits_set(evict_block_info->getUsage()) > 7 ? 7 : bits_set(evict_block_info->getUsage());
+			data_util[set_bits]++;
 
 			number_of_data_reuse++;
 			average_data_reuse = sum_data_reuse / number_of_data_reuse;
 		}
-		else if (evict_block_info->getBlockType() == CacheBlockInfo::block_type_t::PAGE_TABLE)
+		// Check for metadata block types using helper function
+		else if (CacheBlockInfo::isMetadataBlockType(evict_block_info->getBlockType()))
 		{
+			// Debug: Log when L1-D increments metadata stats
+
+			
 			if (reuse_value == 0)
 				metadata_reuse[0]++;
 			else if (reuse_value <= reuse_levels[0])
@@ -365,29 +437,11 @@ void Cache::insertSingleLine(IntPtr addr, Byte *fill_buff,
 
 			sum_metadata_reuse += reuse_value;
 			sum_metadata_utilization += evict_block_info->getUsage();
-			metadata_util[bits_set(evict_block_info->getUsage())]++;
+			int set_bits = bits_set(evict_block_info->getUsage()) > 7 ? 7 : bits_set(evict_block_info->getUsage());
+			metadata_util[set_bits]++;
 
 			number_of_metadata_reuse++;
 			average_metadata_reuse = sum_metadata_reuse / number_of_metadata_reuse;
-		}
-		else if (evict_block_info->getBlockType() == CacheBlockInfo::block_type_t::TLB_ENTRY || evict_block_info->getBlockType() == CacheBlockInfo::block_type_t::TLB_ENTRY_PASSTHROUGH)
-		{
-
-			if (reuse_value == 0)
-				tlb_reuse[0]++;
-			else if (reuse_value <= reuse_levels[0])
-				tlb_reuse[1]++;
-			else if (reuse_value <= reuse_levels[1])
-				tlb_reuse[2]++;
-			else if (reuse_value <= reuse_levels[2])
-				tlb_reuse[3]++;
-			else
-				tlb_reuse[4]++;
-
-			sum_tlb_reuse += reuse_value;
-			sum_tlb_utilization += evict_block_info->getUsage();
-			tlb_util[bits_set(evict_block_info->getUsage())]++;
-			number_of_tlb_reuse++;
 		}
 	}
 
@@ -421,37 +475,31 @@ Cache::accessSingleLineTLB(IntPtr addr, access_t access_type,
 	
 	bool found_cache_block = false;
 
-	#ifdef DEBUG_TLB
-		for (int page_size = 0; page_size < m_number_of_page_sizes; page_size++){
-				std::cout << "Testing page size = " << m_pagesizes[page_size];
-			
-		}
-		std::cout << std::endl;
-	#endif
+
 
 
 	for (int page_size = 0; page_size < m_number_of_page_sizes; page_size++)
 	{ // @kanellok iterate over all possible page sizes
+		int current_page_size = m_pagesizes[page_size];
 
-		#ifdef DEBUG_TLB
-			std::cout << m_name << " lookup: Page size = " << m_pagesizes[page_size] << " Number of page sizes = " <<  m_number_of_page_sizes <<  std::endl;
-		#endif
+		splitAddressTLB(addr, tag, set_index, block_offset, current_page_size); //@kanellok provide the page size to find the index
 		
-		splitAddressTLB(addr, tag, set_index, block_offset, m_pagesizes[page_size]); //@kanellok provide the page size to find the index
-		
-		#ifdef DEBUG_TLB
-			std::cout << "Address =  " << addr << std::endl;
-			std::cout << "Set index =  " << set_index << std::endl;
-			std::cout << "Tag =  " << tag  << std::endl;
-			std::cout << std::endl;
-		#endif
-
 		set = m_sets[set_index];
-		cache_block_info = set->find(tag, &line_index);
+		// Use TLB-aware find that matches BOTH tag AND page_size
+		// This prevents false matches between entries from different page sizes
+		// (e.g., a 4KB and 2MB page that happen to have the same tag)
+		cache_block_info = set->findTLB(tag, current_page_size, &line_index);
 
 
 		if (cache_block_info == NULL)
 			continue;
+
+		// Check if the entry is valid (not invalidated)
+		if (cache_block_info->getCState() == CacheState::INVALID)
+		{
+			continue;
+		}
+
 
 		found_cache_block = true;
 
@@ -490,32 +538,19 @@ void Cache::insertSingleLineTLB(IntPtr addr, Byte *fill_buff,
 	UInt32 set_index = 0;
 	splitAddressTLB(addr, tag, set_index, page_size);
 
-	#ifdef DEBUG_TLB
-		std::cout << m_name << " insert: Page size = " << page_size << std::endl;
-		std::cout << "Address =  " << addr << std::endl;
-		std::cout << "Set index =  " << set_index << std::endl;
-		std::cout << "Tag =  " << tag  << std::endl;
-	#endif 
-
 	CacheBlockInfo *cache_block_info = CacheBlockInfo::create(m_cache_type);
 	cache_block_info->setTag(tag);
 	cache_block_info->setBlockType(btype);
 	cache_block_info->setPageSize(page_size);
 	cache_block_info->setPPN(ppn);
+	cache_block_info->setCState(CacheState::SHARED);  // Mark as valid for TLB lookups
 	m_sets[set_index]->insert(cache_block_info, fill_buff,
 							  eviction, evict_block_info, evict_buff, cntlr);
 	if (*eviction == true)
 		page_size = evict_block_info->getPageSize();
 	*evict_addr = tagToAddressTLB(evict_block_info->getTag(), page_size);
  
-	#ifdef DEBUG_TLB
 
-		std::cout << "Inserted " << addr << " in set " << set_index << " with tag " << m_sets[set_index]->find(tag)->getTag() << " and page size " << m_sets[set_index]->find(tag)->getPageSize() << std::endl;
-		if(*eviction == true)
-			std::cout << "Evicted  address  " << *evict_addr<< std::endl;
-		std::cout << std::endl;
-
-	#endif 
 
 	if (m_fault_injector)
 	{
@@ -608,35 +643,6 @@ void Cache::measureStats()
 
 	m_page_walk_cacheblocks.push_back(accum);
 
-	accum = 0; /* accumulate stats over all sets */
-	for (uint32_t set_index = 0; set_index < m_num_sets; ++set_index)
-	{
-		accum += m_sets[set_index]->countSecurityCacheBlocks();
-	}
-
-	m_security_cacheblocks.push_back(accum);
-
-	accum = 0; /* accumulate stats over all sets */
-	for (uint32_t set_index = 0; set_index < m_num_sets; ++set_index)
-	{
-		accum += m_sets[set_index]->countExpressiveCacheBlocks();
-	}
-
-	m_expressive_cacheblocks.push_back(accum);
-
-	accum = 0; /* accumulate stats over all sets */
-	for (uint32_t set_index = 0; set_index < m_num_sets; ++set_index)
-	{
-		accum += m_sets[set_index]->countUtopiaCacheBlocks();
-	}
-	m_utopia_cacheblocks.push_back(accum);
-
-	accum = 0; /* accumulate stats over all sets */
-	for (uint32_t set_index = 0; set_index < m_num_sets; ++set_index)
-	{
-		accum += m_sets[set_index]->countTLBCacheBlocks();
-	}
-	m_tlb_cacheblocks.push_back(accum);
 }
 void Cache::markMetadata(IntPtr address, CacheBlockInfo::block_type_t blocktype)
 {
@@ -656,4 +662,217 @@ void Cache::markMetadata(IntPtr address, CacheBlockInfo::block_type_t blocktype)
 			break;
 		}
 	}
+}
+
+CacheSnapshot Cache::getCacheSnapshot() const
+{
+	CacheSnapshot snapshot;
+	snapshot.num_sets = m_num_sets;
+	snapshot.num_ways = m_associativity;
+	snapshot.blocks.resize(m_num_sets);
+	
+	for (UInt32 set_idx = 0; set_idx < m_num_sets; ++set_idx)
+	{
+		snapshot.blocks[set_idx].resize(m_associativity);
+		CacheSet* cache_set = m_sets[set_idx];
+		
+		for (UInt32 way = 0; way < m_associativity; ++way)
+		{
+			CacheBlockInfo* block_info = cache_set->peekBlock(way);
+			CacheBlockSnapshot& block_snap = snapshot.blocks[set_idx][way];
+			
+			block_snap.valid = block_info->isValid();
+			block_snap.block_type = static_cast<UInt8>(block_info->getBlockType());
+			block_snap.recency = cache_set->getRecencyBits(way);
+			block_snap.reuse_count = block_info->getReuse();
+		}
+	}
+	
+	return snapshot;
+}
+
+void Cache::saveSnapshotHeatmap(const std::string& filename) const
+{
+	// Get the snapshot
+	CacheSnapshot snapshot = getCacheSnapshot();
+	
+	// Create a PPM image file (simple format, no external libs needed)
+	// Image: rows = sets, cols = ways
+	// Color encodes: block_type (hue) + recency (brightness)
+	
+	std::ofstream file(filename);
+	if (!file.is_open())
+	{
+		LOG_PRINT_WARNING("Could not open file for cache heatmap: %s", filename.c_str());
+		return;
+	}
+	
+	// PPM header
+	file << "P3\n";
+	file << snapshot.num_ways << " " << snapshot.num_sets << "\n";
+	file << "255\n";
+	
+	// Color palette for block types (R, G, B)
+	// Invalid blocks are dark gray
+	// Each block type gets a distinct color, with brightness based on recency
+	auto getColor = [&](const CacheBlockSnapshot& block) -> std::tuple<int, int, int> {
+		if (!block.valid) {
+			return {40, 40, 40};  // Dark gray for invalid
+		}
+		
+		// Base colors for different block types
+		int r = 0, g = 0, b = 0;
+		switch (static_cast<CacheBlockInfo::block_type_t>(block.block_type)) {
+			case CacheBlockInfo::PAGE_TABLE_DATA:
+				r = 255; g = 0; b = 0;   // Red (page table data)
+				break;
+			case CacheBlockInfo::PAGE_TABLE_INSTRUCTION:
+				r = 255; g = 128; b = 0;   // Orange (page table instruction)
+				break;
+			case CacheBlockInfo::UTOPIA_FP:
+				r = 255; g = 0; b = 255;   // Magenta (Utopia FP)
+				break;
+			case CacheBlockInfo::UTOPIA_TAR:
+				r = 128; g = 0; b = 255;   // Purple (Utopia TAR)
+				break;
+			case CacheBlockInfo::INSTRUCTION:
+				r = 0; g = 255; b = 0;   // Green (instructions)
+				break;
+			case CacheBlockInfo::DATA:
+			default:
+				r = 0; g = 128; b = 255;  // Blue (normal data)
+				break;
+		}
+		
+		// Adjust brightness based on recency (0=MRU is brightest, higher=dimmer)
+		// Normalize recency to 0-1 range based on associativity
+		float recency_factor = 1.0f - (float)block.recency / (float)(snapshot.num_ways);
+		recency_factor = 0.3f + 0.7f * recency_factor;  // Keep minimum brightness at 30%
+		
+		r = static_cast<int>(r * recency_factor);
+		g = static_cast<int>(g * recency_factor);
+		b = static_cast<int>(b * recency_factor);
+		
+		return {r, g, b};
+	};
+	
+	// Write pixels
+	for (UInt32 set_idx = 0; set_idx < snapshot.num_sets; ++set_idx)
+	{
+		for (UInt32 way = 0; way < snapshot.num_ways; ++way)
+		{
+			auto [r, g, b] = getColor(snapshot.blocks[set_idx][way]);
+			file << r << " " << g << " " << b << " ";
+		}
+		file << "\n";
+	}
+	
+	file.close();
+}
+
+void
+Cache::logCacheContentDistribution(UInt64 access_count)
+{
+#if DEBUG_L2_CONTENT >= DEBUG_BASIC
+	// Only log at specified intervals
+	if (access_count < m_last_log_access_count + L2_CONTENT_LOG_INTERVAL) {
+		return;
+	}
+	m_last_log_access_count = access_count;
+
+	// Initialize log file on first call
+	if (!m_content_log_initialized) {
+		std::string log_filename = std::string(Sim()->getConfig()->getOutputDirectory().c_str()) + "/l2_content_core" + std::to_string(m_core_id) + ".csv";
+		m_content_log.open(log_filename.c_str());
+		if (m_content_log.is_open()) {
+			m_content_log << "l2_accesses,total_blocks,valid_blocks,data_blocks,instruction_blocks,"
+			              << "pt_data_blocks,pt_instr_blocks,utopia_fp_blocks,utopia_tar_blocks,"
+			              << "invalid_blocks,data_pct,metadata_pct" << std::endl;
+			m_content_log_initialized = true;
+			std::cout << "[L2 Content] Opened log file: " << log_filename << std::endl;
+		} else {
+			std::cerr << "[L2 Content] Failed to open log file: " << log_filename << std::endl;
+			return;
+		}
+	}
+
+	// Count blocks by type (fine-grained)
+	UInt64 total_blocks = 0;
+	UInt64 valid_blocks = 0;
+	UInt64 data_blocks = 0;
+	UInt64 instruction_blocks = 0;
+	UInt64 pt_data_blocks = 0;      // Page table for data translations
+	UInt64 pt_instr_blocks = 0;     // Page table for instruction translations
+	UInt64 utopia_fp_blocks = 0;    // Utopia FPA metadata
+	UInt64 utopia_tar_blocks = 0;   // Utopia TAR metadata
+	UInt64 invalid_blocks = 0;
+
+	for (UInt32 set_idx = 0; set_idx < m_num_sets; ++set_idx) {
+		CacheSet* cache_set = m_sets[set_idx];
+		for (UInt32 way = 0; way < m_associativity; ++way) {
+			CacheBlockInfo* block_info = cache_set->peekBlock(way);
+			total_blocks++;
+
+			if (block_info->isValid()) {
+				valid_blocks++;
+				CacheBlockInfo::block_type_t block_type = block_info->getBlockType();
+				switch (block_type) {
+					case CacheBlockInfo::block_type_t::DATA:
+						data_blocks++;
+						break;
+					case CacheBlockInfo::block_type_t::INSTRUCTION:
+						instruction_blocks++;
+						break;
+					case CacheBlockInfo::block_type_t::PAGE_TABLE_DATA:
+						pt_data_blocks++;
+						break;
+					case CacheBlockInfo::block_type_t::PAGE_TABLE_INSTRUCTION:
+						pt_instr_blocks++;
+						break;
+					case CacheBlockInfo::block_type_t::UTOPIA_FP:
+						utopia_fp_blocks++;
+						break;
+					case CacheBlockInfo::block_type_t::UTOPIA_TAR:
+						utopia_tar_blocks++;
+						break;
+					default:
+						// Treat unknown types as data
+						data_blocks++;
+						break;
+				}
+			} else {
+				invalid_blocks++;
+			}
+		}
+	}
+
+	// Calculate percentages (of valid blocks)
+	UInt64 total_metadata = pt_data_blocks + pt_instr_blocks + utopia_fp_blocks + utopia_tar_blocks;
+	double data_pct = (valid_blocks > 0) ? (100.0 * (data_blocks + instruction_blocks) / valid_blocks) : 0.0;
+	double metadata_pct = (valid_blocks > 0) ? (100.0 * total_metadata / valid_blocks) : 0.0;
+
+	// Write to log
+	m_content_log << access_count << ","
+	              << total_blocks << ","
+	              << valid_blocks << ","
+	              << data_blocks << ","
+	              << instruction_blocks << ","
+	              << pt_data_blocks << ","
+	              << pt_instr_blocks << ","
+	              << utopia_fp_blocks << ","
+	              << utopia_tar_blocks << ","
+	              << invalid_blocks << ","
+	              << std::fixed << std::setprecision(2) << data_pct << ","
+	              << std::fixed << std::setprecision(2) << metadata_pct << std::endl;
+
+#if DEBUG_L2_CONTENT >= DEBUG_DETAILED
+	std::cout << "[L2 Content] Core " << m_core_id << " @ " << access_count << " accesses: "
+	          << valid_blocks << "/" << total_blocks << " valid, "
+	          << data_blocks << " data, " << instruction_blocks << " instr, "
+	          << "PT[D:" << pt_data_blocks << " I:" << pt_instr_blocks << "] "
+	          << "Utopia[FP:" << utopia_fp_blocks << " TAR:" << utopia_tar_blocks << "] ("
+	          << std::fixed << std::setprecision(1) << metadata_pct << "% metadata)" << std::endl;
+#endif
+
+#endif // DEBUG_L2_CONTENT
 }

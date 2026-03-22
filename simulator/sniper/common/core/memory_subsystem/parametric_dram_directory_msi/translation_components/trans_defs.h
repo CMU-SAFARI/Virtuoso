@@ -1,5 +1,7 @@
 #ifndef __TRANS_TYPES_H
 #define __TRANS_TYPES_H
+
+#include <cstdint>
     
 typedef struct queue_entry_s
 {
@@ -7,6 +9,7 @@ typedef struct queue_entry_s
     int page_size;
     IntPtr ppn;
     IntPtr address;
+    uint64_t payload_bits;  ///< Shadow PTE payload from leaf (for temporal prefetching)
 } query_entry;
 
 

@@ -26,12 +26,18 @@ namespace ParametricDramDirectoryMSI
 		int *m_page_table_sizes;
 		IntPtr *emulated_table_address;
 
+		// Resizing parameters
+		double m_resize_threshold;   // Occupancy ratio to trigger resize (e.g., 0.6)
+		int    m_resize_factor;      // Multiply table size by this factor (e.g., 2)
+		int   *m_entry_count;        // Current number of occupied entries per page size
+
 		struct Stats
 		{
 			UInt64 *page_table_walks;
 			UInt64 *num_accesses;
 			UInt64 *collisions;
 			UInt64 page_faults;
+			UInt64 *resizes;
 			std::vector<double> *std;
 			std::vector<double> *mean;
 		} stats;
@@ -55,5 +61,8 @@ namespace ParametricDramDirectoryMSI
 		void calculate_mean();
 		void calculate_std();
 		void printVectorStatistics();
+
+	private:
+		void resizeTable(int page_size_index);
 	};
 }

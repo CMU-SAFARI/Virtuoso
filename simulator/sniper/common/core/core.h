@@ -1,11 +1,14 @@
 #ifndef CORE_H
 #define CORE_H
+#include <fstream> 
+
 
 // some forward declarations for cross includes
 class Thread;
 class Network;
 class MemoryManagerBase;
 class MemoryManagerFast;
+class ExceptionHandlerBase;
 class PerformanceModel;
 class ClockSkewMinimizationClient;
 class ShmemPerfModel;
@@ -116,6 +119,8 @@ class Core
       ClockSkewMinimizationClient* getClockSkewMinimizationClient() const { return m_clock_skew_minimization_client; }
       MemoryManagerBase *getMemoryManager() { return m_memory_manager; }
       const MemoryManagerBase *getMemoryManager() const { return m_memory_manager; }
+      ExceptionHandlerBase *getExceptionHandler() { return m_exception_handler; }
+      const ExceptionHandlerBase *getExceptionHandler() const { return m_exception_handler; }
       ShmemPerfModel* getShmemPerfModel() { return m_shmem_perf_model; }
       const ComponentPeriod* getDvfsDomain() const { return m_dvfs_domain; }
       TopologyInfo* getTopologyInfo() { return m_topology_info; }
@@ -137,8 +142,6 @@ class Core
       // @RBERA: for measuring contribution of page-walk entries in cache
       void measureCacheStats();
 
-      //Utr
-      UInt64 *getUtrBitmap();
 
       void updateSpinCount(UInt64 instructions, SubsecondTime elapsed_time)
       {
@@ -151,6 +154,7 @@ class Core
       core_id_t m_core_id;
       const ComponentPeriod* m_dvfs_domain;
       MemoryManagerBase *m_memory_manager;
+      ExceptionHandlerBase *m_exception_handler;
       Thread *m_thread;
       Network *m_network;
       PerformanceModel *m_performance_model;
@@ -160,7 +164,6 @@ class Core
       BbvCount m_bbv;
       TopologyInfo *m_topology_info;
       CheetahManager *m_cheetah_manager;
-      UInt64 *utr_bitmap;
 
       State m_core_state;
 
@@ -184,6 +187,9 @@ class Core
       UInt64 m_spin_loops;
       UInt64 m_spin_instructions;
       SubsecondTime m_spin_elapsed_time;
+
+      std::string log_file_name;
+      std::ofstream log_file;
 
    protected:
       // Optimized version of countInstruction has direct access to m_instructions and m_instructions_callback

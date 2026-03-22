@@ -3,6 +3,7 @@
 
 #include "fixed_types.h"
 #include "cond.h"
+#include <atomic>
 
 class Barrier
 {
@@ -15,7 +16,7 @@ class Barrier
    private:
       int m_count;
       int m_arrived;
-      int m_leaving;
+      std::atomic<int> m_leaving;
       Lock m_lock;
       ConditionVariable m_cond;
 };

@@ -28,7 +28,10 @@ namespace ParametricDramDirectoryMSI
 			std::cout << "[Radix Page Table] Levels: " << levels << std::endl;
 			std::cout << "[Radix Page Table] Frame size: " << frame_size << " entries" << std::endl;
 
-			return new PageTableRadix(app_id, name, type, page_sizes, page_size_list, levels, frame_size, is_guest);
+			auto* pt = new PageTableRadix(app_id, name, type, page_sizes, page_size_list, levels, frame_size, is_guest);
+
+			std::cout << "[Radix Page Table] createRadixPageTable created new PageTableRadix object with name: " << pt->getName() << " and type: " << pt->getType() << std::endl;
+			return pt;
 		}
 
 		static PageTable *createHDCPageTable(int core_id, String name, String type, int page_sizes, int *page_size_list, int *page_table_size_list, bool is_guest)
@@ -90,7 +93,6 @@ namespace ParametricDramDirectoryMSI
 				else
 					mimicos_name = Sim()->getMimicOS()->getName();
 
-				Core* core = Sim()->getCoreManager()->getCoreFromID(app_id);
 
 				int page_sizes = Sim()->getCfg()->getInt("perf_model/" + mimicos_name + "/" + name + "/page_sizes");
 				int *page_size_list = new int[page_sizes];
@@ -103,7 +105,7 @@ namespace ParametricDramDirectoryMSI
 				int levels = Sim()->getCfg()->getInt("perf_model/" + mimicos_name + "/" + name + "/levels");
 				int frame_size = Sim()->getCfg()->getInt("perf_model/" + mimicos_name + "/" + name + "/frame_size");
 
-				return createRadixPageTable(core->getId(), name, type, page_sizes, page_size_list, levels, frame_size, is_guest);
+				return createRadixPageTable(app_id, name, type, page_sizes, page_size_list, levels, frame_size, is_guest);
 			}
 			else if (type == "hash_dont_cache")
 			{

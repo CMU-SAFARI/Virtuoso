@@ -7,6 +7,8 @@
 #include "cache_set_random.h"
 #include "cache_set_round_robin.h"
 #include "cache_set_srrip.h"
+#include "cache_set_mplru.h"
+#include "cache_set_chirp.h"
 #include "cache_base.h"
 #include "log.h"
 #include "simulator.h"
@@ -68,7 +70,7 @@ CacheSet::write_line(UInt32 line_index, UInt32 offset, Byte *in_buff, UInt32 byt
 
 CacheBlockInfo*
 CacheSet::find(IntPtr tag, UInt32* line_index)
-{
+{ 
    for (SInt32 index = m_associativity-1; index >= 0; index--)
    {
       if (m_cache_block_info_array[index]->getTag() == tag)
@@ -81,6 +83,45 @@ CacheSet::find(IntPtr tag, UInt32* line_index)
    return NULL;
 }
 
+CacheBlockInfo*
+CacheSet::findTLB(IntPtr tag, int page_size, UInt32* line_index)
+{
+   // TLB-aware find: match BOTH tag AND page_size to avoid false matches
+   // between entries from different page sizes (e.g., 4KB vs 2MB)
+   for (SInt32 index = m_associativity-1; index >= 0; index--)
+   {
+      CacheBlockInfo* block = m_cache_block_info_array[index];
+      if (block->getTag() == tag && block->getPageSize() == page_size)
+      {
+         if (line_index != NULL)
+            *line_index = index;
+         return block;
+      }
+   }
+   return NULL;
+}
+
+bool
+CacheSet::invalidateTLB(IntPtr tag, int page_size)
+{
+   // TLB-aware invalidate: match BOTH tag AND page_size
+   // This prevents invalidating entries from different page sizes that happen
+   // to have the same tag (which maps to different VPNs)
+   bool found_any = false;
+   for (SInt32 index = m_associativity-1; index >= 0; index--)
+   {
+      CacheBlockInfo* block = m_cache_block_info_array[index];
+      if (block->getTag() == tag && block->getPageSize() == page_size)
+      {
+         block->invalidate();
+         invalidations++;
+         found_any = true;
+         // Continue to invalidate ALL matching entries (in case of duplicates)
+      }
+   }
+   return found_any;
+}
+
 bool
 CacheSet::invalidate(IntPtr& tag)
 {
@@ -89,6 +130,7 @@ CacheSet::invalidate(IntPtr& tag)
       if (m_cache_block_info_array[index]->getTag() == tag)
       {
          m_cache_block_info_array[index]->invalidate();
+
          return true;
          invalidations++;
       }
@@ -177,6 +219,12 @@ CacheSet::createCacheSet(String cfgname, core_id_t core_id,
       case CacheBase::RANDOM:
          return new CacheSetRandom(cache_type, associativity, blocksize, is_tlb_set);
 
+      case CacheBase::MPLRU:
+         return new CacheSetMPLRU(cache_type, associativity, blocksize, dynamic_cast<CacheSetInfoMPLRU*>(set_info), 1, is_tlb_set);
+
+      case CacheBase::CHIRP:
+         return new CacheSetCHiRP(cache_type, associativity, blocksize, dynamic_cast<CacheSetInfoCHiRP*>(set_info), is_tlb_set);
+
       default:
          LOG_PRINT_ERROR("Unrecognized Cache Replacement Policy: %i",
                policy);
@@ -197,6 +245,16 @@ CacheSet::createCacheSetInfo(String name, String cfgname, core_id_t core_id, Str
       case CacheBase::SRRIP:
       case CacheBase::SRRIP_QBS:
          return new CacheSetInfoLRU(name, cfgname, core_id, associativity, getNumQBSAttempts(policy, cfgname, core_id));
+      case CacheBase::MPLRU:
+         return new CacheSetInfoMPLRU(name, cfgname, core_id, associativity, 1);
+      case CacheBase::CHIRP:
+      {
+         UInt32 table_size = Sim()->getCfg()->hasKey(cfgname + "/chirp/table_size")
+            ? Sim()->getCfg()->getInt(cfgname + "/chirp/table_size") : 1024;
+         UInt8 threshold = Sim()->getCfg()->hasKey(cfgname + "/chirp/threshold")
+            ? Sim()->getCfg()->getInt(cfgname + "/chirp/threshold") : 2;
+         return new CacheSetInfoCHiRP(name, cfgname, core_id, associativity, table_size, threshold);
+      }
       default:
          return NULL;
    }
@@ -238,6 +296,10 @@ CacheSet::parsePolicyType(String policy)
       return CacheBase::SRRIP_QBS;
    if (policy == "random")
       return CacheBase::RANDOM;
+   if (policy == "mplru")
+      return CacheBase::MPLRU;
+   if (policy == "chirp")
+      return CacheBase::CHIRP;
 
    LOG_PRINT_ERROR("Unknown replacement policy %s", policy.c_str());
 }
@@ -266,54 +328,23 @@ uint64_t CacheSet::countPageWalkCacheBlocks()
    }
    return count;
 }
+// All legacy metadata counting functions now use countPageWalkCacheBlocks()
 uint64_t CacheSet::countSecurityCacheBlocks()
 {
-   uint64_t count = 0;
-   for (SInt32 index = m_associativity - 1; index >= 0; index--)
-   {
-      if (m_cache_block_info_array[index]->isSecurityBlock())
-      {
-         count++;
-      }
-   }
-   return count;
+   return countPageWalkCacheBlocks();
 }
 uint64_t CacheSet::countExpressiveCacheBlocks()
 {
-   uint64_t count = 0;
-   for (SInt32 index = m_associativity - 1; index >= 0; index--)
-   {
-      if (m_cache_block_info_array[index]->isExpressiveBlock())
-      {
-         count++;
-      }
-   }
-   return count;
+   return countPageWalkCacheBlocks();
 }
 
 uint64_t CacheSet::countUtopiaCacheBlocks()
 {
-   uint64_t count = 0;
-   for (SInt32 index = m_associativity - 1; index >= 0; index--)
-   {
-      if (m_cache_block_info_array[index]->isUtopiaBlock())
-      {
-         count++;
-      }
-   }
-   return count;
+   return countPageWalkCacheBlocks();
 }
 
 
 uint64_t CacheSet::countTLBCacheBlocks()
 {
-   uint64_t count = 0;
-   for (SInt32 index = m_associativity - 1; index >= 0; index--)
-   {
-      if (m_cache_block_info_array[index]->isTLBBlock())
-      {
-         count++;
-      }
-   }
-   return count;
+   return countPageWalkCacheBlocks();
 }

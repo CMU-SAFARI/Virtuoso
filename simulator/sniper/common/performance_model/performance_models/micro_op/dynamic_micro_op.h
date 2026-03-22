@@ -16,7 +16,8 @@ class DynamicMicroOp
    private:
       const MicroOp *m_uop;
       const CoreModel *m_core_model;
-
+      Instruction *m_instruction;  // Direct pointer to instruction for safe cleanup
+      
       // architecture-independent information
       const SubsecondTime m_period;
 
@@ -77,7 +78,8 @@ class DynamicMicroOp
          T *t = new(ptr) T(uop, core_model, period);
          return t;
       }
-      static void operator delete(void* ptr) { Allocator::dealloc(ptr); }
+      static void operator delete(void* ptr) { 
+         Allocator::dealloc(ptr); }
 
       const MicroOp *getMicroOp() const { return m_uop; }
 
@@ -145,6 +147,7 @@ class DynamicMicroOp
 
       SubsecondTime getPeriod() const { LOG_ASSERT_ERROR(m_period != SubsecondTime::Zero(), "MicroOp Period is == SubsecondTime::Zero()"); return m_period; }
 
+      const CoreModel* getCoreModel() const { return m_core_model; }
 
       // More dynamic, architecture-dependent information to be defined by derived classes
       virtual const char* getType() const = 0; // Make this class pure virtual

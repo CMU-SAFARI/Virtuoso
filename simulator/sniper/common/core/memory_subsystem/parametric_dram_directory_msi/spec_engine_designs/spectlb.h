@@ -5,7 +5,6 @@
 #include "mmu_pomtlb.h"
 #include "mmu_range.h"
 #include "mmu_utopia.h"
-#include "nested_mmu.h"
 #include "config.hpp"
 #include "mmu_spec.h"
 #include "spec_engine_base.h"
@@ -31,7 +30,7 @@ namespace ParametricDramDirectoryMSI
     protected:
         SubsecondTime spec_access_time;      // time the access starts
         bool spec_hit;                       ///< Flag to indicate if the speculative access was a hit.
-        MemoryManager *memory_manager;       ///< Pointer to the memory manager instance.
+        MemoryManagerBase *memory_manager;       ///< Pointer to the memory manager instance.
         String name;                         ///< Name of the speculative engine instance.
         TLB *spec_tlb;                       ///< Pointer to the speculative TLB instance.
         CacheBlockInfo *spec_tlb_block_info; ///< Pointer to the cache block info retrieved from the TLB lookup.
@@ -49,7 +48,7 @@ namespace ParametricDramDirectoryMSI
          * @param shmem_perf_model Pointer to the shared memory performance model.
          * @param _name A string representing the name of this SpecTLB instance.
          */
-        SpecTLB(Core *core, MemoryManager *_memory_manager, ShmemPerfModel *shmem_perf_model, String _name);
+        SpecTLB(Core *core, MemoryManagerBase *_memory_manager, ShmemPerfModel *shmem_perf_model, String _name);
 
         /**
          * @brief Invokes the speculative engine for handling memory access.

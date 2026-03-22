@@ -28,7 +28,7 @@ namespace ParametricDramDirectoryMSI
         Core *core;
 
         // The memory manager to handle memory-related operations
-        MemoryManager *memory_manager;
+        MemoryManagerBase *memory_manager;
 
         // The name of the speculative engine
         String name;
@@ -47,7 +47,7 @@ namespace ParametricDramDirectoryMSI
          * @param shmem_perf_model A pointer to the ShmemPerfModel instance for tracking memory access time.
          * @param _name The name of the speculative engine.
          */
-        SpecEngineBase(Core *core, MemoryManager *_memory_manager, ShmemPerfModel *shmem_perf_model, String _name)
+        SpecEngineBase(Core *core, MemoryManagerBase *_memory_manager, ShmemPerfModel *shmem_perf_model, String _name)
             : core(core), memory_manager(_memory_manager), name(_name), shmem_perf_model(shmem_perf_model)
         {
         }
@@ -80,5 +80,19 @@ namespace ParametricDramDirectoryMSI
          * @param modeled A boolean flag indicating if this allocation is part of the modeled simulation.
          */
         virtual void allocateInSpecEngine(IntPtr address, IntPtr ppn, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled) = 0;
+
+        /**
+         * @brief Returns the completion time of the last speculative prefetch.
+         *
+         * After invokeSpecEngine is called, this returns the time at which the
+         * (correct or earliest) speculative data became available in the cache.
+         * Returns SubsecondTime::Zero() if no prefetch was issued.
+         */
+        virtual SubsecondTime getLastSpecCompletionTime() const { return SubsecondTime::Zero(); }
+
+        /**
+         * @brief Returns whether the last speculative prediction was correct.
+         */
+        virtual bool wasLastPredictionCorrect() const { return false; }
     };
 }

@@ -5,8 +5,11 @@
 #include "subsecond_time.h"
 #include "hit_where.h"
 #include "cache_cntlr.h"
+#include "debug_config.h"
 
 #include "boost/tuple/tuple.hpp"
+
+#include <fstream>
 
 class MemoryManagerBase;
 class ShmemPerfModel;
@@ -33,6 +36,13 @@ class NucaCache
       UInt64 m_metadata_reads, m_metadata_writes, m_metadata_read_misses, m_metadata_write_misses;
       ShmemPerf m_dummy_shmem_perf;
 
+      // NUCA content logging
+#if DEBUG_NUCA_CONTENT >= DEBUG_BASIC
+      std::ofstream m_content_log;
+      UInt64 m_last_log_access_count;
+      bool m_content_log_initialized;
+#endif
+
       SubsecondTime accessDataArray(Cache::access_t access, SubsecondTime t_start, ShmemPerf *perf);
 
    public:
@@ -44,6 +54,9 @@ class NucaCache
       void markTranslationMetadata(IntPtr address, CacheBlockInfo::block_type_t blocktype);
       Cache* getCache(){return m_cache;}
       void measureStats();
+      
+      // Log NUCA cache content distribution (metadata vs data)
+      void logCacheContentDistribution(UInt64 nuca_accesses);
 };
 
 #endif // __NUCA_CACHE_H

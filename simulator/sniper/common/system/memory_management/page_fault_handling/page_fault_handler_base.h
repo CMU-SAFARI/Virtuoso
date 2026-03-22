@@ -1,23 +1,23 @@
 
-#pragma once
-#include "physical_memory_allocator.h"
-#include <iostream>
-#include <fstream>
+// #pragma once
+// #include "memory_management/physical_memory_allocators/physical_memory_allocator.h"
+// #include <iostream>
+// #include <fstream>
 
-using namespace std;
-class PageFaultHandlerBase
-{
-    protected:
-        PhysicalMemoryAllocator *allocator;
+// using namespace std;
+// class PageFaultHandlerBase
+// {
+//     protected:
+//         PhysicalMemoryAllocator *allocator;
 
-    public:
+//     public:
 
-        PageFaultHandlerBase(PhysicalMemoryAllocator *allocator){
-            this->allocator = allocator;
-        }
+//         PageFaultHandlerBase(PhysicalMemoryAllocator *allocator){
+//             this->allocator = allocator;
+//         }
         
-        ~PageFaultHandlerBase(){};
+//         ~PageFaultHandlerBase(){};
 
-       virtual void allocatePagetableFrames(UInt64 address, UInt64 core_id, UInt64 ppn, int page_size, int frame_number) = 0;
-       virtual void handlePageFault(UInt64 address, UInt64 core_id, int frames) = 0;
-};
+//        virtual void allocatePagetableFrames(UInt64 address, UInt64 core_id, UInt64 ppn, int page_size, int frame_number) = 0;
+//        virtual void handlePageFault(UInt64 address, UInt64 core_id, int frames) = 0;
+// };

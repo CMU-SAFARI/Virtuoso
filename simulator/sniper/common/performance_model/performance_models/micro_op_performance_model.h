@@ -20,9 +20,11 @@ class MicroOpPerformanceModel : public PerformanceModel
 public:
    MicroOpPerformanceModel(Core *core, bool issue_memops);
    ~MicroOpPerformanceModel();
+   virtual void drain(){};
 
 protected:
    const CoreModel *m_core_model;
+   Allocator *m_allocator; // Per-thread allocator for DynamicMicroOps
 
    virtual boost::tuple<uint64_t,uint64_t> simulate(const std::vector<DynamicMicroOp*>& insts) = 0;
    virtual void notifyElapsedTimeUpdate() = 0;
@@ -35,7 +37,8 @@ private:
    static MicroOp* m_mfence_uop;
    static MicroOp* m_memaccess_uop;
 
-   Allocator *m_allocator; // Per-thread allocator for DynamicMicroOps
+   Core *m_core;
+
    const bool m_issue_memops;
 
    std::vector<DynamicMicroOp*> m_current_uops;

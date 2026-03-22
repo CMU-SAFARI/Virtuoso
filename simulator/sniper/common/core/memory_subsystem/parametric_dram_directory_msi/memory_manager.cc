@@ -3,6 +3,7 @@
 #include "cache_base.h"
 #include "nuca_cache.h"
 #include "dram_cache.h"
+#include "tiered_dram_cntlr.h"
 #include "simulator.h"
 #include "log.h"
 #include "dvfs_manager.h"
@@ -16,11 +17,16 @@
 #include "contention_model.h"
 #include "thread.h"
 #include "mmu.h"
+#include "metadata_info.h"
+#include "trace_thread.h"
+#include "trace_manager.h"
+#include "mimicos.h"
+#include "performance_model.h"
 #include <algorithm>
 #include <sys/stat.h>
 #include <unistd.h>
 
-//#define DEBUG_MEM_MANAGER 
+#include "debug_config.h"
 
 #if 0
    extern Lock iolock;
@@ -91,6 +97,9 @@ namespace ParametricDramDirectoryMSI
 			if(m_native_environment){
 				mmu_type = Sim()->getCfg()->getString("perf_model/mmu/type");
 				m_mmu = MMUFactory::createMemoryManagementUnit(mmu_type, core, this, shmem_perf_model, "mmu");
+#if DEBUG_MEM_MANAGER >= DEBUG_BASIC
+				std::cout << "[Memory Hierarchy] MMU created succesfully..." << std::endl;
+#endif
 			}
 			else if (m_virtualized_environment) {
 				String host_mmu_type = Sim()->getCfg()->getString("perf_model/host_mmu/type");
@@ -100,6 +109,7 @@ namespace ParametricDramDirectoryMSI
 
 			log_file_mmu = std::ofstream();
 			log_file_name_mmu = "memorymanager.log." + std::to_string(core->getId());
+			log_file_name_mmu = std::string(Sim()->getConfig()->getOutputDirectory().c_str()) + "/" + log_file_name_mmu;
 			log_file_mmu.open(log_file_name_mmu.c_str()); 
 
 			smt_cores = Sim()->getCfg()->getInt("perf_model/core/logical_cpus");
@@ -255,12 +265,38 @@ namespace ParametricDramDirectoryMSI
 		if (find(core_list_with_dram_controllers.begin(), core_list_with_dram_controllers.end(), getCore()->getId()) != core_list_with_dram_controllers.end())
 		{
 			m_dram_cntlr_present = true;
-			m_dram_cntlr = new PrL1PrL2DramDirectoryMSI::DramCntlr(this,
-																   getShmemPerfModel(),
-																   getCacheBlockSize(), m_dram_controller_home_lookup);
-			Sim()->getStatsManager()->logTopology("dram-cntlr", core->getId(), core->getId());
+			
+			// Check if CXL tiered memory or NUMA is enabled
+			bool cxl_enabled = false;
+			try {
+				cxl_enabled = Sim()->getCfg()->getBool("perf_model/cxl/enabled");
+			} catch (...) {
+				cxl_enabled = false;
+			}
 
-			if (Sim()->getCfg()->getBoolArray("perf_model/dram/cache/enabled", core->getId()))
+			bool numa_enabled = false;
+			try {
+				numa_enabled = Sim()->getCfg()->getBool("perf_model/dram/numa/enabled");
+			} catch (...) {
+				numa_enabled = false;
+			}
+			
+			if (cxl_enabled || numa_enabled)
+			{
+				m_dram_cntlr = new PrL1PrL2DramDirectoryMSI::TieredDramCntlr(this,
+																			   getShmemPerfModel(),
+																			   getCacheBlockSize(), m_dram_controller_home_lookup);
+				Sim()->getStatsManager()->logTopology("tiered-dram-cntlr", core->getId(), core->getId());
+				LOG_PRINT("Tiered/NUMA DRAM controller enabled for core %d (CXL=%d, NUMA=%d)", 
+				          core->getId(), cxl_enabled, numa_enabled);
+			}
+			else
+			{
+				m_dram_cntlr = new PrL1PrL2DramDirectoryMSI::DramCntlr(this,
+																		   getShmemPerfModel(),
+																		   getCacheBlockSize(), m_dram_controller_home_lookup);
+				Sim()->getStatsManager()->logTopology("dram-cntlr", core->getId(), core->getId());
+			}			if (Sim()->getCfg()->getBoolArray("perf_model/dram/cache/enabled", core->getId()))
 			{
 				m_dram_cache = new DramCache(this, getShmemPerfModel(), m_dram_controller_home_lookup, getCacheBlockSize(), m_dram_cntlr);
 				Sim()->getStatsManager()->logTopology("dram-cache", core->getId(), core->getId());
@@ -413,8 +449,15 @@ namespace ParametricDramDirectoryMSI
 		registerStatsMetric("memory_manager", core->getId(), "translation_cache_memory_dram", &memory_access_stats.translation_cache_memory_dram);
 		registerStatsMetric("memory_manager", core->getId(), "translation_cache_memory_cache", &memory_access_stats.translation_cache_memory_cache);
 
+
+		registerStatsMetric("memory_manager", core->getId(), "latency_translation_dram_memory_dram", &memory_access_stats.latency_translation_dram_memory_dram);
+		registerStatsMetric("memory_manager", core->getId(), "latency_translation_dram_memory_cache", &memory_access_stats.latency_translation_dram_memory_cache);
+		registerStatsMetric("memory_manager", core->getId(), "latency_translation_cache_memory_dram", &memory_access_stats.latency_translation_cache_memory_dram);
+		registerStatsMetric("memory_manager", core->getId(), "latency_translation_cache_memory_cache", &memory_access_stats.latency_translation_cache_memory_cache);
+
 		registerStatsMetric("memory_manager", core->getId(), "translation_slower_than_memory_access", &memory_access_stats.translation_slower_than_memory_access);
 		registerStatsMetric("memory_manager", core->getId(), "translation_faster_than_memory_access", &memory_access_stats.translation_faster_than_memory_access);
+		registerStatsMetric("memory_manager", core->getId(), "unique_data_cache_lines", &memory_access_stats.unique_data_cache_lines);
 
 
 		std::cout << std::endl;
@@ -452,6 +495,15 @@ namespace ParametricDramDirectoryMSI
 			delete m_dram_cntlr;
 		if (m_dram_directory_cntlr)
 			delete m_dram_directory_cntlr;
+		if (m_mmu){
+			std::cout << "[Memory Manager] Destroying MMU for core " << getCore()->getId() << std::endl;
+			delete m_mmu;
+		}
+
+		// Print unique data cache lines accessed
+		std::cout << "[Memory Manager] Core " << getCore()->getId() 
+		          << " accessed " << m_unique_data_cache_lines.size() 
+		          << " unique data cache lines" << std::endl;
 	}
 
 	/* Core ships the memory request to the memory manager */
@@ -484,25 +536,74 @@ namespace ParametricDramDirectoryMSI
 		Core::MemModeled modeled)
 	{
 
+		
 		bool translation_enabled;
 
 		bool count = (modeled == Core::MEM_MODELED_NONE) ? false : true;
 
-		#ifdef DEBUG_MEM_MANAGER
+#if DEBUG_MEM_MANAGER >= DEBUG_BASIC
 			log_file_mmu << "Memory Access: " << address << " Initiating Translation at time " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS() << std::endl;
-		#endif
-
+#endif
 		// Check if translation is enabled
 		translation_enabled = Sim()->getCfg()->getBool("general/translation_enabled");
 
 		bool skip_translation = false;
 
+
 		// We skip translation for mimicOS as we assume that the addresses are already physical
-		if (Sim()->getCoreManager()->getCoreFromID(getCore()->getId())->getThread()->m_os_info.m_virtuos_app || translation_enabled == false)
+
+	
+		if (translation_enabled == false)
 		{
 			skip_translation = true;
 		}
 
+		// Find thread id and app id
+		Core *core = getCore();
+		int thread_id = core->getThread()->getId();
+		int app_id = core->getThread()->getAppId();
+
+		// Update MimicOS per-core instruction/cycle stats early
+		// This ensures the MPLRU controller has fresh cycle counts for epoch timing
+		if (count)
+		{
+			MimicOS* mimicos = Sim()->getMimicOS();
+			if (mimicos && mimicos->isPerCoreStatsInitialized())
+			{
+				// Get current instruction and cycle counts from the core's performance model
+				UInt64 instructions = core->getPerformanceModel()->getInstructionCount();
+				UInt64 cycles = core->getPerformanceModel()->getElapsedTime().getNS();
+				mimicos->updateInstructionStats(core->getId(), instructions, cycles);
+			}
+		}
+
+		// Get the trace thread from the trace manager 
+		TraceThread *trace_thread = Sim()->getTraceManager()->getTraceThread(app_id, thread_id);
+
+		
+		// This means that we are in the kernel thread which accesses the memory directly
+		// and we do not need to perform translation
+		if ( (trace_thread->getCurrentSiftReader() == trace_thread->getKernelSiftReader()) && this->getIsUserspaceMimicosEnabled())
+		{
+#if DEBUG_MEM_MANAGER >= DEBUG_BASIC
+			log_file_mmu << "We are in the kernel thread, skipping translation for address: " << address << std::endl;
+#endif
+			skip_translation = true;
+		}
+
+		if(trace_thread->getCurrentSiftReader() == trace_thread->getAppSiftReader())
+		{
+			// If we are in the user thread, we perform translation
+#if DEBUG_MEM_MANAGER >= DEBUG_DETAILED
+			log_file_mmu << "[Memory Manager] Memory Access: " << address << " in user thread, performing translation" << std::endl;
+#endif
+		}
+		else
+		{
+#if DEBUG_MEM_MANAGER >= DEBUG_DETAILED
+			log_file_mmu << "[Memory Manager] Memory Access: " << address << " in kernel thread, skipping translation" << std::endl;
+#endif
+		}
 
 		LOG_ASSERT_ERROR(mem_component <= m_last_level_cache,
 						 "Error: invalid mem_component (%d) for coreInitiateMemoryAccess", mem_component);
@@ -511,29 +612,29 @@ namespace ParametricDramDirectoryMSI
 		IntPtr translation_result; // Pair < How much time the translation took, the physical address >
 
 		SubsecondTime t_start_translation = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
-		// In the case of [Gupta et al. Midgard ISCA 2021], we need to perform the translation in two steps
-		// The first step is to perform the translation in the frontend from the virtual address to the intermediate address
-		if (mmu_type == "midgard" && !skip_translation)
+		if (!skip_translation)
 		{
-			translation_result = m_mmu->performAddressTranslationFrontend(eip, address,
-																		  is_instruction,
-																		  lock_signal,
-																		  modeled == Core::MEM_MODELED_NONE || modeled == Core::MEM_MODELED_COUNT ? false : true,
-																		  modeled == Core::MEM_MODELED_NONE ? false : true);
-
-		}
-		else if (!skip_translation)
-		{
-			// Perform the conventional translation
+#if DEBUG_MEM_MANAGER >= DEBUG_DETAILED
+			log_file_mmu << "Memory Access: " << address << " Initiating Translation at time " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS() << std::endl;
+#endif
 			// translation result is a pair containing the total latency of the translation and the translated physical address
 			translation_result = m_mmu->performAddressTranslation(eip, address,
 																  is_instruction,
 																  lock_signal,
 																  modeled == Core::MEM_MODELED_NONE || modeled == Core::MEM_MODELED_COUNT ? false : true,
 																  modeled == Core::MEM_MODELED_NONE ? false : true);
+			if (translation_result == static_cast<IntPtr>(-1))
+			{
+#if DEBUG_MEM_MANAGER >= DEBUG_DETAILED
+				std::cout << "Memory Access: " << address << " Translation led to a page fault at time " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS() << std::endl;
+#endif
+				// If the translation failed, we have a page fault
+				return HitWhere::where_t::PAGE_FAULT;
+			}
 		}
 
-		bool performed_dram_access_during_translation = m_mmu->getDramAccessesDuringLastWalk()? true : false;
+		int dram_accesses_during_translation = m_mmu->getDramAccessesDuringLastWalk();
+		bool performed_dram_access_during_translation = dram_accesses_during_translation > 0;
 
 
 		SubsecondTime t_end_translation = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
@@ -557,12 +658,30 @@ namespace ParametricDramDirectoryMSI
 			physical_address = address;
 		}
 
+		// Track unique data cache lines (not instruction fetches)
+		if (!is_instruction) {
+			m_unique_data_cache_lines.insert(physical_address);
+			memory_access_stats.unique_data_cache_lines = m_unique_data_cache_lines.size();
+		}
 
-		#ifdef DEBUG_MEM_MANAGER
+
+#if DEBUG_MEM_MANAGER >= DEBUG_BASIC
 			log_file_mmu << "Memory Access: " << address  << " Finished Translation at time " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS() << std::endl;
-		#endif
+			log_file_mmu << "Translation latency till now: " << memory_access_stats.m_translation_latency.getNS() << " ns" << std::endl;
+#endif
 
 		SubsecondTime t_cache_issue = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+		
+		// Set MetadataContext for the data access if a PTW was performed and hit DRAM
+		// This allows the DRAM model to correlate this data access with its preceding PTW
+		if (!skip_translation && performed_dram_access_during_translation) {
+			UInt64 ptw_id = m_mmu->getLastPtwId();
+			MetadataContext::set(getCore()->getId(), MetadataInfo::dataAfterPtw(
+				ptw_id, address, physical_address, 
+				performed_dram_access_during_translation, 
+				dram_accesses_during_translation));
+		}
+		
 		// Perform the memory access -> send the request to the cache hierarchy
 		HitWhere::where_t result = m_cache_cntlrs[mem_component]->processMemOpFromCore(
 			eip,
@@ -571,11 +690,42 @@ namespace ParametricDramDirectoryMSI
 			physical_address, offset,
 			data_buf, data_length,
 			modeled == Core::MEM_MODELED_NONE || modeled == Core::MEM_MODELED_COUNT ? false : true,
-			modeled == Core::MEM_MODELED_NONE ? false : true, CacheBlockInfo::block_type_t::NON_PAGE_TABLE, SubsecondTime::Zero());
+			modeled == Core::MEM_MODELED_NONE ? false : true, CacheBlockInfo::block_type_t::DATA, SubsecondTime::Zero());
 
-		#ifdef DEBUG_MEM_MANAGER
+		// Clear the MetadataContext after the data access
+		MetadataContext::clear(getCore()->getId());
+
+#if DEBUG_MEM_MANAGER >= DEBUG_BASIC
 			log_file_mmu << "Memory Access: " << address  << " Finished Memory Access at time " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS() << std::endl;
+#endif
+
+		// ADDRESS TRACE DEBUG: Log VA, PA, and cache set index
+		// Set ADDR_TRACE_ENABLED to 1 to enable
+		#if LOG_MEM_MANAGER_STATS
+		{
+			static FILE* addr_trace_file = nullptr;
+			static UInt64 addr_trace_count = 0;
+			static const UInt64 ADDR_TRACE_LIMIT = 100000;
+			
+			if (addr_trace_count < ADDR_TRACE_LIMIT) {
+				if (addr_trace_file == nullptr) {
+					String trace_filename = Sim()->getConfig()->getOutputDirectory() + "/address_trace.csv";
+					addr_trace_file = fopen(trace_filename.c_str(), "w");
+					if (addr_trace_file) {
+						fprintf(addr_trace_file, "va,pa,hit_where,\n");
+						fflush(addr_trace_file);
+					}
+				}
+				if (addr_trace_file) {
+					fprintf(addr_trace_file, "0x%lx,0x%lx,%s,\n", 
+						address, physical_address, HitWhereString(result));
+					fflush(addr_trace_file);
+					addr_trace_count++;
+				}
+			}
+		}
 		#endif
+
 
 		bool dram_access = false;
 
@@ -590,26 +740,43 @@ namespace ParametricDramDirectoryMSI
 
 		if(count){
 			memory_access_stats.m_memory_access_latency += (t_cache_done - t_cache_issue);
-			memory_access_stats.m_memory_accesses++;			
+			memory_access_stats.m_memory_accesses++;
+			
+			// Update MimicOS per-core stats for adaptive policies (MPLRU)
+			MimicOS* mimicos = Sim()->getMimicOS();
+			if (mimicos && mimicos->isPerCoreStatsInitialized())
+			{
+				bool is_cache_hit = !dram_access;
+				mimicos->updateDataAccessStats(core->getId(), 
+				                                t_cache_done - t_cache_issue,
+				                                is_cache_hit);
+			}
+			
+			// Note: MPLRU epoch processing is now triggered by the replacement policy
+			// when it queries getMetaLevel(), not from memory_manager
 		}
 
 		if (dram_access && performed_dram_access_during_translation && count)
 		{
 			// If we performed a DRAM access during the translation, we need to account for the translation latency
+			memory_access_stats.latency_translation_dram_memory_dram += (t_end_translation - t_start_translation) + (t_cache_done - t_cache_issue);
 			memory_access_stats.translation_dram_memory_dram++;
 		}
 		else if (dram_access && !performed_dram_access_during_translation && count)
 		{
+			memory_access_stats.latency_translation_cache_memory_dram += (t_end_translation - t_start_translation) + (t_cache_done - t_cache_issue);
 			// If we did not perform a DRAM access during the translation, we need to account for the translation latency
 			memory_access_stats.translation_cache_memory_dram++;
 		}
 		else if (!dram_access && performed_dram_access_during_translation && count)
 		{
+			memory_access_stats.latency_translation_dram_memory_cache += (t_end_translation - t_start_translation) + (t_cache_done - t_cache_issue);
 			// If we performed a DRAM access during the translation, we need to account for the translation latency
 			memory_access_stats.translation_dram_memory_cache++;
 		}
 		else if (!dram_access && !performed_dram_access_during_translation && count)
 		{
+			memory_access_stats.latency_translation_cache_memory_cache += (t_end_translation - t_start_translation) + (t_cache_done - t_cache_issue);
 			// If we did not perform a DRAM access during the translation, we need to account for the translation latency
 			memory_access_stats.translation_cache_memory_cache++;
 		}
@@ -629,22 +796,6 @@ namespace ParametricDramDirectoryMSI
 
 	
 
-		// If the memory access is a page table access, we need to update the translation stats
-		if (mmu_type == "midgard")
-		{
-
-			if (result == HitWhere::where_t::DRAM || result == HitWhere::where_t::DRAM_CACHE || result == HitWhere::where_t::DRAM_LOCAL || result == HitWhere::where_t::DRAM_REMOTE)
-			{
-
-				translation_result = m_mmu->performAddressTranslationBackend(eip, address,
-																			 is_instruction,
-																			 lock_signal,
-																			 modeled == Core::MEM_MODELED_NONE || modeled == Core::MEM_MODELED_COUNT ? false : true,
-																			 modeled == Core::MEM_MODELED_NONE ? false : true);
-
-			}
-		}
-		
 		return result;
 	}
 
@@ -769,7 +920,7 @@ namespace ParametricDramDirectoryMSI
 	{
 		MYLOG("bcast msg");
 		assert((data_buf == NULL) == (data_length == 0));
-		PrL1PrL2DramDirectoryMSI::ShmemMsg shmem_msg(msg_type, sender_mem_component, receiver_mem_component, requester, address, data_buf, data_length, perf, CacheBlockInfo::block_type_t::NON_PAGE_TABLE);
+		PrL1PrL2DramDirectoryMSI::ShmemMsg shmem_msg(msg_type, sender_mem_component, receiver_mem_component, requester, address, data_buf, data_length, perf, CacheBlockInfo::block_type_t::DATA);
 
 		Byte *msg_buf = shmem_msg.makeMsgBuf();
 		SubsecondTime msg_time = getShmemPerfModel()->getElapsedTime(thread_num);

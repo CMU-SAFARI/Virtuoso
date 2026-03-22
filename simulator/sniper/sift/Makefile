@@ -40,7 +40,7 @@ $(TARGET) : $(OBJECTS)
 
 siftdump : siftdump.o $(TARGET)
 	$(_MSG) '[CXX   ]' $(subst $(shell readlink -f $(SIM_ROOT))/,,$(shell readlink -f $@))
-	$(_CMD) $(CXX) $(CXXFLAGS_ARCH) -o $@ $^ -L. -lsift -lz
+	$(_CMD) $(CXX) $(CXXFLAGS_ARCH) -o $@ $^ -L. -lsift -lz -lbz2 -llzma
 
 recorder : $(TARGET)
 	$(_CMD) $(MAKE) $(MAKE_QUIET) -C recorder -f Makefile

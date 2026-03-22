@@ -41,7 +41,6 @@ extern KNOB<UINT64> KnobStopAddress;
 extern KNOB<UINT64> KnobMaxThreads;
 extern KNOB<UINT64> KnobExtraePreLoaded;
 extern KNOB<BOOL> KnobTrackVMAs;
-extern KNOB<BOOL> KnobRecordMultithreaded;
 
 # define KNOB_REPLAY_NAME "replay"
 # define KNOB_FAMILY "pintool:sift-recorder"

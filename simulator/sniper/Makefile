@@ -3,6 +3,7 @@ SIM_ROOT ?= $(shell readlink -f "$(CURDIR)")
 CLEAN=$(findstring clean,$(MAKECMDGOALS))
 
 STANDALONE=$(SIM_ROOT)/lib/sniper
+STANDALONE_DEV=$(SIM_ROOT)/lib/sniper_dev
 PIN_FRONTEND=$(SIM_ROOT)/frontend/pin-frontend/obj-intel64/pin_frontend
 DYNAMORIO_FRONTEND=$(SIM_ROOT)/frontend/dr-frontend/build/libdr-frontend.so
 LIB_CARBON=$(SIM_ROOT)/lib/libcarbon_sim.a
@@ -15,11 +16,30 @@ SIM_TARGETS=$(LIB_DECODER) $(LIB_CARBON) $(LIB_SIFT) $(LIB_PIN_SIM) $(LIB_FOLLOW
 
 PYTHON2=python2
 
-.PHONY: all message dependencies compile_simulator configscripts package_deps pin linux builddir showdebugstatus distclean mbuild xed_install xed torch
+.PHONY: all message dependencies compile_simulator configscripts package_deps pin linux builddir showdebugstatus distclean mbuild xed_install xed torch mimicos dev devclean 
+
 # Remake LIB_CARBON on each make invocation, as only its Makefile knows if it needs to be rebuilt
 .PHONY: $(LIB_CARBON)
 
-all: message dependencies $(SIM_TARGETS) configscripts
+all: mimicos message dependencies $(SIM_TARGETS) configscripts sniper_epilogue
+
+mimicos:
+	@echo "===> Building MimicOS extension..."
+	$(MAKE) -C mimicos SNIPER_INCLUDE=$(SIM_ROOT)/include -j16
+
+# Build development executable (lib/sniper_dev) without affecting production lib/sniper
+# Usage: make dev
+dev: dependencies $(LIB_CARBON) $(LIB_SIFT) $(LIB_DECODER)
+	@echo "===> Building development executable (lib/sniper_dev)..."
+	@$(MAKE) $(MAKE_QUIET) -C $(SIM_ROOT)/standalone SNIPER_DEV=1
+	@echo "===> Development build complete: lib/sniper_dev"
+
+devclean:
+	@rm -f $(STANDALONE_DEV)
+	@echo "Removed lib/sniper_dev"
+
+sniper_epilogue:
+	@echo "===> Sniper finished building..."
 
 #NOTE PINPLAY: This is not updated to the latest version: 1) SDE already contains pinplay, 2) the pinplay-driver (inside the pinplay_toolkit github) cannot easily be build for PIN. 3) The latest pinplay version has a bug preventing to read pinballs.
 #KNOWN ISSUE WITH SDE: It cannot run properly inside virtualbox

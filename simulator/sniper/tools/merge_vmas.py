@@ -3,6 +3,8 @@
 import sys
 import pdb
 
+DEBUG = False
+
 def merge_intervals(intervals):
     """
     Merge a list of intervals (start, end) and return a new list
@@ -72,12 +74,13 @@ def main(file_path):
     # Merge overlapping intervals
     merged = merge_intervals(intervals)
 
-    # Print out the merged superset in hex
-    for (s, e) in merged:
-        print(f"{s:012x}-{e:012x}")
+    # [DEBUG] Print out the merged superset in hex
+    if DEBUG:
+        for (s, e) in merged:
+            print(f"{s:012x}-{e:012x}")
 
     # Write out the merged superset to a file
-    with open(file_path + ".merged", "w") as f:
+    with open(file_path[:-4] + "sift.vma", "w") as f:
         for (s, e) in merged:
             f.write(f"{s:012x}-{e:012x}\n")
 

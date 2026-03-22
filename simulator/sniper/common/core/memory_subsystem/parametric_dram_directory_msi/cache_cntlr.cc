@@ -1,4 +1,207 @@
+/**
+ * @file cache_cntlr.cc
+ * @brief Cache Controller for Parametric DRAM Directory (MSI/MESI/MOESI)
+ * 
+ * This file implements the cache controller that manages the flow of memory
+ * accesses through the cache hierarchy, from L1 through the LLC (Last Level Cache),
+ * to the directory controller and finally to DRAM.
+ * 
+ * ==============================================================================
+ *                        MEMORY ACCESS FLOW DIAGRAM
+ * ==============================================================================
+ * 
+ *                           ┌─────────────────────┐
+ *                           │       CPU Core      │
+ *                           │   (Load/Store Op)   │
+ *                           └──────────┬──────────┘
+ *                                      │
+ *                                      ▼
+ *     ┌────────────────────────────────────────────────────────────────────────┐
+ *     │                     processMemOpFromCore()                             │
+ *     │  Entry point from MemoryManager. Handles address translation result.   │
+ *     │  - Aligns address to cache block boundary                              │
+ *     │  - Acquires locks (stack lock for shared caches)                       │
+ *     │  - Calls operationPermissibleinCache() to check L1 hit                 │
+ *     └────────────────────────────────────────────────────────────────────────┘
+ *                                      │
+ *                          ┌───────────┴───────────┐
+ *                          │                       │
+ *                     L1 HIT                    L1 MISS
+ *                          │                       │
+ *                          ▼                       ▼
+ *          ┌──────────────────────┐    ┌──────────────────────────────────────┐
+ *          │    accessCache()     │    │   processShmemReqFromPrevCache()     │
+ *          │  - Update stats      │    │   Request propagates to next level   │
+ *          │  - Read/write data   │    │   (L2, L3/LLC)                        │
+ *          │  - Update LRU        │    │   - Check if block exists at this    │
+ *          │  - Return HIT        │    │     level with correct permissions   │
+ *          └──────────────────────┘    └──────────────────────────────────────┘
+ *                                                  │
+ *                                      ┌───────────┴───────────┐
+ *                                      │                       │
+ *                                 CACHE HIT               CACHE MISS
+ *                                      │                       │
+ *                                      ▼                       ▼
+ *                      ┌──────────────────────┐    ┌──────────────────────────┐
+ *                      │   Return data to     │    │  At LLC: Need to fetch   │
+ *                      │   previous level     │    │  from memory subsystem   │
+ *                      └──────────────────────┘    └────────────┬─────────────┘
+ *                                                               │
+ *                                                               ▼
+ *     ┌────────────────────────────────────────────────────────────────────────┐
+ *     │                    initiateDirectoryAccess()                           │
+ *     │  LLC miss - must contact directory to get data or permissions          │
+ *     │  - Creates CacheDirectoryWaiter and queues it                          │
+ *     │  - If first waiter for this address, sends message to directory        │
+ *     │  - Chooses request type based on operation:                            │
+ *     │      READ  → processShReqToDirectory()   (Shared request)              │
+ *     │      WRITE → processExReqToDirectory()   (Exclusive request)           │
+ *     │      UPGRADE → processUpgradeReqToDirectory() (S→M upgrade)            │
+ *     └────────────────────────────────────────────────────────────────────────┘
+ *                                      │
+ *                                      ▼
+ *     ┌────────────────────────────────────────────────────────────────────────┐
+ *     │                Network Transport (sendMsg)                             │
+ *     │  Message sent via MemoryManager to the home node's Directory           │
+ *     │  - SH_REQ:  Request shared copy (read)                                 │
+ *     │  - EX_REQ:  Request exclusive copy (write)                             │
+ *     │  - UPGRADE_REQ: Upgrade from Shared to Modified                        │
+ *     └────────────────────────────────────────────────────────────────────────┘
+ *                                      │
+ *                                      ▼
+ *     ┌────────────────────────────────────────────────────────────────────────┐
+ *     │                      DIRECTORY CONTROLLER                              │
+ *     │  (dram_directory_cntlr.cc - runs on home node for this address)        │
+ *     │                                                                        │
+ *     │  Directory maintains coherence state for each cache block:             │
+ *     │  - Tracks which cores have copies (sharer list)                        │
+ *     │  - Tracks if any core has exclusive/modified copy                      │
+ *     │                                                                        │
+ *     │  Actions based on request and current state:                           │
+ *     │  ┌─────────────────────────────────────────────────────────────────┐   │
+ *     │  │ SH_REQ + No exclusive owner:                                    │   │
+ *     │  │   → Fetch from DRAM (if not cached), send SH_REP to requester   │   │
+ *     │  │                                                                 │   │
+ *     │  │ SH_REQ + Exclusive owner exists:                                │   │
+ *     │  │   → Send INV/FLUSH to owner, wait for WB_REP                    │   │
+ *     │  │   → Forward data to requester                                   │   │
+ *     │  │                                                                 │   │
+ *     │  │ EX_REQ + Sharers exist:                                         │   │
+ *     │  │   → Send INV to all sharers, wait for INV_REP                   │   │
+ *     │  │   → Fetch from DRAM, send EX_REP to requester                   │   │
+ *     │  │                                                                 │   │
+ *     │  │ EX_REQ + Exclusive owner exists:                                │   │
+ *     │  │   → Send FLUSH to owner, wait for WB_REP                        │   │
+ *     │  │   → Forward data to requester with exclusive rights             │   │
+ *     │  └─────────────────────────────────────────────────────────────────┘   │
+ *     └────────────────────────────────────────────────────────────────────────┘
+ *                                      │
+ *                            ┌─────────┴─────────┐
+ *                            │                   │
+ *                       DATA IN             DATA NOT IN
+ *                      NUCA/LLC              ANY CACHE
+ *                            │                   │
+ *                            ▼                   ▼
+ *              ┌─────────────────────┐  ┌────────────────────────────────────┐
+ *              │  Forward from cache │  │         DRAM ACCESS                │
+ *              │  (cache-to-cache)   │  │  DramCntlr::getDataFromDram()      │
+ *              └─────────────────────┘  │                                    │
+ *                                       │  - Address mapping (bank/rank/ch)  │
+ *                                       │  - Row buffer hit/miss handling    │
+ *                                       │  - Timing model (tRCD, tCAS, etc)  │
+ *                                       │  - Queue/bus contention            │
+ *                                       └────────────────────────────────────┘
+ *                                                  │
+ *                                                  ▼
+ *     ┌────────────────────────────────────────────────────────────────────────┐
+ *     │                    RESPONSE PATH (Reply)                               │
+ *     │                                                                        │
+ *     │  Directory sends reply message back to requesting core:                │
+ *     │  - SH_REP:  Data + Shared permission                                   │
+ *     │  - EX_REP:  Data + Exclusive permission                                │
+ *     │  - UPGRADE_REP: Upgrade permission granted                             │
+ *     │                                                                        │
+ *     │  handleMsgFromDramDirectory() receives the reply                       │
+ *     └────────────────────────────────────────────────────────────────────────┘
+ *                                      │
+ *                                      ▼
+ *     ┌────────────────────────────────────────────────────────────────────────┐
+ *     │                  processShRepFromDramDirectory() /                     │
+ *     │                  processExRepFromDramDirectory()                       │
+ *     │                                                                        │
+ *     │  - Insert block into LLC (and lower caches via fill)                   │
+ *     │  - Set appropriate cache state (S, E, or M)                            │
+ *     │  - Wake up waiting threads in CacheDirectoryWaiter queue               │
+ *     │  - Propagate data back up the hierarchy                                │
+ *     └────────────────────────────────────────────────────────────────────────┘
+ *                                      │
+ *                                      ▼
+ *     ┌────────────────────────────────────────────────────────────────────────┐
+ *     │                        insertCacheBlock()                              │
+ *     │  - Find victim if needed (eviction)                                    │
+ *     │  - Write back dirty victim if necessary                                │
+ *     │  - Insert new block with appropriate state                             │
+ *     │  - updateUsage() for utilization tracking                   │
+ *     └────────────────────────────────────────────────────────────────────────┘
+ *                                      │
+ *                                      ▼
+ *     ┌────────────────────────────────────────────────────────────────────────┐
+ *     │                    Data returned to CPU Core                           │
+ *     │                                                                        │
+ *     │  wakeUpWaiters() releases blocked threads                              │
+ *     │  Data flows back through cache hierarchy to requesting instruction     │
+ *     └────────────────────────────────────────────────────────────────────────┘
+ * 
+ * ==============================================================================
+ *                          KEY DATA STRUCTURES
+ * ==============================================================================
+ * 
+ *  CacheCntlr (one per cache level per core):
+ *    - m_cache: The actual cache storage (Cache object)
+ *    - m_next_cache_cntlr: Pointer to next level cache controller
+ *    - m_master: Shared state for multi-core caches (LLC)
+ *    - m_shmem_perf: Performance tracking for this access
+ * 
+ *  CacheMasterCntlr (shared for LLC across cores):
+ *    - m_directory_waiters: Queue of pending directory requests per address
+ *    - m_cache: Shared cache storage
+ *    - Coordinates coherence across multiple cores
+ * 
+ *  CacheDirectoryWaiter:
+ *    - Tracks pending requests to directory
+ *    - Stores requester info, timestamps, block type
+ *    - Used to wake up waiting threads when reply arrives
+ * 
+ * ==============================================================================
+ *                          CACHE COHERENCE STATES (MSI/MESI/MOESI)
+ * ==============================================================================
+ * 
+ *  I (Invalid):    Block not present or invalidated
+ *  S (Shared):     Block present, read-only, may be in other caches
+ *  M (Modified):   Block present, dirty, exclusive - must write back on eviction
+ *  E (Exclusive):  Block present, clean, exclusive - can upgrade to M silently
+ *  O (Owned):      Block present, dirty, shared - responsible for writeback
+ * 
+ *  State transitions triggered by local CPU requests and remote coherence messages.
+ * 
+ * ==============================================================================
+ *                          TIMING MODEL INTEGRATION
+ * ==============================================================================
+ * 
+ *  Access latency is accumulated through:
+ *  1. Cache access latency (tag + data array lookup)
+ *  2. Network latency for directory messages
+ *  3. DRAM latency (row buffer, bank conflicts, bus contention)
+ *  4. Additional latency for coherence actions (invalidations, writebacks)
+ * 
+ *  ShmemPerf object tracks breakdown of latency components.
+ *  SubsecondTime used for cycle-accurate timing simulation.
+ * 
+ * ==============================================================================
+ */
+
 #include "cache_cntlr.h"
+#include "debug_config.h"
 #include "log.h"
 #include "memory_manager.h"
 #include "core_manager.h"
@@ -80,22 +283,22 @@ namespace ParametricDramDirectoryMSI
 		
 		switch (block_type)
 		{
-		case CacheBlockInfo::block_type_t::PAGE_TABLE:
-			return "page_table";
-		case CacheBlockInfo::block_type_t::NON_PAGE_TABLE:
-			return "non_page_table";
-		case CacheBlockInfo::block_type_t::SECURITY:
-			return "security";
-		case CacheBlockInfo::block_type_t::EXPRESSIVE:
-			return "expressive";
-		case CacheBlockInfo::block_type_t::UTOPIA:
-			return "utopia";
-		case CacheBlockInfo::block_type_t::TLB_ENTRY:
-			return "tlb_entry";
-		case CacheBlockInfo::block_type_t::TLB_ENTRY_PASSTHROUGH:
-			return "tlb_entry_passthrough";
-		case CacheBlockInfo::block_type_t::PAGE_TABLE_PASSTHROUGH:
-			return "page_table_passthrough";
+		case CacheBlockInfo::block_type_t::PAGE_TABLE_DATA:
+			return "page_table_data";
+		case CacheBlockInfo::block_type_t::PAGE_TABLE_INSTRUCTION:
+			return "page_table_instruction";
+		case CacheBlockInfo::block_type_t::UTOPIA_FP:
+			return "utopia_fp";
+		case CacheBlockInfo::block_type_t::UTOPIA_TAR:
+			return "utopia_tar";
+		case CacheBlockInfo::block_type_t::UTOPIA_RADIX_INTERNAL:
+			return "utopia_radix_internal";
+		case CacheBlockInfo::block_type_t::UTOPIA_RADIX_LEAF:
+			return "utopia_radix_leaf";
+		case CacheBlockInfo::block_type_t::INSTRUCTION:
+			return "instruction";
+		case CacheBlockInfo::block_type_t::DATA:
+			return "data";
 
 		default:
 			return "??";
@@ -216,7 +419,8 @@ namespace ParametricDramDirectoryMSI
 													   m_shmem_perf(new ShmemPerf()),
 													   m_shmem_perf_global(NULL),
 													   m_shmem_perf_model(shmem_perf_model),
-													   metadata_passthrough_loc(Sim()->getCfg()->getInt("perf_model/metadata/passthrough_loc"))
+													   metadata_passthrough_loc(Sim()->getCfg()->getInt("perf_model/metadata/passthrough_loc")),
+													   m_doing_spec_prefetch(false)
 	{
 		m_core_id_master = m_core_id - m_core_id % m_shared_cores;
 		Sim()->getStatsManager()->logTopology(name, core_id, m_core_id_master);
@@ -260,7 +464,6 @@ namespace ParametricDramDirectoryMSI
 									 CacheBase::parseAddressHash(cache_params.hash_function));
 			}
 
-			// Sim()->getHooksManager()->registerHook(HookType::HOOK_ROI_END, __walkUsageBits, (UInt64)this, HooksManager::ORDER_NOTIFY_PRE);
 		}
 		else
 		{
@@ -278,7 +481,7 @@ namespace ParametricDramDirectoryMSI
 		registerStatsMetric(name, core_id, String("tstore-misses"), &stats.tstore_misses);   
  
 
-		for (CacheBlockInfo::block_type_t type = CacheBlockInfo::block_type_t::PAGE_TABLE; type < CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES; type = CacheBlockInfo::block_type_t(int(type) + 1))
+		for (CacheBlockInfo::block_type_t type = CacheBlockInfo::block_type_t::PAGE_TABLE_DATA; type < CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES; type = CacheBlockInfo::block_type_t(int(type) + 1))
 		{
 			registerStatsMetric(name, core_id, String("loads-") + BlockTypeString(type), &stats.loads[type]);
 			registerStatsMetric(name, core_id, String("stores-") + BlockTypeString(type), &stats.stores[type]);
@@ -309,10 +512,12 @@ namespace ParametricDramDirectoryMSI
 		registerStatsMetric(name, core_id, "prefetches", &stats.prefetches);
 		registerStatsMetric(name, core_id, "prefetches-fillup", &stats.prefetches_fillup);
 		registerStatsMetric(name, core_id, "late-metadata-prefetches", &stats.late_metadata_prefetches);
+		registerStatsMetric(name, core_id, "spec-evict-total", &stats.spec_evict_total);
+		registerStatsMetric(name, core_id, "spec-evict-harmful", &stats.spec_evict_harmful);
 
 		for (CacheState::cstate_t state = CacheState::CSTATE_FIRST; state < CacheState::NUM_CSTATE_STATES; state = CacheState::cstate_t(int(state) + 1))
 		{
-			for (CacheBlockInfo::block_type_t type = CacheBlockInfo::block_type_t::PAGE_TABLE; type < CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES; type = CacheBlockInfo::block_type_t(int(type) + 1))
+			for (CacheBlockInfo::block_type_t type = CacheBlockInfo::block_type_t::PAGE_TABLE_DATA; type < CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES; type = CacheBlockInfo::block_type_t(int(type) + 1))
 			{
 
 				registerStatsMetric(name, core_id, String("loads-") + CStateString(state) + String("-") + BlockTypeString(type), &stats.loads_state[state][type]);
@@ -326,16 +531,16 @@ namespace ParametricDramDirectoryMSI
 
 		if (mem_component == MemComponent::L1_ICACHE || mem_component == MemComponent::L1_DCACHE)
 		{
-			for (HitWhere::where_t hit_where = HitWhere::WHERE_FIRST; hit_where < HitWhere::NUM_HITWHERES; hit_where = HitWhere::where_t(int(hit_where) + 1))
+			for (CacheBlockInfo::block_type_t type = CacheBlockInfo::block_type_t::PAGE_TABLE_DATA; type < CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES; type = CacheBlockInfo::block_type_t(int(type) + 1))
 			{
-				const char *where_str = HitWhereString(hit_where);
-				if (where_str[0] == '?')
-					continue;
-				registerStatsMetric(name, core_id, String("loads-where-") + where_str, &stats.loads_where[hit_where]);
-				registerStatsMetric(name, core_id, String("loads-where-page-table-") + where_str, &stats.loads_where_page_table[hit_where]);
-				registerStatsMetric(name, core_id, String("loads-where-utopia") + where_str, &stats.loads_where_utopia[hit_where]);
-
-				registerStatsMetric(name, core_id, String("stores-where-") + where_str, &stats.stores_where[hit_where]);
+				for (HitWhere::where_t hit_where = HitWhere::WHERE_FIRST; hit_where < HitWhere::NUM_HITWHERES; hit_where = HitWhere::where_t(int(hit_where) + 1))
+				{
+					const char *where_str = HitWhereString(hit_where);
+					if (where_str[0] == '?')
+						continue;
+					registerStatsMetric(name, core_id, String("loads-where-") + BlockTypeString(type) + "-" + where_str, &stats.loads_where[type][hit_where]);
+					registerStatsMetric(name, core_id, String("stores-where-") + BlockTypeString(type) + "-" + where_str, &stats.stores_where[type][hit_where]);
+				}
 			}
 		}
 		registerStatsMetric(name, core_id, "coherency-downgrades", &stats.coherency_downgrades);
@@ -422,7 +627,8 @@ namespace ParametricDramDirectoryMSI
 
 		HitWhere::where_t hit_where = HitWhere::MISS;
 
-		bool metadata_request = (block_type == CacheBlockInfo::block_type_t::PAGE_TABLE) || (block_type == CacheBlockInfo::block_type_t::PAGE_TABLE_PASSTHROUGH) || (block_type == CacheBlockInfo::block_type_t::SECURITY) || (block_type == CacheBlockInfo::block_type_t::EXPRESSIVE) || (block_type == CacheBlockInfo::block_type_t::TLB_ENTRY) || (block_type == CacheBlockInfo::block_type_t::TLB_ENTRY_PASSTHROUGH);
+		// Check if this is any type of metadata request using the helper function
+		bool metadata_request = CacheBlockInfo::isMetadataBlockType(block_type);
 
 		#ifdef CACHE_DEBUG
 			std::cout << "Cache received a memory request of type: " << mem_op_type << " at address: " << ca_address <<  " at time " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
@@ -553,9 +759,9 @@ namespace ParametricDramDirectoryMSI
 					if (t_completed != SubsecondTime::MaxTime() && t_completed > t_now)
 					{
 						if (mem_op_type == Core::WRITE)
-							++stats.store_overlapping_misses[CacheBlockInfo::block_type_t::NON_PAGE_TABLE];
+							++stats.store_overlapping_misses[CacheBlockInfo::block_type_t::DATA];
 						else
-							++stats.load_overlapping_misses[CacheBlockInfo::block_type_t::NON_PAGE_TABLE];
+							++stats.load_overlapping_misses[CacheBlockInfo::block_type_t::DATA];
 
 						SubsecondTime latency = t_completed - t_now;
 						getShmemPerfModel()->incrElapsedTime(latency, ShmemPerfModel::_USER_THREAD);
@@ -616,18 +822,31 @@ namespace ParametricDramDirectoryMSI
 					}
 				}
 			}
+
+			// Update cache block utilization on L1 hit
+			if (modeled && m_next_cache_cntlr && !m_perfect )
+			{
+				bool new_bits = cache_block_info->updateUsage(offset, data_length);
+				if (new_bits)
+				{
+					m_next_cache_cntlr->updateUsageBits(ca_address, cache_block_info->getUsage());
+				}
+			}
+
+			// Access cache data on L1 hit
+			accessCache(mem_op_type, ca_address, offset, data_buf, data_length, count);
 		}
 		else
 		{
 			/* cache miss: either wrong coherency state or not present in the cache */
 			MYLOG("L1 miss");
-			if (!m_passthrough && !(block_type == CacheBlockInfo::block_type_t::TLB_ENTRY_PASSTHROUGH))
+			if (!m_passthrough)
 				getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_TAGS, ShmemPerfModel::_USER_THREAD);
 
 			SubsecondTime t_miss_begin = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
 			SubsecondTime t_mshr_avail = t_miss_begin;
 
-			if (modeled && m_l1_mshr && !m_passthrough && m_l1_metadata_mshr && !(block_type == CacheBlockInfo::block_type_t::TLB_ENTRY_PASSTHROUGH))
+			if (modeled && m_l1_mshr && !m_passthrough && m_l1_metadata_mshr)
 			{
 				if (!metadata_request)
 				{
@@ -677,7 +896,7 @@ namespace ParametricDramDirectoryMSI
 			#endif
 
 			MYLOG("processMemOpFromCore l%d before next", m_mem_component);
-			hit_where = m_next_cache_cntlr->processShmemReqFromPrevCache(eip, this, mem_op_type, ca_address, modeled, count, block_type, Prefetch::NONE, t_start, false, mem_origin);
+			hit_where = m_next_cache_cntlr->processShmemReqFromPrevCache(eip, this, mem_op_type, ca_address, offset, data_length, modeled, count, block_type, Prefetch::NONE, t_start, false, mem_origin);
 			bool next_cache_hit = hit_where != HitWhere::MISS;
 			// if(hit_where != HitWhere::MISS && metadata_request &&  (metadata_passthrough_loc > 2))
 			//    std::cout << "Metadata hit in L2 on address:" <<  ca_address << std::endl;
@@ -710,7 +929,7 @@ namespace ParametricDramDirectoryMSI
 				/* have the next cache levels fill themselves with the new data */
 				MYLOG("processMemOpFromCore l%d before next fill", m_mem_component);
 				// if(!(metadata_request &&  (metadata_passthrough_loc > 2))) //If L2 is passthrough, then we wont find the data inside the L2
-				hit_where = m_next_cache_cntlr->processShmemReqFromPrevCache(eip, this, mem_op_type, ca_address, false, false, block_type, Prefetch::NONE, t_start, true, mem_origin);
+				hit_where = m_next_cache_cntlr->processShmemReqFromPrevCache(eip, this, mem_op_type, ca_address, offset, data_length, false, false, block_type, Prefetch::NONE, t_start, true, mem_origin);
 
 				MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
 
@@ -766,18 +985,8 @@ namespace ParametricDramDirectoryMSI
 					}
 				}
 
-				// Change Sim()->getConfig()->hasCacheEfficiencyCallbacks()
-				//  if (modeled && m_next_cache_cntlr && !m_perfect && Sim()->getConfig()->hasCacheEfficiencyCallbacks())
-				//  {
-				//     bool new_bits = cache_block_info->updateUsage(offset, data_length);
-				//     if (new_bits)
-				//     {
-				//        m_next_cache_cntlr->updateUsageBits(ca_address, cache_block_info->getUsage());
-				//     }
-				//  }
 
-				// Change Sim()->getConfig()->hasCacheEfficiencyCallbacks()
-				if (modeled && m_next_cache_cntlr && !m_perfect && Sim()->getCfg()->getBool("perf_model/cache_usage/enabled"))
+				if (modeled && m_next_cache_cntlr && !m_perfect )
 				{
 					bool new_bits = cache_block_info->updateUsage(offset, data_length);
 					if (new_bits)
@@ -796,6 +1005,7 @@ namespace ParametricDramDirectoryMSI
 		SubsecondTime t_now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
 		SubsecondTime total_latency = t_now - t_start;
 
+
 		// From here on downwards: not long anymore, only stats update so blanket cntrl lock
 		{
 			ScopedLock sl(getLock());
@@ -807,6 +1017,7 @@ namespace ParametricDramDirectoryMSI
 					stats.total_metadata_latency += total_latency;
 				else
 					stats.total_data_latency += total_latency;
+
 			}
 
 #ifdef TRACK_LATENCY_BY_HITWHERE
@@ -829,16 +1040,10 @@ namespace ParametricDramDirectoryMSI
 #endif
 
 			if (mem_op_type == Core::WRITE)
-				stats.stores_where[hit_where]++;
+				stats.stores_where[block_type][hit_where]++;
 			else
-				stats.loads_where[hit_where]++;
-
-			if (block_type == CacheBlockInfo::block_type_t::PAGE_TABLE)
-				stats.loads_where_page_table[hit_where]++;
-			else if (block_type == CacheBlockInfo::block_type_t::UTOPIA)
-				stats.loads_where_utopia[hit_where]++;
+				stats.loads_where[block_type][hit_where]++;
 		}
-		getShmemPerfModel()->incrElapsedTime(TLB_latency, ShmemPerfModel::_USER_THREAD);
 
 		// std::cout << "Metadata request" << metadata_request << std::endl;
 
@@ -876,7 +1081,7 @@ namespace ParametricDramDirectoryMSI
 		while (hits > 0)
 		{
 			getCache()->updateCounters(true);
-			updateCounters(mem_op_type, 0, true, mem_op_type == Core::READ ? CacheState::SHARED : CacheState::MODIFIED, CacheBlockInfo::block_type_t::NON_PAGE_TABLE, Prefetch::NONE);
+			updateCounters(mem_op_type, 0, true, mem_op_type == Core::READ ? CacheState::SHARED : CacheState::MODIFIED, CacheBlockInfo::block_type_t::DATA, Prefetch::NONE);
 			hits--;
 		}
 	}
@@ -979,7 +1184,7 @@ namespace ParametricDramDirectoryMSI
 
 		if (address_to_prefetch != INVALID_ADDRESS)
 		{
-			doPrefetch(eip, address_to_prefetch, m_master->m_prefetch_next, CacheBlockInfo::block_type_t::NON_PAGE_TABLE);
+			doPrefetch(eip, address_to_prefetch, m_master->m_prefetch_next, CacheBlockInfo::block_type_t::DATA);
 			atomic_add_subsecondtime(m_master->m_prefetch_next, PREFETCH_INTERVAL);
 		}
 
@@ -995,18 +1200,18 @@ namespace ParametricDramDirectoryMSI
 		acquireStackLock(prefetch_address);
 		MYLOG("prefetching %lx", prefetch_address);
 
-#ifdef REVELATOR_CACHE_DEBUG
-	std::cout << "Prefetching for Revelator address: " << prefetch_address << std::endl;
+#ifdef SPEC_PREFETCH_DEBUG
+	std::cout << "Speculative prefetch for address: " << prefetch_address << std::endl;
 #endif
 
 		SubsecondTime t_before = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
 		getShmemPerfModel()->setElapsedTime(ShmemPerfModel::_USER_THREAD, t_start); // Start the prefetch at the same time as the original miss
-		HitWhere::where_t hit_where = processShmemReqFromPrevCache(eip, this, Core::READ, prefetch_address, true, true, block_type, Prefetch::OWN, t_start, false, Core::mem_origin_t::NORMAL);
+		HitWhere::where_t hit_where = processShmemReqFromPrevCache(eip, this, Core::READ, prefetch_address, 0, getCacheBlockSize(), true, true, block_type, Prefetch::OWN, t_start, false, Core::mem_origin_t::NORMAL);
 
 		if (hit_where != HitWhere::MISS)
 		{
-#ifdef REVELATOR_CACHE_DEBUG
-			std::cout << "Prefetching for Revelator address: " << prefetch_address << " was a hit and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
+#ifdef SPEC_PREFETCH_DEBUG
+			std::cout << "Speculative prefetch for address: " << prefetch_address << " was a hit and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
 #endif
 		}
 		if (hit_where == HitWhere::MISS)
@@ -1017,15 +1222,18 @@ namespace ParametricDramDirectoryMSI
 			waitForNetworkThread();
 			wakeUpNetworkThread();
 
-			hit_where = processShmemReqFromPrevCache(eip, this, Core::READ, prefetch_address, false, false, block_type, Prefetch::OWN, t_start, false, Core::mem_origin_t::NORMAL);
+			hit_where = processShmemReqFromPrevCache(eip, this, Core::READ, prefetch_address, 0, getCacheBlockSize(), false, false, block_type, Prefetch::OWN, t_start, false, Core::mem_origin_t::NORMAL);
 
-#ifdef REVELATOR_CACHE_DEBUG  
-	std::cout << "Prefetching for Revelator address: " << prefetch_address << " was a miss and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
+#ifdef SPEC_PREFETCH_DEBUG  
+	std::cout << "Speculative prefetch for address: " << prefetch_address << " was a miss and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
 #endif
 			LOG_ASSERT_ERROR(hit_where != HitWhere::MISS, "Line was not there after prefetch");
 			stats.prefetches_fillup++;
 
 		} 
+
+		// Capture the time at which the prefetch data became available (before restoring)
+		m_last_prefetch_completion = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
 
 		getShmemPerfModel()->setElapsedTime(ShmemPerfModel::_USER_THREAD, t_before); // Ignore changes to time made by the prefetch call
 		releaseStackLock(prefetch_address);
@@ -1037,12 +1245,12 @@ namespace ParametricDramDirectoryMSI
 	 *****************************************************************************/
 
 	HitWhere::where_t
-	CacheCntlr::processShmemReqFromPrevCache(IntPtr eip, CacheCntlr *requester, Core::mem_op_t mem_op_type, IntPtr address, bool modeled, bool count, CacheBlockInfo::block_type_t block_type, Prefetch::prefetch_type_t isPrefetch, SubsecondTime t_issue, bool have_write_lock, Core::mem_origin_t mem_origin)
+	CacheCntlr::processShmemReqFromPrevCache(IntPtr eip, CacheCntlr *requester, Core::mem_op_t mem_op_type, IntPtr address, UInt32 offset, UInt32 data_length, bool modeled, bool count, CacheBlockInfo::block_type_t block_type, Prefetch::prefetch_type_t isPrefetch, SubsecondTime t_issue, bool have_write_lock, Core::mem_origin_t mem_origin)
 	{
 #ifdef PRIVATE_L2_OPTIMIZATION
 		bool have_write_lock_internal = have_write_lock;
 		if (!have_write_lock && m_shared_cores > 1)
-		{
+	
 			acquireStackLock(address, true);
 			have_write_lock_internal = true;
 		}
@@ -1050,12 +1258,8 @@ namespace ParametricDramDirectoryMSI
 		bool have_write_lock_internal = true;
 #endif
 		// std:: cout << "Block type = " << block_type << std::endl;
-		bool metadata_request = (block_type == CacheBlockInfo::block_type_t::PAGE_TABLE) ||
-								(block_type == CacheBlockInfo::block_type_t::PAGE_TABLE_PASSTHROUGH) ||
-								(block_type == CacheBlockInfo::block_type_t::SECURITY) ||
-								(block_type == CacheBlockInfo::block_type_t::EXPRESSIVE) ||
-								(block_type == CacheBlockInfo::block_type_t::TLB_ENTRY) ||
-								(block_type == CacheBlockInfo::block_type_t::TLB_ENTRY_PASSTHROUGH);
+		// Check if this is any type of metadata request using the helper function
+		bool metadata_request = CacheBlockInfo::isMetadataBlockType(block_type);
 
 		bool cache_hit = operationPermissibleinCache(address, mem_op_type), sibling_hit = false, prefetch_hit = false;
 		bool first_hit = cache_hit;
@@ -1078,6 +1282,24 @@ namespace ParametricDramDirectoryMSI
 			cache_block_info->invalidate();
 			cache_block_info = NULL;
 			LOG_ASSERT_ERROR(m_next_cache_cntlr != NULL, "Cannot do passthrough on an LLC");
+		}
+
+		// ─── Spec-eviction tracking (L2 only, demand accesses only) ─────
+		if (m_mem_component == MemComponent::L2_CACHE && isPrefetch == Prefetch::NONE)
+		{
+			m_master->m_l2_demand_count++;
+			if (!first_hit)
+			{
+				// Demand miss at L2: was this address evicted by a speculative prefetch?
+				UInt64 stamp = m_master->specEvictLookupAndRemove(address);
+				if (stamp && m_master->m_l2_demand_count - stamp <= SPEC_EVICTION_WINDOW)
+					++stats.spec_evict_harmful;
+			}
+			else
+			{
+				// Demand hit: address is in L2, remove from eviction log if present
+				m_master->specEvictRemove(address);
+			}
 		}
 
 		if (count)
@@ -1103,6 +1325,19 @@ namespace ParametricDramDirectoryMSI
 			{
 				stats.hits_warmup++;
 				cache_block_info->clearOption(CacheBlockInfo::WARMUP);
+			}
+
+			// Update cache block utilization on L2/LLC hit
+			// Use the actual offset and data_length from the request to track sub-line utilization
+			// Note: Track utilization even when modeled=false (fill path after miss)
+			// This is critical for metadata accesses that bypass L1 but still need utilization tracking
+			if (!m_perfect)
+			{
+				bool new_bits = cache_block_info->updateUsage(offset, data_length);
+				if (new_bits && m_next_cache_cntlr)
+				{
+					m_next_cache_cntlr->updateUsageBits(address, cache_block_info->getUsage());
+				}
 			} 
 
 			// Increment Shared Mem Perf model cycle counts
@@ -1254,7 +1489,7 @@ namespace ParametricDramDirectoryMSI
 				}
 
 				// let the next cache level handle it.
-				hit_where = m_next_cache_cntlr->processShmemReqFromPrevCache(eip, this, mem_op_type, address, modeled, count, block_type, isPrefetch == Prefetch::NONE ? Prefetch::NONE : Prefetch::OTHER, t_issue, have_write_lock_internal, mem_origin);
+				hit_where = m_next_cache_cntlr->processShmemReqFromPrevCache(eip, this, mem_op_type, address, offset, data_length, modeled, count, block_type, isPrefetch == Prefetch::NONE ? Prefetch::NONE : Prefetch::OTHER, t_issue, have_write_lock_internal, mem_origin);
 				if (hit_where != HitWhere::MISS)
 				{
 					cache_hit = true;
@@ -1263,6 +1498,18 @@ namespace ParametricDramDirectoryMSI
 					copyDataFromNextLevel(mem_op_type, address, modeled, t_now, block_type);
 					if (isPrefetch != Prefetch::NONE)
 						getCacheBlockInfo(address)->setOption(CacheBlockInfo::PREFETCH);
+					
+					// Track sub-line utilization on miss path (after data is fetched)
+					// This ensures metadata accesses that bypass L1 still get utilization tracked
+					if (modeled && !m_perfect) {
+						SharedCacheBlockInfo* new_block_info = getCacheBlockInfo(address);
+						if (new_block_info) {
+							bool new_bits = new_block_info->updateUsage(offset, data_length);
+							if (new_bits && m_next_cache_cntlr) {
+								m_next_cache_cntlr->updateUsageBits(address, new_block_info->getUsage());
+							}
+						}
+					}
 				}
 			}
 			else // last-level cache
@@ -1315,6 +1562,15 @@ namespace ParametricDramDirectoryMSI
 						insertCacheBlock(address, mem_op_type == Core::READ ? CacheState::SHARED : CacheState::MODIFIED, data_buf, m_core_id, ShmemPerfModel::_USER_THREAD, block_type);
 						if (isPrefetch != Prefetch::NONE)
 							getCacheBlockInfo(address)->setOption(CacheBlockInfo::PREFETCH);
+
+						// Track sub-line utilization on LLC miss path (after DRAM fetch)
+						// This ensures metadata accesses get utilization tracked even on cold misses
+						if (modeled && !m_perfect) {
+							SharedCacheBlockInfo* new_block_info = getCacheBlockInfo(address);
+							if (new_block_info) {
+								new_block_info->updateUsage(offset, data_length);
+							}
+						}
 
 						updateUncoreStatistics(hit_where, getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD));
 					}
@@ -1705,6 +1961,14 @@ namespace ParametricDramDirectoryMSI
 	SharedCacheBlockInfo *
 	CacheCntlr::insertCacheBlock(IntPtr address, CacheState::cstate_t cstate, Byte *data_buf, core_id_t requester, ShmemPerfModel::Thread_t thread_num, CacheBlockInfo::block_type_t block_type)
 	{
+		// Debug: check for unexpected metadata insertion into L1-D when passthrough is enabled
+		if (m_mem_component == MemComponent::L1_DCACHE && 
+			CacheBlockInfo::isMetadataBlockType(block_type))
+		{
+			std::cerr << "WARNING: Inserting metadata (type=" << BlockTypeString(block_type) 
+			          << ") into L1-D! Address: 0x" << std::hex << address << std::dec 
+			          << " passthrough_loc=" << metadata_passthrough_loc << std::endl;
+		}
 
 		MYLOG("insertCacheBlock at %s l%d @ %lx as %c (now %c)", getCache()->getName().c_str(), m_mem_component, address, CStateString(cstate), CStateString(getCacheState(address)));
 
@@ -1736,18 +2000,9 @@ namespace ParametricDramDirectoryMSI
 
 			MYLOG("evicting @%lx", evict_address);
 
-			// if (
-			//    !m_next_cache_cntlr // Track at LLC
-			//    && !evict_block_info.hasOption(CacheBlockInfo::WARMUP) // Ignore blocks allocated during warmup (we don't track usage then)
-			//    && Sim()->getConfig()->hasCacheEfficiencyCallbacks()
-			// )
-			// {
-			//    Sim()->getConfig()->getCacheEfficiencyCallbacks().call_notify_evict(false, evict_block_info.getOwner(), cache_block_info->getOwner(), evict_block_info.getUsage(), getCacheBlockSize() >> CacheBlockInfo::BitsUsedOffset);
-			// }
+
 
 			CacheState::cstate_t old_state = evict_block_info.getCState();
-
-			// printf("Evicting from %s with counter = %d \n", getCache()->getName().c_str(),stats.evict[old_state]);
 
 			MYLOG("evicting @%lx (state %c)", evict_address, CStateString(old_state));
 			{
@@ -1764,6 +2019,13 @@ namespace ParametricDramDirectoryMSI
 					++stats.evict_prefetch;
 				if (evict_block_info.hasOption(CacheBlockInfo::WARMUP))
 					++stats.evict_warmup;
+
+				// Track evictions caused by speculative prefetches (L2)
+				if (m_doing_spec_prefetch && old_state != CacheState::INVALID)
+				{
+					m_master->specEvictInsert(evict_address, m_master->m_l2_demand_count);
+					++stats.spec_evict_total;
+				}
 			}
 
 			/* TODO: this part looks a lot like updateCacheBlock's dirty case, but with the eviction buffer
@@ -1780,7 +2042,6 @@ namespace ParametricDramDirectoryMSI
 				SubsecondTime latency = SubsecondTime::Zero();
 				for (CacheCntlrList::iterator it = m_master->m_prev_cache_cntlrs.begin(); it != m_master->m_prev_cache_cntlrs.end(); it++)
 				{
-					// std::cout << "Update Cache Block: " << __LINE__ << " "<<CStateString(CacheState::INVALID)<<std::endl;
 					latency = getMax<SubsecondTime>(latency, (*it)->updateCacheBlock(evict_address, CacheState::INVALID, Transition::BACK_INVAL, NULL, thread_num).first);
 				}
 
@@ -2211,7 +2472,8 @@ namespace ParametricDramDirectoryMSI
 				wakeUpUserThread(request->cache_cntlr->m_user_thread_sem);
 				waitForUserThread(request->cache_cntlr->m_network_thread_sem);
 				acquireStackLock(address);
-				if (request->block_type == CacheBlockInfo::block_type_t::NON_PAGE_TABLE)
+				// Use new simplified block types: DATA for regular data, PAGE_TABLE for metadata
+				if (request->block_type == CacheBlockInfo::block_type_t::DATA)
 				{
 					ScopedLock sl(request->cache_cntlr->getLock());
 					request->cache_cntlr->m_master->mshr[address] = make_mshr(request->t_issue, getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD));
@@ -2436,13 +2698,8 @@ namespace ParametricDramDirectoryMSI
 
 
 		/* isMetadata is true for metadata blocks like page table entries, TLB entries, etc. */
-
-		bool IsMetadata = block_type == CacheBlockInfo::block_type_t::PAGE_TABLE ||
-						  block_type == CacheBlockInfo::block_type_t::PAGE_TABLE_PASSTHROUGH ||
-						  block_type == CacheBlockInfo::block_type_t::SECURITY ||
-						  block_type == CacheBlockInfo::block_type_t::EXPRESSIVE ||
-						  block_type == CacheBlockInfo::block_type_t::TLB_ENTRY ||
-						  block_type == CacheBlockInfo::block_type_t::TLB_ENTRY_PASSTHROUGH;
+		// Check if this is any type of metadata using the helper function
+		bool IsMetadata = CacheBlockInfo::isMetadataBlockType(block_type);
 
 		SubsecondTime t_now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
 		bool overlapping;

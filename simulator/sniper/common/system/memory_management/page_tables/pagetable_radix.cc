@@ -1,384 +1,419 @@
 #include "pagetable_radix.h"
 #include "pagetable.h"
 #include "simulator.h"
-#include "physical_memory_allocator.h"
+#include "memory_management/physical_memory_allocators/physical_memory_allocator.h"
 #include "mimicos.h"
 
-//#define DEBUG
+#include "debug_config.h"
+#include "sim_log.h"
+
+#include "misc/exception_handler_base.h"
+#include "sniper_space_exception_handler.h"
+#include "user_space_exception_handler.h"
 
 namespace ParametricDramDirectoryMSI
 {
 
-	/**
-	 * @brief Constructor for the PageTableRadix class.
-	 *
-	 * @param core_id The core ID.
-	 * @param name The name of the page table.
-	 * @param page_sizes The number of page sizes.
-	 * @param page_size_list The list of page sizes.
-	 * @param levels The number of levels in the page table.
-	 * @param frame_size The size of each frame.
-	 * @param _pwc Pointer to the Page Walk Cache (PWC).
-	 * @param is_guest Boolean indicating if this is a guest page table.
-	 */
+        /**
+         * @brief Constructor for the PageTableRadix class.
+         *
+         * @param core_id The core ID.
+         * @param name The name of the page table.
+         * @param page_sizes The number of page sizes.
+         * @param page_size_list The list of page sizes.
+         * @param levels The number of levels in the page table.
+         * @param frame_size The size of each frame.
+         * @param _pwc Pointer to the Page Walk Cache (PWC).
+         * @param is_guest Boolean indicating if this is a guest page table.
+         */
 
-	PageTableRadix::PageTableRadix(int core_id, String name, String type, int page_sizes, int *page_size_list, int levels, int frame_size, bool is_guest)
-		: PageTable(core_id, name, type, page_sizes, page_size_list, is_guest),
-		  m_frame_size(frame_size),
-		  levels(levels)
-	{
+        PageTableRadix::PageTableRadix(int core_id, String name, String type, int page_sizes, int *page_size_list, int levels, int frame_size, bool is_guest)
+                : PageTable(core_id, name, type, page_sizes, page_size_list, is_guest),
+                  m_frame_size(frame_size),
+                  levels(levels)
+        {
+                // Initialize logging with SimLog
+                std::string log_name = std::string(name.c_str()) + "_radix";
+                m_log = new SimLog(log_name, core_id, DEBUG_PAGE_TABLE_RADIX);
 
-		log_file = std::ofstream();
-		log_file_name = std::string(name.c_str()) + ".pagetable.log." + std::to_string(core_id);
-		log_file_name = std::string(Sim()->getConfig()->getOutputDirectory().c_str()) + "/" + log_file_name;
-		log_file.open(log_file_name.c_str());
+                m_log->log("Creating Radix-based page table");
+                bzero(&stats, sizeof(stats));
+                m_log->log("After zeroing out stats");
 
-		log_file << "[Page Table] Creating Radix-based page table" << std::endl;
-		bzero(&stats, sizeof(stats));
+                registerStatsMetric(name, core_id, "page_faults", &stats.page_faults);
+                registerStatsMetric(name, core_id, "page_table_walks", &stats.page_table_walks);
+                registerStatsMetric(name, core_id, "ptw_num_cache_accesses", &stats.ptw_num_cache_accesses);
+                registerStatsMetric(name, core_id, "pf_num_cache_accesses", &stats.pf_num_cache_accesses);
+                registerStatsMetric(name, core_id, "allocated_frames", &stats.allocated_frames);
 
-		registerStatsMetric(name, core_id, "page_faults", &stats.page_faults);
-		registerStatsMetric(name, core_id, "page_table_walks", &stats.page_table_walks);
-		registerStatsMetric(name, core_id, "ptw_num_cache_accesses", &stats.ptw_num_cache_accesses);
-		registerStatsMetric(name, core_id, "pf_num_cache_accesses", &stats.pf_num_cache_accesses);
-		registerStatsMetric(name, core_id, "allocated_frames", &stats.allocated_frames);
+                m_log->log("After registering stats");
 
-		stats.page_size_discovery = new UInt64[m_page_sizes];
+                stats.page_size_discovery = new UInt64[m_page_sizes];
 
-		for (int i = 0; i < m_page_sizes; i++)
-		{
-			stats.page_size_discovery[i] = 0;
-			registerStatsMetric(name, core_id, "page_size_discovery_" + itostr(i), &stats.page_size_discovery[i]);
-		}
+                for (int i = 0; i < m_page_sizes; i++)
+                {
+                        stats.page_size_discovery[i] = 0;
+                        registerStatsMetric(name, core_id, "page_size_discovery_" + itostr(i), &stats.page_size_discovery[i]);
+                }
 
-		root = (PTFrame *)malloc(sizeof(PTFrame));
-		root->entries = (PTEntry *)malloc(sizeof(PTEntry) * m_frame_size);
+                m_log->log("After registering stats: page_size_discovery");
 
-		// @hsongara: Get the OS object
-		MimicOS* os;
-		if (is_guest)
-			os = Sim()->getMimicOS_VM();
-		else
-			os = Sim()->getMimicOS();
+                root = (PTFrame *)malloc(sizeof(PTFrame));
+                root->entries = (PTEntry *)malloc(sizeof(PTEntry) * m_frame_size);
 
-		root->emulated_ppn = os->getMemoryAllocator()->handle_page_table_allocations(4096);
-#ifdef DEBUG
-		log_file << "Root frame: " << root << std::endl;
-#endif
+                m_log->log("After malloc of root & root->entries");
 
-		for (int i = 0; i < m_frame_size; i++)
-		{
-			root->entries[i].is_pte = false;
-			root->entries[i].data.next_level = NULL;
-		}
-	}
+                // @hsongara: Get the OS object
+                MimicOS* os;
+                if (is_guest)
+                        os = Sim()->getMimicOS_VM();
+                else
+                        os = Sim()->getMimicOS();
 
-	/**
-	 * @brief Initializes a page table walk for a given address.
-	 *
-	 * @param address The virtual address to walk.
-	 * @param count Boolean indicating if the walk should be counted in the statistics.
-	 * @param is_prefetch Boolean indicating if this is a prefetch operation.
-	 * @return PTWResult The result of the page table walk.
-	 */
+                m_log->log("After init os = ", (void*)os);
 
-	PTWResult PageTableRadix::initializeWalk(IntPtr address, bool count, bool is_prefetch, bool restart_walk_after_fault)
-	{
+                m_log->log("Before root->emulated_ppn");
+                // TODO @vlnitu: revert, but this will not work if there's only a single allocator in the sys, on VirtuOS side
+                root->emulated_ppn = 0; // os->getMemoryAllocator()->handle_page_table_allocations(4096);
+                m_log->log("After root->emulated_ppn = ", root->emulated_ppn);
+                m_log->detailed("Root frame: ", (void*)root);
 
-#ifdef DEBUG
-		log_file << std::endl;
-		log_file << "[RADIX] --------------------------------------------" << std::endl;
-		log_file << "[RADIX] RADIX is coming.. with address " << address << std::endl;
-#endif
+                for (int i = 0; i < m_frame_size; i++)
+                {
+                        root->entries[i].is_pte = false;
+                        root->entries[i].data.next_level = NULL;
+                }
+        }
 
-		if (count)
-			stats.page_table_walks++;
+        /**
+         * @brief Destructor for the PageTableRadix class.
+         * Cleans up allocated resources including the logging instance.
+         */
+        PageTableRadix::~PageTableRadix()
+        {
+                if (m_log)
+                {
+                        delete m_log;
+                        m_log = nullptr;
+                }
+                // Note: page_size_discovery array cleanup is handled by base class
+        }
 
-		// @hsongara: Get the OS object
-		MimicOS* os;
-		if (is_guest)
-			os = Sim()->getMimicOS_VM();
-		else
-			os = Sim()->getMimicOS();
+        /**
+         * @brief Initializes a page table walk for a given address.
+         *
+         * @param address The virtual address to walk.
+         * @param count Boolean indicating if the walk should be counted in the statistics.
+         * @param is_prefetch Boolean indicating if this is a prefetch operation.
+         * @return PTWResult The result of the page table walk.
+         */
 
-		bool is_pagefault = false;
-		AllocatedPage page_fault_result; // Stores the result of the page fault handling IF a page fault occurs
+        PTWResult PageTableRadix::initializeWalk(IntPtr address, bool count, bool is_prefetch, bool restart_walk_after_fault)
+        {
 
-		accessedAddresses visited_pts; // In cases of page faults, we replay the walk but we DO NOT RESET the visited_pts as the
-									   // execution time will be dominated by the page fault latency anyways
+                m_log->section("RADIX Walk");
+                m_log->detailed("RADIX is coming.. with address ", SimLog::hex(address));
 
-		// Time --------------------------------------------------------------------------------------------------->
-		// L2 TLB Miss -> initializeWalk -> handlePageFault() -> restart_walk (label) -> return PTW Result
+                if (count)
+                        stats.page_table_walks++;
 
-	restart_walk: // Get the 9 MSB of the address
+                bool is_pagefault = false;
 
-		IntPtr offset = (address >> 39) & 0x1FF;
+                accessedAddresses visited_pts; // In cases of page faults, we replay the walk but we DO NOT RESET the visited_pts as the
+                                                                           // execution time will be dominated by the page fault latency anyways
 
-		// Start the walk from the root
-		PTFrame *current_frame = root;
+                // Time --------------------------------------------------------------------------------------------------->
+                // L2 TLB Miss -> initializeWalk -> handlePageFault() -> restart_walk (label) -> return PTW Result
 
-#ifdef DEBUG
-		log_file << "[RADIX] Accessing PT address: " << address << " at level: " << levels << " with offset: " << offset << std::endl;
-#endif
+        restart_walk: // Get the 9 MSB of the address
 
-		IntPtr ppn_result;
-		IntPtr page_size_result;
+                IntPtr offset = (address >> 39) & 0x1FF;
 
-		int counter = 0; // Stores the depth of the pointer-chasing
-		int i = 0;		 // Stores the page table id
+                // Start the walk from the root
+                PTFrame *current_frame = root;
 
-		int level = levels;
-		SubsecondTime pwc_latency = SubsecondTime::Zero();
+                IntPtr ppn_result;
+                IntPtr page_size_result;
 
-		while (level > 0)
-		{
-			offset = (address >> (48 - 9 * (levels - level + 1))) & 0x1FF;
+                int counter = 0; // Stores the depth of the pointer-chasing
+                int i = 0;               // Stores the page table id
 
-#ifdef DEBUG
-			log_file << "[RADIX] Accessing PT address: " << current_frame << " at level: " << level << " with offset: " << offset << std::endl;
-#endif
-			visited_pts.push_back(std::make_tuple(i, counter, (IntPtr)(current_frame->emulated_ppn * 4096 + offset * 8), current_frame->entries[offset].is_pte && current_frame->entries[offset].data.translation.valid));
+                int level = levels;
+                SubsecondTime pwc_latency = SubsecondTime::Zero();
 
-#ifdef DEBUG
-			log_file << "[RADIX] Pushed in visited: " << i << " " << counter << " " << (IntPtr)(current_frame->emulated_ppn * 4096 + offset * 8) << " " << (current_frame->entries[offset].is_pte && current_frame->entries[offset].data.translation.valid) << std::endl;
-#endif
-			if (current_frame->entries[offset].is_pte)
-			{
+                while (level > 0)
+                {
+                        offset = (address >> (48 - 9 * (levels - level + 1))) & 0x1FF;
 
-				// The entry is not valid, we need to handle a page fault
-				if (current_frame->entries[offset].data.translation.valid == false)
-				{
-					if (restart_walk_after_fault)
-						os->handle_page_fault(address, core_id, getMaxLevel());
+                        m_log->detailed("Accessing PT address: ", (void*)current_frame, " at level: ", level, " with offset: ", offset, "and emulated ppn: ", current_frame->emulated_ppn);
+                        visited_pts.push_back(PTWAccess(i, counter, (IntPtr)(current_frame->emulated_ppn * 4096 + offset * 8), current_frame->entries[offset].is_pte && current_frame->entries[offset].data.translation.valid));
 
-					is_pagefault = true;
+                        m_log->detailed("Pushed in visited: ", i, " ", counter, " ", (IntPtr)(current_frame->emulated_ppn * 4096 + offset * 8), " ", (current_frame->entries[offset].is_pte && current_frame->entries[offset].data.translation.valid));
+                        if (current_frame->entries[offset].is_pte)
+                        {
 
-					stats.page_faults++;
-#ifdef DEBUG
-					log_file << "[PAGE FAULT RESOLVED] for address: " << address << std::endl;
-					log_file << std::endl;
-#endif
-					if (restart_walk_after_fault)
-						goto restart_walk;
-					else
-						return PTWResult(page_size_result, visited_pts, ppn_result, pwc_latency, is_pagefault);
-				}
-				// We found the entry, we can return the result
+                                // The entry is not valid, we need to handle a page fault
+                                if (current_frame->entries[offset].data.translation.valid == false)
+                                {
+                                        if (restart_walk_after_fault) {
+                                                bool userspace_mimicos_enabled = Sim()->getCfg()->getBool("general/enable_userspace_mimicos");
+                                                if (userspace_mimicos_enabled) {
+                                                        std::cout << "[FATAL] [RADIX] VirtuOS resolved Page Fault before...\n" << 
+                                                                "Now that we are replaying the instruction, no Page Fault (due to missing mapping VPN -> PPN for Data Frame) should occurr for address = " << address << std::endl;
+                                                        std::cout << "[FATAL] [RADIX] exiting with status code = 1" << std::endl;
+                                                        exit(1);
+                                                }
 
-				if (count)
-					stats.page_size_discovery[level - 1]++;
-#ifdef DEBUG
-				log_file << "[RADIX] Found translation for address: " << address << " with ppn: " << current_frame->entries[offset].data.translation.ppn << " at level: " << level << " with page size: " << m_page_size_list[level - 1] << std::endl;
-#endif
-				// @kanellok: Be careful with the return values -> always return PPN_RESULT at page size granularity
-				ppn_result = current_frame->entries[offset].data.translation.ppn;
-				page_size_result = m_page_size_list[level - 1]; // If we hit at level 1 (last one), we return the page_size[1-1] = page_size[0] = 4KB
-				break;
-			}
-			else
-			{
-#ifdef DEBUG
-				log_file << "[RADIX] Moving to the next level" << std::endl;
-#endif
-				// The entry was a pointer to the next level of the page table
-				// We need to chase the pointer -> if the next level is NULL, we need to handle a page fault
-				if (current_frame->entries[offset].data.next_level == NULL)
-				{
-#ifdef DEBUG
-					log_file << "[RADIX] Next level is NULL, we need to allocate a new frame" << std::endl;
-#endif
-					if (restart_walk_after_fault)
-						os->handle_page_fault(address, core_id, getMaxLevel());
+                                                assert(!userspace_mimicos_enabled);
+                                                
+                                                ExceptionHandlerBase *base_handler = Sim()->getCoreManager()->getCoreFromID(core_id)->getExceptionHandler();
+                                                SniperExceptionHandler* sniper_handler = dynamic_cast<SniperExceptionHandler*>(base_handler);
 
-					stats.page_faults++;
-					is_pagefault = true;
+                                                
+                                                ExceptionHandlerBase::FaultCtx fault_ctx = sniper_handler->initFaultCtx(this, address, core_id, getMaxLevel());
+                                                sniper_handler->handle_page_fault(fault_ctx);
+                                        }
 
-#ifdef DEBUG
-					log_file << "[RADIX] Page fault resolved for address: " << address << std::endl;
-					log_file << "[RADIX] Restarting the walk" << std::endl;
-#endif
-					if (restart_walk_after_fault)
-						goto restart_walk;
-					else
-						return PTWResult(page_size_result, visited_pts, ppn_result, pwc_latency, is_pagefault);
-				}
-				else
-				{
-					current_frame = current_frame->entries[offset].data.next_level;
-				}
-			}
+                                        stats.page_faults++;
+                                        is_pagefault = true;
 
-			// Move to the next level
-			// 4->3->2->1
-			level--;
-			counter++;
-		}
+                                        m_log->detailed("PAGE FAULT RESOLVED for address: ", SimLog::hex(address));
+                                        if (restart_walk_after_fault)
+                                                goto restart_walk;
+                                        else {
+                                                // level = number of frames needed: (level - 1) page table frames + 1 data frame
+                                                return PTWResult(page_size_result, visited_pts, ppn_result, pwc_latency, is_pagefault, level-1);
+                                        }
+                                }
+                                // We found the entry, we can return the result
 
-#ifdef DEBUG
-		log_file << "[RADIX] Finished walk for address: " << address << std::endl;
-		log_file << "[RADIX] Final physical page number: " << ppn_result << std::endl;
-		log_file << "[RADIX] Final page size: " << page_size_result << std::endl;
-		log_file << "[RADIX] --------------------------------------------" << std::endl;
-#endif
+                                if (count)
+                                        stats.page_size_discovery[level - 1]++;
+                                m_log->detailed("Found translation for address: ", SimLog::hex(address), " with ppn: ", current_frame->entries[offset].data.translation.ppn, " at level: ", level, " with page size: ", m_page_size_list[level - 1]);
+                                // @kanellok: Be careful with the return values -> always return PPN_RESULT at page size granularity
+                                ppn_result = current_frame->entries[offset].data.translation.ppn;
+                                LOG_ASSERT_ERROR(ppn_result != static_cast<IntPtr>(-1), "PPN is invalid");
+                               
+                                accesses_per_vpn[address >> 12]++; // Increment the access count for the VPN
 
-		return PTWResult(page_size_result, visited_pts, ppn_result, pwc_latency, is_pagefault);
-	}
+                                page_size_result = m_page_size_list[level - 1]; // If we hit at level 1 (last one), we return the page_size[1-1] = page_size[0] = 4KB
+                                break;
+                        }
+                        else
+                        {
+                                m_log->detailed("Moving to the next level");
+                                // The entry was a pointer to the next level of the page table
+                                // We need to chase the pointer -> if the next level is NULL, we need to handle a page fault
+                                if (current_frame->entries[offset].data.next_level == NULL)
+                                {
+                                        m_log->detailed("Next level is NULL, we need to allocate a new frame");
+                                        if (restart_walk_after_fault) {
+                                                // TODO @vlnitu: remove code duplication, add it to a base function
+                                                bool userspace_mimicos_enabled = Sim()->getCfg()->getBool("general/enable_userspace_mimicos");
+                                                if (userspace_mimicos_enabled) {
+                                                        std::cout << "[FATAL] [RADIX] VirtuOS resolved Page Fault before...\n" << 
+                                                                "Now that we are replaying the instruction, no Page Fault (due to missing mapping VPN -> PPN for Data Frame) should occurr for address = " << address << std::endl;
+                                                        std::cout << "[FATAL] [RADIX] exiting with status code = 1" << std::endl;
+                                                        exit(1);
+                                                }
 
-	int PageTableRadix::updatePageTableFrames(IntPtr address, IntPtr core_id, IntPtr ppn, int page_size, std::vector<UInt64> frames)
-	{
-// #ifdef DEBUG
-// 		log_file << "[RADIX] I was provided with the following frames: " << std::endl;
-// 		for (int i = 0; i < frames.size(); i++)
-// 		{
-// 			log_file << "[RADIX] Frame: " << frames[i] << std::endl;
-// 		}
-// #endif
-		PTFrame *current_frame = root;
-		PTFrame *previous_frame = NULL;
+                                                assert(!userspace_mimicos_enabled);
+                                                
+                                                ExceptionHandlerBase *base_handler = Sim()->getCoreManager()->getCoreFromID(core_id)->getExceptionHandler();
+                                                SniperExceptionHandler* sniper_handler = dynamic_cast<SniperExceptionHandler*>(base_handler);
 
-		IntPtr offset = (address >> 39) & 0x1FF;
-		IntPtr previous_offset = static_cast<IntPtr>(-1);
 
-		int level = levels;
-		int counter = 0;
+                                                ExceptionHandlerBase::FaultCtx fault_ctx = sniper_handler->initFaultCtx(this, address, core_id, getMaxLevel());
+                                                sniper_handler->handle_page_fault(fault_ctx);
+                                        }
 
-#ifdef DEBUG
-		log_file << std::endl;
-		log_file << "[RADIX] Updating page table frames for address: " << address << " with ppn: " << ppn << " and page size: " << page_size << std::endl;
-#endif
+                                        stats.page_faults++;
+                                        is_pagefault = true;
 
-		accessedAddresses pagefault_addresses;
+                                        m_log->detailed("Page fault resolved for address: ", SimLog::hex(address));
+                                        m_log->detailed("Restarting the walk");
+                                        if (restart_walk_after_fault) {
+                                                goto restart_walk;
+                                        }
+                                        else {
+                                                // level = number of frames needed: (level - 1) page table frames + 1 data frame
+                                                return PTWResult(page_size_result, visited_pts, ppn_result, pwc_latency, is_pagefault, level-1);
+                                        }
+                                }
+                                else
+                                {
+                                        current_frame = current_frame->entries[offset].data.next_level;
+                                }
+                        }
 
-		// Walk the page table to the last level and update the page table frames which are not yet allocated
-		int frames_used = 0;
+                        // Move to the next level
+                        // 4->3->2->1
+                        level--;
+                        counter++;
+                }
 
-		while (level > 0)
-		{
-			offset = (address >> (48 - 9 * (levels - level + 1))) & 0x1FF;
+                m_log->detailed("Finished walk for address: ", SimLog::hex(address));
+                m_log->detailed("Final physical page number: ", ppn_result);
+                m_log->detailed("Final page size: ", page_size_result);
 
-			// Move to the next level of the page table
+                // No page fault occurred, no frames needed
+                return PTWResult(page_size_result, visited_pts, ppn_result, pwc_latency, is_pagefault, 0);
+        }
 
-#ifdef DEBUG
-			log_file << "[RADIX] Accessing: " << current_frame << " at level: " << level << " with offset: " << offset << std::endl;
-#endif
+        int PageTableRadix::updatePageTableFrames(IntPtr address, IntPtr core_id, IntPtr ppn, int page_size, std::vector<UInt64> frames)
+        {
+             m_log->detailed("I was provided with the following frames: ");
+             for (size_t i = 0; i < frames.size(); i++)
+             {
+                     m_log->detailed("Frame: ", frames[i]);
+             }
+                PTFrame *current_frame = root;
+                PTFrame *previous_frame = NULL;
 
-			if (current_frame == NULL)
-			{
-#ifdef DEBUG
-				log_file << "[RADIX] Current frame is NULL, we need to allocate a new frame" << std::endl;
+                IntPtr offset = (address >> 39) & 0x1FF;
+                IntPtr previous_offset = static_cast<IntPtr>(-1);
 
-#endif
+                int level = levels;
+                int counter = 0;
 
-				PTFrame *new_pt_frame = new PTFrame;
-				stats.allocated_frames++;
+                m_log->section("Update Page Table Frames");
+                m_log->detailed("Updating page table frames for address: ", SimLog::hex(address), " with ppn: ", ppn, " and page size: ", page_size);
 
-				new_pt_frame->entries = new PTEntry[m_frame_size];
-				new_pt_frame->emulated_ppn = frames[frames_used];
-				frames_used++;
-				current_frame = new_pt_frame;
-#ifdef DEBUG
-				log_file << "[RADIX] New frame allocated: " << current_frame << " with ppn: " << frames[counter] << std::endl;
-				log_file << "[RADIX] Previous frame: " << previous_frame << " at offset" << previous_offset << " is updated with the new frame: " << current_frame << std::endl;
+                accessedAddresses pagefault_addresses;
 
-#endif
-				previous_frame->entries[previous_offset].data.next_level = current_frame;
+                // Walk the page table to the last level and update the page table frames which are not yet allocated
+                int returned_frames = 0;
+                int frames_used = 0;
+                int frames_allocated = 0;
 
-				bool is_pte = level == 1 ? true : false;
-				for (int i = 0; i < m_frame_size; i++)
-				{
+                while (level > 0)
+                {
+                        offset = (address >> (48 - 9 * (levels - level + 1))) & 0x1FF;
 
-					new_pt_frame->entries[i].is_pte = is_pte;
-					new_pt_frame->entries[i].data.next_level = NULL;
-				}
-			}
-			else
-			{
+                        // Move to the next level of the page table
 
-				// Allocate a new page table
-				if (page_size == 21 && level == 2)
-				{
-#ifdef DEBUG
-					log_file << "[RADIX] Let's update the PTE: " << current_frame << " with ppn: " << ppn << " at level: " << level << " with page size: " << page_size << std::endl;
-#endif
-					current_frame->entries[offset].data.translation.valid = true;
-					current_frame->entries[offset].data.translation.ppn = ppn;
-					current_frame->entries[offset].is_pte = true;
-					break;
-				}
-				else if (page_size == 12 && level == 1)
-				{
+                        m_log->detailed("Accessing: ", (void*)current_frame, " at level: ", level, " with offset: ", offset);
 
-#ifdef DEBUG
-					log_file << "[RADIX] Let's update the PTE: " << current_frame << " with ppn: " << ppn << " at level: " << level << " with page size: " << page_size << std::endl;
-#endif
-					current_frame->entries[offset].data.translation.valid = true;
-					current_frame->entries[offset].data.translation.ppn = ppn;
-					break;
-				}
+                        if (current_frame == NULL)
+                        {
+                                m_log->detailed("Current frame is NULL, we need to allocate a new frame");
 
-				previous_frame = current_frame;
-				current_frame = current_frame->entries[offset].data.next_level;
-#ifdef DEBUG
-				log_file << "[RADIX] Let's jump to the next level: " << current_frame << std::endl;
-#endif
-				previous_offset = offset;
-				level--;
-				counter++;
-			}
-		}
-		return frames_used;
-	}
+                                // Bounds check before accessing frames vector
+                                LOG_ASSERT_ERROR(frames_used < static_cast<int>(frames.size()), 
+                                        "Out of bounds access to frames vector: frames_used (%d) >= frames.size() (%zu)", 
+                                        frames_used, frames.size());
 
-	void PageTableRadix::deletePage(IntPtr address)
-	{
+                                PTFrame *new_pt_frame = new PTFrame;
+                                stats.allocated_frames++;
 
-#ifdef DEBUG
-		log_file << "[RADIX] Deleting page that corresponds to address: " << address << std::endl;
-#endif
-		PTFrame *current_frame = root;
-		IntPtr offset = (address >> 39) & 0x1FF;
+                                new_pt_frame->entries = new PTEntry[m_frame_size];
+                                m_log->detailed("Frames used so far: ", frames_used);
+                                m_log->detailed("Allocating new page table frame at : ", frames[frames_used]);
+                                new_pt_frame->emulated_ppn = frames[frames_used];
+                                frames_used++;  // Increment after using the frame
+                                frames_allocated++;
+                                
+                                current_frame = new_pt_frame;
 
-		int level = levels;
-		int counter = 0;
+                                m_log->detailed("New frame allocated: ", (void*)current_frame, " with emulated ppn: ", new_pt_frame->emulated_ppn);
+                                m_log->detailed("Previous frame: ", (void*)previous_frame, " at offset ", previous_offset, " is updated with the new frame: ", (void*)current_frame);
+                                previous_frame->entries[previous_offset].data.next_level = current_frame;
+                                
 
-		while (level > 0)
-		{
-			offset = (address >> (48 - 9 * (levels - level + 1))) & 0x1FF;
+                                bool is_pte = level == 1 ? true : false;
+                                for (int i = 0; i < m_frame_size; i++)
+                                {
 
-			if (current_frame->entries[offset].is_pte)
-			{
-#ifdef DEBUG
-				log_file << "[RADIX] Found the PTE for address: " << address << " at level: " << level << " with offset: " << offset << std::endl;
-#endif
-				current_frame->entries[offset].data.translation.valid = false;
-				current_frame->entries[offset].data.translation.ppn = -1;
-				break;
-			}
-			else
-			{
-				// Move to the next level of the page table
-				current_frame = current_frame->entries[offset].data.next_level;
-			}
-			level--;
-			counter++;
-		}
-	}
+                                        new_pt_frame->entries[i].is_pte = is_pte;
+                                        new_pt_frame->entries[i].data.next_level = NULL;
+                                }
+                        }
+                        else
+                        {
 
-	/**
-	 * @brief Allocates physical space for the page table.
-	 *
-	 * @param size The size of the physical space to allocate.
-	 * @return IntPtr The physical address of the allocated space.
-	 */
-	IntPtr PageTableRadix::getPhysicalSpace(int size)
-	{
-		// We directly ask it from the VirtuOS
-		MimicOS* os;
-		if (is_guest)
-			os = Sim()->getMimicOS_VM();
-		else
-			os = Sim()->getMimicOS();
-		
-		return os->getMemoryAllocator()->handle_page_table_allocations(size);
-	}
+                                // Allocate a new page table
+                                if (page_size == 21 && level == 2)
+                                {
+                                        m_log->detailed("[2MiB] Let's update the PTE: ", (void*)current_frame, " with vpn = ", (address >> 12), " and ppn: ", ppn, " at level: ", level, " with page size: ", page_size);
+                                        current_frame->entries[offset].data.translation.valid = true;
+                                        current_frame->entries[offset].data.translation.ppn = ppn;
+                                        current_frame->entries[offset].is_pte = true;
+                                        accesses_per_vpn[address >> 12] = 1; // Set the access count for the VPN to 1
 
-}
+                                        break;
+                                }
+                                else if (page_size == 12 && level == 1)
+                                {
+
+                                        m_log->detailed("[4KiB] Let's update the PTE: ", (void*)current_frame, " with vpn = ", (address >> 12), " and ppn: ", ppn, " at level: ", level, " with page size: ", page_size);
+                                        current_frame->entries[offset].data.translation.valid = true;
+                                        current_frame->entries[offset].data.translation.ppn = ppn;
+                                        current_frame->entries[offset].is_pte = true;
+                                        accesses_per_vpn[address >> 12] = 1; // Set the access count for the VPN to 1
+
+                                        break;
+                                }
+
+                                previous_frame = current_frame;
+                                current_frame = current_frame->entries[offset].data.next_level;
+                                m_log->detailed("Let's jump to the next level: ", (void*)current_frame);
+                                previous_offset = offset;
+                                level--;
+                                counter++;
+                                // Note: frames_used is NOT incremented here - we only increment when we actually allocate a new frame
+                                returned_frames++;
+                                
+                        }
+                }
+                return frames_allocated;
+        }
+
+        void PageTableRadix::deletePage(IntPtr address)
+        {
+
+                m_log->detailed("Deleting page that corresponds to address: ", SimLog::hex(address));
+                PTFrame *current_frame = root;
+                IntPtr offset = (address >> 39) & 0x1FF;
+
+                int level = levels;
+                int counter = 0;
+
+                while (level > 0)
+                {
+                        offset = (address >> (48 - 9 * (levels - level + 1))) & 0x1FF;
+
+                        if (current_frame->entries[offset].is_pte)
+                        {
+                                m_log->detailed("Found the PTE for address: ", SimLog::hex(address), " at level: ", level, " with offset: ", offset);
+                                current_frame->entries[offset].data.translation.valid = false;
+                                current_frame->entries[offset].data.translation.ppn = -1;
+                                break;
+                        }
+                        else
+                        {
+                                // Move to the next level of the page table
+                                current_frame = current_frame->entries[offset].data.next_level;
+                        }
+                        level--;
+                        counter++;
+                }
+        }
+
+        /**
+         * @brief Allocates physical space for the page table.
+         *
+         * @param size The size of the physical space to allocate.
+         * @return IntPtr The physical address of the allocated space.
+         */
+        IntPtr PageTableRadix::getPhysicalSpace(int size)
+        {
+                // We directly ask it from the VirtuOS
+                MimicOS* os;
+                if (is_guest)
+                        os = Sim()->getMimicOS_VM();
+                else
+                        os = Sim()->getMimicOS();
+
+                return os->getMemoryAllocator()->handle_page_table_allocations(size);
+        }
+    }

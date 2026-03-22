@@ -3,11 +3,28 @@
 #include "trace_manager.h"
 #include "hooks_manager.h"
 #include "config.hpp"
+#include "stats.h"
 
 #include <signal.h>
 #include <stdio.h>
 #include <execinfo.h>
 #include <string.h>
+#include <stdlib.h>
+
+// Helper to save emergency stats before crash/exit
+static void saveEmergencyStats(const char* prefix)
+{
+   if (Sim() && Sim()->getStatsManager())
+   {
+      try {
+         fprintf(stderr, "[SNIPER] Saving emergency stats with prefix '%s'...\n", prefix);
+         Sim()->getStatsManager()->recordStats(prefix);
+         fprintf(stderr, "[SNIPER] Emergency stats saved.\n");
+      } catch (...) {
+         fprintf(stderr, "[SNIPER] Failed to save emergency stats.\n");
+      }
+   }
+}
 
 static void exceptionHandler(int sig, siginfo_t *scp, void *ctxt)
 {
@@ -22,6 +39,9 @@ static void exceptionHandler(int sig, siginfo_t *scp, void *ctxt)
    }
    else
       in_handler = true;
+
+   // Save emergency stats before crashing
+   saveEmergencyStats("crash");
 
    // Hide errors caused by failing SIFT writers, the root cause is the timing model failure
    if (Sim()->getTraceManager())
@@ -51,6 +71,24 @@ static void exceptionHandler(int sig, siginfo_t *scp, void *ctxt)
    raise(sig);
 }
 
+// SIGTERM handler for graceful shutdown (e.g., when killed externally)
+static void handleSigTerm(int sig, siginfo_t *scp, void *ctxt)
+{
+   fprintf(stderr, "\n[SNIPER] Received SIGTERM - performing graceful shutdown...\n");
+   
+   // Save stats before exit
+   saveEmergencyStats("sigterm");
+   
+   // Mark trace as done
+   if (Sim() && Sim()->getTraceManager())
+   {
+      Sim()->getTraceManager()->mark_done();
+   }
+   
+   fprintf(stderr, "[SNIPER] Graceful shutdown complete, exiting.\n");
+   exit(143);  // 128 + 15 (SIGTERM)
+}
+
 static void handleSigUsr1(int sig, siginfo_t *scp, void *ctxt)
 {
    Sim()->getHooksManager()->callHooks(HookType::HOOK_SIGUSR1, 0);
@@ -70,6 +108,10 @@ void registerExceptionHandler()
 
    sa.sa_sigaction = handleSigUsr1;
    sigaction(SIGUSR1, &sa, NULL);
+
+   // Register SIGTERM handler for graceful shutdown
+   sa.sa_sigaction = handleSigTerm;
+   sigaction(SIGTERM, &sa, NULL);
 
    auto signal_to_ignore = Sim()->getCfg()->getInt("general/signals_to_ignore");
    if (signal_to_ignore)

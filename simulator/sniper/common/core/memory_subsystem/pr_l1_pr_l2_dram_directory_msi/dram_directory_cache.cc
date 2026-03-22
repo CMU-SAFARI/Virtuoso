@@ -41,7 +41,7 @@ DramDirectoryCache::DramDirectoryCache(
 
 DramDirectoryCache::~DramDirectoryCache()
 {
-   delete m_replacement_ptrs;
+   delete[] m_replacement_ptrs;
    delete m_directory;
 }
 
@@ -84,14 +84,11 @@ DramDirectoryCache::getDirectoryEntry(IntPtr address, bool modeled)
       }
    }
    //std::cout<<"Finished at : "<<__LINE__<<"\n";
-   // Check in the m_replaced_directory_entry_list
-   std::vector<DirectoryEntry*>::iterator it;
-   for (it = m_replaced_directory_entry_list.begin(); it != m_replaced_directory_entry_list.end(); it++)
+   // Check in the m_replaced_directory_entry_map (O(1) lookup)
+   auto it = m_replaced_directory_entry_map.find(address);
+   if (it != m_replaced_directory_entry_map.end())
    {
-      if ((*it)->getAddress() == address)
-      {
-         return (*it);
-      }
+      return it->second;
    }
    //std::cout<<"Finished at : "<<__LINE__<<"\n";
    return (DirectoryEntry*) NULL;
@@ -128,7 +125,7 @@ DramDirectoryCache::replaceDirectoryEntry(IntPtr replaced_address, IntPtr addres
       DirectoryEntry* replaced_directory_entry = m_directory->getDirectoryEntry(set_index * m_associativity + i);
       if (replaced_directory_entry->getAddress() == replaced_address)
       {
-         m_replaced_directory_entry_list.push_back(replaced_directory_entry);
+         m_replaced_directory_entry_map[replaced_address] = replaced_directory_entry;
 
          DirectoryEntry* directory_entry = m_directory->createDirectoryEntry();
          directory_entry->setAddress(address);
@@ -145,16 +142,12 @@ DramDirectoryCache::replaceDirectoryEntry(IntPtr replaced_address, IntPtr addres
 void
 DramDirectoryCache::invalidateDirectoryEntry(IntPtr address)
 {
-   std::vector<DirectoryEntry*>::iterator it;
-   for (it = m_replaced_directory_entry_list.begin(); it != m_replaced_directory_entry_list.end(); it++)
+   auto it = m_replaced_directory_entry_map.find(address);
+   if (it != m_replaced_directory_entry_map.end())
    {
-      if ((*it)->getAddress() == address)
-      {
-         delete (*it);
-         m_replaced_directory_entry_list.erase(it);
-
-         return;
-      }
+      delete it->second;
+      m_replaced_directory_entry_map.erase(it);
+      return;
    }
 
    // Should not reach here
@@ -166,7 +159,10 @@ DramDirectoryCache::splitAddress(IntPtr address, IntPtr& tag, UInt32& set_index)
 {
    IntPtr cache_block_address = address >> getLogCacheBlockSize();
    tag = cache_block_address >> getLogNumSets();
-   set_index = ((UInt32) cache_block_address) & (getNumSets() - 1);
+   // Use XOR hash to spread addresses across sets and avoid set conflicts
+   // with contiguous physical addresses (e.g., 2MB huge pages)
+   IntPtr xor_hash = cache_block_address ^ (cache_block_address >> getLogNumSets());
+   set_index = ((UInt32) xor_hash) & (getNumSets() - 1);
 
 }
 

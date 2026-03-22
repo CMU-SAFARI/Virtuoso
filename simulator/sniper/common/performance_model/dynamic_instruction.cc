@@ -43,8 +43,9 @@ void DynamicInstruction::accessMemory(Core *core)
 {
    for(UInt8 idx = 0; idx < num_memory; ++idx)
    {
-      if (memory_info[idx].executed && memory_info[idx].hit_where == HitWhere::UNKNOWN)
+      if (memory_info[idx].executed && (memory_info[idx].hit_where == HitWhere::UNKNOWN))
       {
+
          MemoryResult res = core->accessMemory(
             /*instruction.isAtomic()
                ? (info->type == DynamicInstructionInfo::MEMORY_READ ? Core::LOCK : Core::UNLOCK)

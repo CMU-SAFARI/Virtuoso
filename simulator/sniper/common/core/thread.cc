@@ -23,13 +23,6 @@ Thread::Thread(thread_id_t thread_id, app_id_t app_id)
       m_rtn_tracer = Sim()->getRoutineTracer()->getThreadHandler(this);
     memset(&m_os_info, 0, sizeof(m_os_info));
 
-   m_os_info.m_virtuos_app = false;
-   if (app_id == 0 && Sim()->getCfg()->getBool("perf_model/mimicos_host/enabled"))
-   {
-      std:: cout << "[Sniper] MimicOS app/thread detected" << std::endl;
-      m_os_info.m_virtuos_app = true;
-      
-   }
 }
 
 Thread::~Thread()

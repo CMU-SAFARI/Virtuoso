@@ -159,7 +159,7 @@ void setInstrumentationMode(Sift::Mode mode)
 ADDRINT handleMagic(THREADID threadid, const CONTEXT * ctxt, ADDRINT gax, ADDRINT gbx, ADDRINT gcx)
 {
    uint64_t res = gax; // Default: don't modify gax
-
+   
    if (KnobUseResponseFiles.Value() && thread_data[threadid].running && thread_data[threadid].output)
    {
       res = thread_data[threadid].output->Magic(gax, gbx, gcx);
@@ -331,32 +331,14 @@ void openFile(THREADID threadid)
       ++thread_data[threadid].blocknum;
    }
 
-   // If we specified that we want to record a multithreaded application, 
-   // we do not assert when we see a thread other than 0
-   if (!KnobRecordMultithreaded.Value())
+   if (thread_data[threadid].thread_num != 0)
    {
-      if (thread_data[threadid].thread_num != 0)
-      {
-         sift_assert(KnobUseResponseFiles.Value() != 0);
-      }
+      sift_assert(KnobUseResponseFiles.Value() != 0);
    }
 
    char filename[1024] = {0};
    char response_filename[1024] = {0};
-
-   // If we are recording a multithreaded application, we need to create a separate file for each thread
-   // When we record, these files will be opened in the order of thread 0, thread 1, thread 2, etc.
-   // We do not need response files for multithreaded applications as we just use them for simply successfully recording the application
-
-   if (KnobRecordMultithreaded.Value()){
-
-      if (blocksize)
-         sprintf(filename, "%s.%" PRIu64 ".app%" PRId32 ".th%" PRIu64 ".sift", KnobOutputFile.Value().c_str(), thread_data[threadid].blocknum, app_id, thread_data[threadid].thread_num);
-      else
-         sprintf(filename, "%s.app%" PRId32 ".th%" PRIu64 ".sift", KnobOutputFile.Value().c_str(), app_id, thread_data[threadid].thread_num);
-
-   }
-   else if (KnobUseResponseFiles.Value() == 0)
+   if (KnobUseResponseFiles.Value() == 0)
    {
       if (blocksize)
          sprintf(filename, "%s.%" PRIu64 ".sift", KnobOutputFile.Value().c_str(), thread_data[threadid].blocknum);

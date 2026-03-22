@@ -16,8 +16,16 @@
 #include "stats.h"
 #include "topology_info.h"
 #include "cheetah_manager.h"
+#include "trace_thread.h"
+
+
+// Exception handling includes
+#include "misc/exception_handler_base.h"
+#include "exception_handler_factory.h"
 
 #include <cstring>
+
+#include "debug_config.h"
 
 #if 0
    extern Lock iolock;
@@ -81,7 +89,27 @@ Core::Core(SInt32 id)
    , m_instructions_hpi_callback(0)
    , m_instructions_hpi_last(0)
 {
-   LOG_PRINT("Core ctor for: %d", id);
+   std::cout << "Core ctor for core " <<  Sim()->getCfg()->getStringArray("core_debug/name", id)
+             << " with core ID: " <<  id
+             << std::endl;
+   LOG_PRINT("Core ctor for core %s with core ID: %d", Sim()->getCfg()->getStringArray("core_debug/name", id), id);
+
+    log_file = std::ofstream();
+    // Assuming 'name' is a member of a base class or global. If not, this line will cause an error.
+    // Let's assume 'mimicos_name' should be used instead for the log file name.
+    log_file_name = "core." + std::to_string(id) + ".log";
+    log_file_name = std::string(Sim()->getConfig()->getOutputDirectory().c_str()) + "/" + log_file_name;
+    log_file.open(log_file_name);
+
+#if DEBUG_CORE >= DEBUG_BASIC
+    std::cout << "[CORE] Entered core " << id << " ctor" << std::endl;
+
+    if (log_file.is_open()) {
+        log_file  << "[DEBUG] Log file opened successfully: " << log_file_name << std::endl;
+    } else {
+        std::cerr << "[DEBUG] Failed to open log file: " << log_file_name << std::endl;
+    }
+#endif
 
    registerStatsMetric("core", id, "instructions", &m_instructions);
    registerStatsMetric("core", id, "spin_loops", &m_spin_loops);
@@ -91,17 +119,45 @@ Core::Core(SInt32 id)
    Sim()->getStatsManager()->logTopology("hwcontext", id, id);
 
    m_network = new Network(this);
+#if DEBUG_CORE >= DEBUG_BASIC
+   std::cout << "[CORE] NW initialised" << std::endl;
+#endif
 
    m_clock_skew_minimization_client = ClockSkewMinimizationClient::create(this);
+#if DEBUG_CORE >= DEBUG_BASIC
+   std::cout << "[CORE] Clock skew minimization created" << std::endl;
+#endif
 
    m_shmem_perf_model = new ShmemPerfModel();
+#if DEBUG_CORE >= DEBUG_BASIC
+   std::cout << "[CORE] Shmem Perf Model initialised" << std::endl;
+#endif
 
    LOG_PRINT("instantiated memory manager model");
    m_memory_manager = MemoryManagerBase::createMMU(
          Sim()->getCfg()->getString("caching_protocol/type"),
          this, m_network, m_shmem_perf_model);
+#if DEBUG_CORE >= DEBUG_BASIC
+   std::cout << "[CORE] MMU created..." << std::endl;
+#endif
 
+   bool userspace_mimicos_enabled = Sim()->getCfg()->getBool("general/enable_userspace_mimicos");
+   m_exception_handler = ExceptionHandlerFactory::createExceptionHandler(this);
+   if (userspace_mimicos_enabled) {
+      LOG_PRINT("instantiated exception handler for VirtuOS (user-space MimicOS)");
+   }
+   else {
+      LOG_PRINT("instantiated exception handler for Sniper (kernel-space MimicOS)");
+   }
+#if DEBUG_CORE >= DEBUG_BASIC
+   std::cout << "[CORE] Exception Handler created..." << std::endl;
+#endif
+
+   LOG_PRINT("instantiated performance model");
    m_performance_model = PerformanceModel::create(this);
+#if DEBUG_CORE >= DEBUG_BASIC
+   std::cout << "[CORE] Performance Model created..." << std::endl;
+#endif
 }
 
 Core::~Core()
@@ -110,6 +166,7 @@ Core::~Core()
       delete m_cheetah_manager;
    delete m_topology_info;
    delete m_memory_manager;
+   delete m_exception_handler;
    delete m_shmem_perf_model;
    delete m_performance_model;
    if (m_clock_skew_minimization_client)
@@ -361,7 +418,17 @@ Core::initiateMemoryAccess(MemComponent::component_t mem_component,
 
       if (m_cheetah_manager)
          m_cheetah_manager->access(mem_op_type, curr_addr_aligned);
+		
+      TraceThread *trace_thread = Sim()->getTraceManager()->getTraceThread(getThread()->getAppId(), getThread()->getId());
 
+      // If we are in the user thread, we perform translation
+      // If we are in the kernel thread, we skip translation
+      if (trace_thread->getCurrentSiftReader() == trace_thread->getAppSiftReader() && Sim()->getCfg()->getBool("general/enable_userspace_mimicos"))
+      {
+#if DEBUG_CORE >= DEBUG_DETAILED
+         std::cout << "Memory Access: " << curr_addr_aligned << " Offset: " << curr_offset << " in user thread" << std::endl;
+#endif
+      }
       HitWhere::where_t this_hit_where = getMemoryManager()->coreInitiateMemoryAccess(
                eip,
                mem_component,
@@ -468,15 +535,30 @@ Core::accessMemory(lock_signal_t lock_signal, mem_op_t mem_op_type, IntPtr d_add
    {
       if (Sim()->getConfig()->getSimulationMode() == Config::PINTOOL)
       {
+#if DEBUG_CORE >= DEBUG_BASIC
+         log_file << "[Core] Memory Access (sniper-based): addr = " << d_addr << std::endl;
+#endif
          nativeMemOp (NONE, mem_op_type, d_addr, data_buffer, data_size);
       }
       else if (Sim()->getConfig()->getSimulationMode() == Config::STANDALONE)
       {
+#if DEBUG_CORE >= DEBUG_BASIC
+         log_file << "[Core] Memory Access (user-based): addr = " << d_addr << std::endl;
+#endif
          Sim()->getTraceManager()->accessMemory(m_core_id, lock_signal, mem_op_type, d_addr, data_buffer, data_size);
       }
       data_buffer = NULL; // initiateMemoryAccess's data is not used
    }
 
+   TraceThread *trace_thread = Sim()->getTraceManager()->getTraceThread(0,0);
+   if (trace_thread && trace_thread->getCurrentSiftReader() == trace_thread->getAppSiftReader())
+   {
+      // If we are in the user thread, we perform translation
+#if DEBUG_CORE >= DEBUG_DETAILED
+      log_file << "[Core] Memory Access: " << d_addr << " in user thread, performing memory access from eip " << std::hex << eip << std::dec << std::endl;
+#endif
+   }
+   
    if (modeled == MEM_MODELED_NONE)
       return makeMemoryResult(HitWhere::UNKNOWN, SubsecondTime::Zero());
    else

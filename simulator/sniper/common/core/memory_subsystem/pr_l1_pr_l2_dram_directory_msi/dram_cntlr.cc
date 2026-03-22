@@ -25,9 +25,9 @@ DramCntlr::DramCntlr(MemoryManagerBase* memory_manager,
       ShmemPerfModel* shmem_perf_model,
       UInt32 cache_block_size,AddressHomeLookup* _address_home_lookup)
    : DramCntlrInterface(memory_manager, shmem_perf_model, cache_block_size)
+   , address_home_lookup(_address_home_lookup)
    , m_reads(0)
    , m_writes(0)
-   , address_home_lookup(_address_home_lookup)
 
 {
    m_dram_perf_model = DramPerfModel::createDramPerfModel(

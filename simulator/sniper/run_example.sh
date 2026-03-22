@@ -1,22 +1,38 @@
 #!/bin/bash
+# Virtuoso Quick Example
+# Runs a short simulation using binary instrumentation (PIN/SDE) with the `ls` command.
+# Uses the modular config system with ReserveTHP allocator.
 
+set -e
 
-# This script runs the Sniper simulator with a specified configuration file and workload.
-# Usage: ./run_example.sh 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-CONFIG_FILE=./config/virtuoso_configs/virtuoso_baseline.cfg
-
+CONFIG=config/address_translation_schemes/reservethp.cfg
+OUTPUT=./example_output
 WORKLOAD=ls
 
-./run-sniper -c $CONFIG_FILE -d ./example_output --genstats -- $WORKLOAD
+echo "=== Virtuoso Example Simulation ==="
+echo "Config: $CONFIG"
+echo "Workload: $WORKLOAD"
+echo ""
 
+./run-sniper \
+    -c "$CONFIG" \
+    -d "$OUTPUT" \
+    --genstats \
+    -- $WORKLOAD
 
-#Check if the command was successful by looking for sim.stats in the output directory
-
-if [ -f ./example_output/sim.stats ]; then
-    echo "Simulation completed successfully. Output is in ./example_output."
+# Check result
+if [ -f "$OUTPUT/sim.info" ]; then
+    echo ""
+    echo "=== Simulation completed successfully ==="
+    grep "IPC\|Instructions\|Cycles" "$OUTPUT/simulation/sim.out" 2>/dev/null | head -5
 else
-    echo "Simulation failed. Check the configuration and workload."
+    echo ""
+    echo "=== Simulation failed. Check output in $OUTPUT ==="
+    exit 1
 fi
 
-rm -rf ./example_output
+# Cleanup
+rm -rf "$OUTPUT"

@@ -6,8 +6,8 @@
 #include "shmem_perf.h"
 
 DramPerfModelReadWrite::DramPerfModelReadWrite(core_id_t core_id,
-      UInt32 cache_block_size):
-   DramPerfModel(core_id, cache_block_size),
+      UInt32 cache_block_size, const String& suffix):
+   DramPerfModel(core_id, cache_block_size, suffix),
    m_queue_model_read(NULL),
    m_queue_model_write(NULL),
    m_dram_bandwidth(8 * Sim()->getCfg()->getFloat("perf_model/dram/per_controller_bandwidth")), // Convert bytes to bits
@@ -20,15 +20,15 @@ DramPerfModelReadWrite::DramPerfModelReadWrite(core_id_t core_id,
 
    if (Sim()->getCfg()->getBool("perf_model/dram/queue_model/enabled"))
    {
-      m_queue_model_read = QueueModel::create("dram-queue-read", core_id, Sim()->getCfg()->getString("perf_model/dram/queue_model/type"),
+      m_queue_model_read = QueueModel::create("dram-queue-read" + m_suffix, core_id, Sim()->getCfg()->getString("perf_model/dram/queue_model/type"),
                                               m_dram_bandwidth.getRoundedLatency(8 * cache_block_size)); // bytes to bits
-      m_queue_model_write = QueueModel::create("dram-queue-write", core_id, Sim()->getCfg()->getString("perf_model/dram/queue_model/type"),
+      m_queue_model_write = QueueModel::create("dram-queue-write" + m_suffix, core_id, Sim()->getCfg()->getString("perf_model/dram/queue_model/type"),
                                                m_dram_bandwidth.getRoundedLatency(8 * cache_block_size)); // bytes to bits
    }
 
-   registerStatsMetric("dram", core_id, "total-access-latency", &m_total_access_latency);
-   registerStatsMetric("dram", core_id, "total-read-queueing-delay", &m_total_read_queueing_delay);
-   registerStatsMetric("dram", core_id, "total-write-queueing-delay", &m_total_write_queueing_delay);
+   registerStatsMetric("dram" + m_suffix, core_id, "total-access-latency", &m_total_access_latency);
+   registerStatsMetric("dram" + m_suffix, core_id, "total-read-queueing-delay", &m_total_read_queueing_delay);
+   registerStatsMetric("dram" + m_suffix, core_id, "total-write-queueing-delay", &m_total_write_queueing_delay);
 }
 
 DramPerfModelReadWrite::~DramPerfModelReadWrite()

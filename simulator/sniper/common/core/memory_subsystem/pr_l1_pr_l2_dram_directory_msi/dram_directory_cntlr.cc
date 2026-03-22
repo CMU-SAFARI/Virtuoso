@@ -299,7 +299,7 @@ DramDirectoryCntlr::processDirectoryEntryAllocationReq(ShmemReq* shmem_req)
    // We get the entry with the lowest number of sharers
    DirectoryEntry* directory_entry = m_dram_directory_cache->replaceDirectoryEntry(replaced_address, address, true);
 
-   ShmemMsg nullify_msg(ShmemMsg::NULLIFY_REQ, MemComponent::TAG_DIR, MemComponent::TAG_DIR, requester, replaced_address, NULL, 0, &m_dummy_shmem_perf,CacheBlockInfo::block_type_t::NON_PAGE_TABLE);
+   ShmemMsg nullify_msg(ShmemMsg::NULLIFY_REQ, MemComponent::TAG_DIR, MemComponent::TAG_DIR, requester, replaced_address, NULL, 0, &m_dummy_shmem_perf, CacheBlockInfo::block_type_t::DATA);
 
    ShmemReq* nullify_req = new ShmemReq(&nullify_msg, msg_time);
 

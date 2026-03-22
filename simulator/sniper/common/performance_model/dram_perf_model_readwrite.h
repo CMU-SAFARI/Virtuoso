@@ -22,7 +22,7 @@ class DramPerfModelReadWrite : public DramPerfModel
 
    public:
       DramPerfModelReadWrite(core_id_t core_id,
-            UInt32 cache_block_size);
+            UInt32 cache_block_size, const String& suffix = "");
 
       ~DramPerfModelReadWrite();
 

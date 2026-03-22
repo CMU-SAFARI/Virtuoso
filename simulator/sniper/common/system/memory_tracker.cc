@@ -10,8 +10,6 @@
 MemoryTracker::MemoryTracker()
 {
    Sim()->getConfig()->setCacheEfficiencyCallbacks(__ce_get_owner, __ce_notify_access, __ce_notify_evict, (UInt64)this);
-   //Megapage single_megapage(std::atoi(Sim()->getCfg()->getString("perf_model/megapage/size").c_str()) << 20);
-  // m_megapages.push_back(single_megapage);
 }
 
 MemoryTracker::~MemoryTracker()

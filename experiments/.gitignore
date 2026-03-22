@@ -1,0 +1,5 @@
+*.txt
+exp_*/
+.sift_done
+
+common/__pycache__/

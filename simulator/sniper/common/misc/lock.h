@@ -115,11 +115,17 @@ class LockCreator_NullLock : public LockCreator
    public:
       static LockImplementation* create();
 };
+class LockCreator_TicketLock : public LockCreator
+{
+   public:
+      static LockImplementation* create();
+};
 
 typedef TLock<LockCreator_Default> Lock;
 typedef TLock<LockCreator_RwLock> RwLock;
 typedef TLock<LockCreator_Spinlock> SpinLock;
 typedef TLock<LockCreator_NullLock> NullLock;
+typedef TLock<LockCreator_TicketLock> FairLock;
 
 
 /* Helper class: hold a lock for the scope of this object */

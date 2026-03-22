@@ -34,7 +34,11 @@ core_id_t SchedulerStatic::threadCreate(thread_id_t thread_id)
    LOG_ASSERT_ERROR(core_id != INVALID_CORE_ID, "No cores available for spawnThread request.");
 
    app_id_t app_id = Sim()->getThreadManager()->getThreadFromID(thread_id)->getAppId();
+   
+   std::cout << "[SchedulerStatic] Spawning application thread " << thread_id << " from application " << app_id << " to core " << core_id << std::endl;
+
    LOG_PRINT("Scheduler: thread %d from application %d now scheduled to core %d", thread_id, app_id, core_id);
+   
 
    return core_id;
 }

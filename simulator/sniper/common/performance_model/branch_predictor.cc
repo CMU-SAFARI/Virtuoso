@@ -3,6 +3,10 @@
 #include "one_bit_branch_predictor.h"
 #include "pentium_m_branch_predictor.h"
 #include "a53branchpredictor.h"
+#include "perceptron_branch_predictor.h"
+#include "hashed_perceptron_branch_predictor.h"
+#include "gshare_branch_predictor.h"
+#include "tage_branch_predictor.h"
 #include "config.hpp"
 #include "stats.h"
 
@@ -50,6 +54,22 @@ BranchPredictor* BranchPredictor::create(core_id_t core_id)
       }
       else if (type == "a53") {
           return new A53BranchPredictor("branch_predictor", core_id);
+      }
+      else if (type == "perceptron") {
+          UInt32 history_length = cfg->getIntArray("perf_model/branch_predictor/perceptron/history_length", core_id);
+          UInt32 num_perceptrons = cfg->getIntArray("perf_model/branch_predictor/perceptron/num_perceptrons", core_id);
+          return new PerceptronBranchPredictor("branch_predictor", core_id, history_length, num_perceptrons);
+      }
+      else if (type == "hashed_perceptron") {
+          return new HashedPerceptronBranchPredictor("branch_predictor", core_id);
+      }
+      else if (type == "gshare") {
+          UInt32 history_length = cfg->getIntArray("perf_model/branch_predictor/gshare/history_length", core_id);
+          UInt32 table_size = cfg->getIntArray("perf_model/branch_predictor/gshare/table_size", core_id);
+          return new GshareBranchPredictor("branch_predictor", core_id, history_length, table_size);
+      }
+      else if (type == "tage") {
+          return new TAGEBranchPredictor("branch_predictor", core_id);
       }
       else
       {

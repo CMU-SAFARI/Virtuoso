@@ -11,6 +11,9 @@
 
 #include <deque>
 
+
+using namespace std;
+
 class RobTimer
 {
 private:
@@ -45,6 +48,24 @@ private:
          SubsecondTime done;
    };
 
+   class opCheckpoint
+   {
+
+      public:
+         std::vector<DynamicMicroOp*> uops;
+         UInt64 next_seq_base;
+         std::vector<DynamicMicroOp*> getUops() 
+         {
+            return uops;
+         }
+   };
+
+   opCheckpoint* saveCheckpoint();
+   opCheckpoint* m_checkpointed_ops;
+
+
+
+
    const uint64_t dispatchWidth;
    const uint64_t commitWidth;
    const uint64_t windowSize;
@@ -55,6 +76,8 @@ private:
    const bool inorder;
 
    Core *m_core;
+   const CoreModel *m_core_model;
+   Allocator *m_allocator;
 
    typedef CircularQueue<RobEntry> Rob;
    Rob rob;
@@ -73,8 +96,8 @@ private:
    bool will_skip;
    SubsecondTime time_skipped;
 
-   RegisterDependencies* const registerDependencies;
-   MemoryDependencies* const memoryDependencies;
+   RegisterDependencies*  registerDependencies;
+   MemoryDependencies*  memoryDependencies;
 
    int addressMask;
 
@@ -124,6 +147,10 @@ private:
    SubsecondTime m_cpiBranchPredictor;
    SubsecondTime m_cpiSerialization;
    SubsecondTime m_cpiRSFull;
+   
+   bool m_draining;     // When true: execute/commit only, no dispatch
+
+   
 
    std::vector<SubsecondTime> m_cpiInstructionCache;
    std::vector<SubsecondTime> m_cpiDataCache;
@@ -140,20 +167,24 @@ private:
    void countOutstandingMemop(SubsecondTime time);
    void printRob();
 
-   void execute(uint64_t& instructionsExecuted, SubsecondTime& latency);
+   int execute(uint64_t& instructionsExecuted, SubsecondTime& latency);
    SubsecondTime doDispatch(SubsecondTime **cpiComponent);
-   SubsecondTime doIssue();
+   pair<SubsecondTime, int> doIssue();
    SubsecondTime doCommit(uint64_t& instructionsExecuted);
 
-   void issueInstruction(uint64_t idx, SubsecondTime &next_event);
+
+   //returns -42 if a page fault occurred, otherwise returns nothing
+   int issueInstruction(uint64_t idx, SubsecondTime &next_event);
 
 public:
 
-   RobTimer(Core *core, PerformanceModel *perf, const CoreModel *core_model, int misprediction_penalty, int dispatch_width, int window_size);
+   RobTimer(Core *core, PerformanceModel *perf, const CoreModel *core_model, int misprediction_penalty, int dispatch_width, int window_size, Allocator *allocator);
    ~RobTimer();
 
    boost::tuple<uint64_t,SubsecondTime> simulate(const std::vector<DynamicMicroOp*>& insts);
    void synchronize(SubsecondTime time);
+   void drainRob();   // Execute all in-ROB uops; don't fetch/dispatch new ones
+   void flushRobInstant();
 };
 
 #endif /* ROBTIMER_H_ */

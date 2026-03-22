@@ -18,17 +18,16 @@
 #define SIM_CMD_SET_THREAD_NAME 14
 #define SIM_CMD_MALLOC 15
 
-#define SIM_CMD_VIRTU_PIPE 16
-#define SIM_CMD_START_PROCESS 17 /*Ianganz*/
-#define SIM_CMD_VIRTUOS_ALLOCATE 18
-#define SIM_CMD_SIGNAL_VIRTUOS 19
-
-#define SIM_CMD_RECEIVE_FROM_NIC 20
-#define SIM_CMD_SEND_TO_NIC 21
+#define SIM_CMD_START_PROCESS 17 
+#define SIM_CMD_MIMICOS_RESULT 18 
+#define SIM_CMD_CONTEXT_SWITCH 19
+#define SIM_CMD_RECEIVE_MESSAGE 20
 
 #define SIM_OPT_INSTRUMENT_DETAILED 0
 #define SIM_OPT_INSTRUMENT_WARMUP 1
 #define SIM_OPT_INSTRUMENT_FASTFORWARD 2
+
+#include <unordered_map>
 
 #if defined(ARM_64)
 
@@ -137,12 +136,9 @@
 #define SimUser(cmd, arg) SimMagic2(SIM_CMD_USER, cmd, arg)
 #define SimSetInstrumentMode(opt) SimMagic1(SIM_CMD_INSTRUMENT_MODE, opt)
 #define SimInSimulator() (SimMagic0(SIM_CMD_IN_SIMULATOR) != SIM_CMD_IN_SIMULATOR)
-#define SimVirtuPipe(arg0) SimMagic1(SIM_CMD_VIRTU_PIPE, arg0)
 #define SimStartProcess(message) SimMagic1(SIM_CMD_START_PROCESS, message)
-#define SimSendToNic(pkt,size) SimMagic2(SIM_CMD_SEND_TO_NIC, pkt, size)
-#define SimReceiveFromNic(pkt) SimMagic1(SIM_CMD_RECEIVE_FROM_NIC, pkt)
-#define SimSignalAllocateDone() SimMagic0(SIM_CMD_VIRTUOS_ALLOCATE)
-#define SimSignalVirtuos() SimMagic0(SIM_CMD_SIGNAL_VIRTUOS)
-
+#define SimMimicosResult(argc,argv) SimMagic2(SIM_CMD_MIMICOS_RESULT, (unsigned long)(argc), (unsigned long)(argv))
+#define SimContextSwitch() SimMagic0(SIM_CMD_CONTEXT_SWITCH)
+#define SimReceiveMessage(argc, argv) SimMagic2(SIM_CMD_RECEIVE_MESSAGE, (unsigned long)(argc), (unsigned long)(argv))
 
 #endif /* __SIM_API */

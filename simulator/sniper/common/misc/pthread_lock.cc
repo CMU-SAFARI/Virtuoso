@@ -1,4 +1,5 @@
 #include "pthread_lock.h"
+#include "ticket_lock.h"
 
 PthreadLock::PthreadLock()
 {
@@ -33,4 +34,9 @@ __attribute__((weak)) LockImplementation* LockCreator_RwLock::create()
 __attribute__((weak)) LockImplementation* LockCreator_Spinlock::create()
 {
     return new PthreadLock();
+}
+
+__attribute__((weak)) LockImplementation* LockCreator_TicketLock::create()
+{
+    return new TicketLock();
 }

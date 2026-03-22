@@ -13,22 +13,28 @@
 #include "core_model.h"
 #include "rob_contention.h"
 #include "instruction.h"
+#include "trace_thread.h"
+#include "trace_manager.h"
 
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+
+#include "debug_config.h"
 
 // Define to get per-cycle printout of dispatch, issue, writeback stages
 //#define DEBUG_PERCYCLE
 
 // Define to not skip any cycles, but assert that the skip logic is working fine
 //#define ASSERT_SKIP
-
+using namespace std;
 RobTimer::RobTimer(
          Core *core, PerformanceModel *_perf, const CoreModel *core_model,
          int misprediction_penalty,
          int dispatch_width,
-         int window_size)
+         int window_size, 
+         Allocator *_allocator
+      )
       : dispatchWidth(dispatch_width)
       , commitWidth(Sim()->getCfg()->getIntArray("perf_model/core/rob_timer/commit_width", core->getId()))
       , windowSize(window_size) // windowSize = ROB length = 96 for Core2
@@ -38,6 +44,8 @@ RobTimer::RobTimer(
       , m_no_address_disambiguation(!Sim()->getCfg()->getBoolArray("perf_model/core/rob_timer/address_disambiguation", core->getId()))
       , inorder(Sim()->getCfg()->getBoolArray("perf_model/core/rob_timer/in_order", core->getId()))
       , m_core(core)
+      , m_core_model(core_model)
+      , m_allocator(_allocator)
       , rob(window_size + 255)
       , m_num_in_rob(0)
       , m_rs_entries_used(0)
@@ -57,8 +65,10 @@ RobTimer::RobTimer(
       , registerDependencies(new RegisterDependencies())
       , memoryDependencies(new MemoryDependencies())
       , perf(_perf)
+      , m_draining(false)
       , m_cpiCurrentFrontEndStall(NULL)
       , m_mlp_histogram(Sim()->getCfg()->getBoolArray("perf_model/core/rob_timer/mlp_histogram", core->getId()))
+      , m_checkpointed_ops(NULL)
 {
 
    registerStatsMetric("rob_timer", core->getId(), "time_skipped", &time_skipped);
@@ -173,6 +183,75 @@ RobTimer::RobTimer(
 
 }
 
+RobTimer::opCheckpoint* RobTimer::saveCheckpoint()
+{
+   ComponentPeriod insn_period = *(const_cast<ComponentPeriod*>(static_cast<const ComponentPeriod*>(now)));
+
+   opCheckpoint* cp = new opCheckpoint();
+   //Checkpoint the ROB by creating a new set of DynamicMicroOps
+   //and copying the necessary fields from the RobEntry to the DynamicMicroOp
+   for(auto it = rob.begin(); it != rob.end(); ++it)
+   {
+      const RobEntry &entry = *it;
+      auto u = m_core_model->createDynamicMicroOp(m_allocator, entry.uop->getMicroOp(), insn_period);
+   
+      // Copy the necessary fields from the RobEntry to the DynamicMicroOp 
+      // @kanellok: There is something tricky with MemAccess instructions and execLatency() but do not want to risk it now
+      u->setAddress(entry.uop->getAddress());
+      u->setMicroOpTypeOffset(entry.uop->getMicroOpTypeOffset());
+      u->setSquashedCount(entry.uop->getSquashedCount());
+      u->setIntraInstrDependenciesLength(entry.uop->getIntraInstrDependenciesLength());
+
+      if(entry.uop->getMicroOp()->isLoad())
+      {
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+         std::cout << "Checkpointing load uop with address: " << entry.uop->getAddress().address << std::endl;
+#endif
+      }
+      else if(entry.uop->getMicroOp()->isStore())
+      {
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+         std::cout << "Checkpointing store uop with address: " << entry.uop->getAddress().address << std::endl;
+#endif
+      }
+
+      cp->uops.push_back(u);
+   }
+
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+   std::cout << "Checkpoint saved with " << cp->uops.size() << " uops." << std::endl;
+#endif
+   //print the checkpoint
+   int counter = 0;
+   for (int i = 0; i < (int)cp->uops.size(); ++i)
+   {
+      DynamicMicroOp *uop = cp->uops[i];
+
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+      std::cout << "Counter: "<< counter << " Checkpointed uop with sequence number: " << uop->getSequenceNumber();
+#endif
+      if (uop->getMicroOp()->isLoad())
+      {
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+         std::cout << " Load uop with address: " << uop->getAddress().address;
+#endif
+      }
+      else if (uop->getMicroOp()->isStore())
+      {
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+         std::cout << " Store uop with address: " << uop->getAddress().address;
+#endif
+      }
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+      std::cout << std::endl;
+#endif
+      counter++;
+   }
+
+   return cp;
+
+}
+
 RobTimer::~RobTimer()
 {
    for(Rob::iterator it = this->rob.begin(); it != this->rob.end(); ++it)
@@ -255,7 +334,57 @@ boost::tuple<uint64_t,SubsecondTime> RobTimer::simulate(const std::vector<Dynami
    uint64_t totalInsnExec = 0;
    SubsecondTime totalLat = SubsecondTime::Zero();
 
-   for (std::vector<DynamicMicroOp*>::const_iterator it = insts.begin(); it != insts.end(); it++ )
+   //Check if there is an available checkpoint to restore
+
+   //If there is a checkpoint, add all its elements in the correct position in the insts vector
+   // For example, whatever was in the ROB's position 0, should be the first element in the insts vector
+   // and so on...
+
+   //create a new vector to hold the instructions of the checkpoint and the new instructions
+   std::vector<DynamicMicroOp*> newInsts;
+   int app_id  = m_core->getThread()->getAppId();
+   int thread_id = m_core->getThread()->getId();
+   TraceThread *trace_thread = Sim()->getTraceManager()->getTraceThread(app_id, thread_id);
+
+   if (trace_thread && (trace_thread->getCurrentSiftReader() == trace_thread->getAppSiftReader()) && m_checkpointed_ops)
+   {
+
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+      std::cout << "Restoring checkpoint with " << m_checkpointed_ops->uops.size() << " uops." << std::endl;
+#endif
+      // print the loads/stores in the checkpoint
+      for (unsigned int i = 0; i < m_checkpointed_ops->uops.size(); ++i)
+      {
+         DynamicMicroOp *uop = m_checkpointed_ops->uops[i];
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+         std::cout << "Checkpointed uop with sequence number: " << uop->getSequenceNumber() << std::endl;
+#endif
+         if (uop->getMicroOp()->isLoad())
+         {
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+            std::cout << "  Load uop with address: " << uop->getAddress().address << std::endl;
+#endif
+         }
+         else if (uop->getMicroOp()->isStore())
+         {
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+            std::cout << "  Store uop with address: " << uop->getAddress().address << std::endl;
+#endif
+         }
+      } 
+      for (unsigned int i = 0; i < m_checkpointed_ops->uops.size(); ++i)
+      {
+         DynamicMicroOp *uop = m_checkpointed_ops->uops[i];
+         newInsts.push_back(uop);
+      }
+      newInsts.insert(newInsts.end(), insts.begin(), insts.end());
+      m_checkpointed_ops = NULL; // Clear the checkpoint after using it
+   }
+   else{
+      newInsts = insts;
+   }
+
+   for (std::vector<DynamicMicroOp*>::const_iterator it = newInsts.begin(); it != newInsts.end(); it++ )
    {
       if ((*it)->isSquashed())
       {
@@ -265,6 +394,7 @@ boost::tuple<uint64_t,SubsecondTime> RobTimer::simulate(const std::vector<Dynami
 
       RobEntry *entry = &this->rob.next();
       entry->init(*it, nextSequenceNumber++);
+      
 
       // Add = calculate dependencies, add yourself to list of depenants
       // If no dependants in window: set ready = now()
@@ -367,7 +497,7 @@ boost::tuple<uint64_t,SubsecondTime> RobTimer::simulate(const std::vector<Dynami
       }
 
       // If there are any dependencies to be removed, do this after iterating over them (don't mess with the list we're reading)
-      LOG_ASSERT_ERROR(num_dtr < sizeof(deps_to_remove)/sizeof(8), "Have to remove more dependencies than I expected");
+      LOG_ASSERT_ERROR(num_dtr < sizeof(deps_to_remove)/sizeof(uint64_t), "Have to remove more dependencies than I expected");
       for(uint64_t i = 0; i < num_dtr; ++i)
          entry->uop->removeDependency(deps_to_remove[i]);
       if (entry->uop->getDependenciesLength() == 0)
@@ -393,13 +523,17 @@ boost::tuple<uint64_t,SubsecondTime> RobTimer::simulate(const std::vector<Dynami
    {
       uint64_t instructionsExecuted;
       SubsecondTime latency;
-      execute(instructionsExecuted, latency);
+      int exception = execute(instructionsExecuted, latency);
+      if (exception == -42)
+         break;
       totalInsnExec += instructionsExecuted;
       totalLat += latency;
       if (latency == SubsecondTime::Zero())
          break;
    }
 
+   //printRob();
+   
    return boost::tuple<uint64_t,SubsecondTime>(totalInsnExec, totalLat);
 }
 
@@ -446,7 +580,12 @@ SubsecondTime RobTimer::doDispatch(SubsecondTime **cpiComponent)
 
       while(m_num_in_rob < windowSize)
       {
-         LOG_ASSERT_ERROR(m_num_in_rob < rob.size(), "Expected sufficient uops for dispatching in pre-ROB buffer, but didn't find them");
+         if (m_num_in_rob >= rob.size())
+         {
+            if (m_draining) break;
+            LOG_ASSERT_ERROR(false, "Expected sufficient uops for dispatching in pre-ROB buffer, but didn't find them");
+         }
+        
          RobEntry *entry = &rob.at(m_num_in_rob);
          DynamicMicroOp &uop = *entry->uop;
 
@@ -564,13 +703,13 @@ SubsecondTime RobTimer::doDispatch(SubsecondTime **cpiComponent)
       return std::min(frontend_stalled_until, next_event);
 }
 
-void RobTimer::issueInstruction(uint64_t idx, SubsecondTime &next_event)
+int RobTimer::issueInstruction(uint64_t idx, SubsecondTime &next_event)
 {
    RobEntry *entry = &rob[idx];
    DynamicMicroOp &uop = *entry->uop;
 
    if ((uop.getMicroOp()->isLoad() || uop.getMicroOp()->isStore())
-      && uop.getDCacheHitWhere() == HitWhere::UNKNOWN)
+      && (uop.getDCacheHitWhere() == HitWhere::UNKNOWN))
    {
       MemoryResult res = m_core->accessMemory(
          Core::NONE,
@@ -582,6 +721,21 @@ void RobTimer::issueInstruction(uint64_t idx, SubsecondTime &next_event)
          uop.getMicroOp()->getInstruction() ? uop.getMicroOp()->getInstruction()->getAddress() : static_cast<uint64_t>(NULL),
          now.getElapsedTime()
       );
+
+      // std::cout << "Accessing memory for uop: " << uop.getMicroOp()->toShortString() << " at address: " << uop.getAddress().address << "and sequence number: " << uop.getSequenceNumber() << std::endl;
+      // std::cout << "Memory access result: hit_where=" << HitWhereString(res.hit_where) << ", latency=" << res.latency << std::endl;
+      if (res.hit_where == HitWhere::PAGE_FAULT)
+      {
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+         std::cout << "Page fault for uop: " << uop.getMicroOp()->toShortString() << std::endl;
+#endif
+         m_checkpointed_ops = saveCheckpoint();
+         //printRob();
+         flushRobInstant();
+         //printRob();
+         return -42;
+      }
+
       uint64_t latency = SubsecondTime::divideRounded(res.latency, now.getPeriod());
 
       uop.setExecLatency(uop.getExecLatency() + latency); // execlatency already contains bypass latency
@@ -692,9 +846,10 @@ void RobTimer::issueInstruction(uint64_t idx, SubsecondTime &next_event)
          std::cout<<"-- branch resolve"<<std::endl;
       #endif
    }
+   return 0;
 }
-
-SubsecondTime RobTimer::doIssue()
+// This function answers the question: "When can I issue the next instruction?"
+pair<SubsecondTime,int> RobTimer::doIssue()
 {
    uint64_t num_issued = 0;
    SubsecondTime next_event = SubsecondTime::MaxTime();
@@ -702,6 +857,8 @@ SubsecondTime RobTimer::doIssue()
 
    if (m_rob_contention)
       m_rob_contention->initCycle(now);
+   
+   int ret = 0;
 
    for(uint64_t i = 0; i < m_num_in_rob; ++i)
    {
@@ -766,11 +923,15 @@ SubsecondTime RobTimer::doIssue()
       if (canIssue && m_rob_contention && ! m_rob_contention->tryIssue(*uop))
          canIssue = false;          // blocked by structural hazard
 
-
       if (canIssue)
       {
          num_issued++;
-         issueInstruction(i, next_event);
+         ret = issueInstruction(i, next_event);
+         if (ret == -42)
+         {
+            // Page fault, checkpoint saved, ROB flushed
+            return std::make_pair(now+1ul, ret);
+         }
 
          // Calculate memory-level parallelism (MLP) for long-latency loads (but ignore overlapped misses)
          if (uop->getMicroOp()->isLoad() && uop->isLongLatencyLoad() && uop->getDCacheHitWhere() != HitWhere::L1_OWN)
@@ -825,7 +986,7 @@ SubsecondTime RobTimer::doIssue()
       }
    }
 
-   return next_event;
+   return std::make_pair(next_event, ret);
 }
 
 SubsecondTime RobTimer::doCommit(uint64_t& instructionsExecuted)
@@ -871,7 +1032,7 @@ SubsecondTime RobTimer::doCommit(uint64_t& instructionsExecuted)
       return SubsecondTime::MaxTime();
 }
 
-void RobTimer::execute(uint64_t& instructionsExecuted, SubsecondTime& latency)
+int RobTimer::execute(uint64_t& instructionsExecuted, SubsecondTime& latency)
 {
    latency = SubsecondTime::Zero();
    instructionsExecuted = 0;
@@ -884,12 +1045,12 @@ void RobTimer::execute(uint64_t& instructionsExecuted, SubsecondTime& latency)
 
 
    // If frontend not stalled
-   if (frontend_stalled_until <= now)
+   if (!m_draining && frontend_stalled_until <= now)
    {
       if (rob.size() < m_num_in_rob + 2*dispatchWidth)
       {
          // We don't have enough instructions to dispatch <dispatchWidth> new ones. Ask for more before doing anything this cycle.
-         return;
+         return 0;
       }
    }
 
@@ -898,7 +1059,13 @@ void RobTimer::execute(uint64_t& instructionsExecuted, SubsecondTime& latency)
    // Decode stage is not modeled, assumes the decoders can keep up with (up to) dispatchWidth uops per cycle
 
    SubsecondTime next_dispatch = doDispatch(&cpiComponent);
-   SubsecondTime next_issue    = doIssue();
+   auto [next_issue,precise_exception]  = doIssue();
+
+   if (precise_exception == -42)
+   {
+      return precise_exception; // Page fault, checkpoint saved, ROB flushed
+   }
+
    SubsecondTime next_commit   = doCommit(instructionsExecuted);
 
 
@@ -950,6 +1117,7 @@ void RobTimer::execute(uint64_t& instructionsExecuted, SubsecondTime& latency)
 
    LOG_ASSERT_ERROR(cpiComponent != NULL, "We expected cpiComponent to be set by doDispatch, but it wasn't");
    *cpiComponent += latency;
+   return 0; // No exception
 }
 
 void RobTimer::countOutstandingMemop(SubsecondTime time)
@@ -1021,4 +1189,73 @@ void RobTimer::printRob()
          std::cout<<"(dynamic)";
       std::cout<<std::endl;
    }
+}
+
+void RobTimer::drainRob()
+{
+   //printRob();
+   if (m_draining || rob.size() == 0)
+      return;
+
+   bool prev_draining = m_draining;
+   m_draining = true;
+
+   // We still honor any ongoing i-cache misses and branch penalties for the
+   // already-generated uops in pre-ROB, but we do NOT fetch new work here.
+
+   while (rob.size() > 0)    // IMPORTANT: drain both pre-ROB and ROB
+   {
+      uint64_t executed = 0;
+      SubsecondTime lat = SubsecondTime::Zero();
+      execute(executed, lat);
+
+      // Safety net: ensure forward progress if next_event was Max
+      if (lat == SubsecondTime::Zero())
+         now += now.getPeriod();
+   }
+
+   m_draining = prev_draining;
+
+   // Make it easy to resume immediately next cycle
+   if (frontend_stalled_until > now)
+      frontend_stalled_until = now;
+
+   // printRob();
+}
+
+void RobTimer::flushRobInstant()
+{
+    // Free all uops in ROB
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+   printRob();
+#endif
+   while (!rob.empty())
+   {
+      auto& entry = rob.front();
+      entry.free();
+      rob.pop();
+   }
+
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+    std::cout << "Size of ROB is now " << rob.size() << std::endl;
+#endif
+
+    // Reset state
+    m_num_in_rob = 0;
+    m_rs_entries_used = 0;
+
+   delete registerDependencies;
+   delete memoryDependencies;
+
+   registerDependencies = new RegisterDependencies();
+   memoryDependencies = new MemoryDependencies();
+   m_producerInsDistance.resize(windowSize, 0);
+
+    frontend_stalled_until = now;
+    in_icache_miss = false;
+
+#if DEBUG_ROB_TIMER >= DEBUG_BASIC
+    std::cout << "ROB flushed instantly at time " << now << std::endl;
+    std::cout << "Sequece number is at" << nextSequenceNumber << std::endl;
+#endif
 }

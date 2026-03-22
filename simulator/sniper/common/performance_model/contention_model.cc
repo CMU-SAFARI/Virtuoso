@@ -168,37 +168,11 @@ ContentionModel::getCompletionTime(SubsecondTime t_start, SubsecondTime t_delay,
    if (t_start == SubsecondTime::Zero())
       t_end = t_delay;
 
-   else if (t_start < m_t_last)
-   {
-      // if (m_name == "ptw.mshr"){
-      //    std::cout << "Out of order PTW so: reset " << std::endl;
-      // }
-      /* Out of order packet. Assume no congestion, only transfer latency. */
-      t_end = t_start + t_delay;
-
-      ++m_n_outoforder;
-
-      #if 1
-      /* Update time of last seen item */
-      m_t_last = t_start;
-
-      /* Reset all counters to start again from now */
-      m_time[0].first = t_end;
-      m_time[0].second = tag;
-      for(UInt32 i = 1; i < m_num_outstanding; ++i)
-      {
-         m_time[i].first = SubsecondTime::Zero();
-         m_time[i].second = 0;
-      }
-      #endif
-
-   }
    else
    {
-
-      // if (m_name == "ptw.mshr"){
-      //    std::cout << "In order PTW so: reset " << std::endl;
-      // }
+      // Track out-of-order arrivals for statistics only
+      if (t_start < m_t_last)
+         ++m_n_outoforder;
 
       if (t_start == m_t_last)
          m_n_simultaneous ++;
@@ -236,8 +210,9 @@ ContentionModel::getCompletionTime(SubsecondTime t_start, SubsecondTime t_delay,
       /* Update statistics */
       m_total_delay += t_begin - t_start;
 
-      /* Update time of last seen item */
-      m_t_last = t_start;
+      /* Update time of last seen item (use max to handle OoO properly) */
+      if (t_start > m_t_last)
+         m_t_last = t_start;
    }
 
    ++m_n_requests;

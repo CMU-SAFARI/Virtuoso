@@ -15,7 +15,7 @@ namespace PrL1PrL2DramDirectoryMSI
       m_data_buf(NULL),
       m_data_length(0),
       m_perf(perf),
-      m_block_type(CacheBlockInfo::block_type_t::NON_PAGE_TABLE)
+      m_block_type(CacheBlockInfo::block_type_t::DATA)
    {}
 
    ShmemMsg::ShmemMsg(msg_t msg_type,

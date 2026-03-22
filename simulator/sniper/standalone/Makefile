@@ -22,7 +22,12 @@ SOURCES = $(shell ls $(SIM_ROOT)/standalone/*.cc)
 OBJECTS = $(patsubst %.c,%.o,$(patsubst %.cc,%.o,$(SOURCES)))
 
 ## build rules
+# Use SNIPER_DEV=1 to build lib/sniper_dev instead of lib/sniper
+ifeq ($(SNIPER_DEV),1)
+TARGET = $(SIM_ROOT)/lib/sniper_dev
+else
 TARGET = $(SIM_ROOT)/lib/sniper
+endif
 
 all: $(TARGET)
 

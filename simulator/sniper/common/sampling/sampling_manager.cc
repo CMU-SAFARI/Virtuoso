@@ -29,8 +29,11 @@ SamplingManager::SamplingManager(void)
 
    LOG_ASSERT_ERROR(Sim()->getConfig()->getSimulationMode() == Config::PINTOOL, "Sampling is only supported in Pin mode");
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
    Sim()->getHooksManager()->registerHook(HookType::HOOK_INSTR_COUNT, (HooksManager::HookCallbackFunc)SamplingManager::hook_instr_count, (UInt64)this);
    Sim()->getHooksManager()->registerHook(HookType::HOOK_PERIODIC, (HooksManager::HookCallbackFunc)SamplingManager::hook_periodic, (UInt64)this);
+#pragma GCC diagnostic pop
 
    m_sampling_provider = SamplingProvider::create();
    m_sampling_algorithm = SamplingAlgorithm::create(this);

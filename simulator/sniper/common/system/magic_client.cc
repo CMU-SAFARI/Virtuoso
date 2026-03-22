@@ -34,12 +34,10 @@ UInt64 handleMagicInstruction(thread_id_t thread_id, UInt64 cmd, UInt64 arg0, UI
    case SIM_CMD_MHZ_GET:
    case SIM_CMD_SET_THREAD_NAME:
    case SIM_CMD_MALLOC:
-   case SIM_CMD_VIRTU_PIPE:
    case SIM_CMD_START_PROCESS:
-   case SIM_CMD_VIRTUOS_ALLOCATE:
-   case SIM_CMD_SIGNAL_VIRTUOS:
-   case SIM_CMD_SEND_TO_NIC:
-   case SIM_CMD_RECEIVE_FROM_NIC:
+   case SIM_CMD_MIMICOS_RESULT:
+   case SIM_CMD_CONTEXT_SWITCH:
+   case SIM_CMD_RECEIVE_MESSAGE:
       return handleMagic(thread_id, cmd, arg0, arg1);
    case SIM_CMD_PROC_ID:
    {

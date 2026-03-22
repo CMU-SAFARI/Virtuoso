@@ -8,6 +8,10 @@
 #include "shmem_perf_model.h"
 #include "nuca_cache.h"
 #include "pr_l1_pr_l2_dram_directory_msi/shmem_msg.h"
+#include "config.hpp"
+#include "mmu_cache_interface.h"
+
+namespace ParametricDramDirectoryMSI { class MemoryManagementUnitBase; }
 
 void MemoryManagerNetworkCallback(void *obj, NetPacket packet);
 
@@ -18,6 +22,7 @@ public:
    {
       PARAMETRIC_DRAM_DIRECTORY_MSI,
       FAST_NEHALEM,
+      FAST_DETAILED,
       NUM_CACHING_PROTOCOL_TYPES
    };
 
@@ -25,6 +30,7 @@ private:
    Core *m_core;
    Network *m_network;
    ShmemPerfModel *m_shmem_perf_model;
+   bool m_userspace_mimicos_enabled; // Userspace MimicOS enabled config
 
    void parseMemoryControllerList(String &memory_controller_positions, std::vector<core_id_t> &core_list_from_cfg_file, SInt32 application_core_count);
 
@@ -40,6 +46,7 @@ public:
                                                                                        m_network(network),
                                                                                        m_shmem_perf_model(shmem_perf_model)
    {
+      m_userspace_mimicos_enabled = Sim()->getCfg()->getBool("general/enable_userspace_mimicos");
    }
    virtual ~MemoryManagerBase() {}
 
@@ -95,9 +102,16 @@ public:
    virtual NucaCache *getNucaCache() = 0;
    virtual Cache *getCache(MemComponent::component_t mem_component) = 0;
 
+   // MMU cache interface — allows any memory manager to provide cache access for PTW
+   virtual MMUCacheInterface *getCacheCntlrAt(core_id_t core_id, MemComponent::component_t mem_component) { return nullptr; }
+   virtual void tagCachesBlockType(IntPtr address, CacheBlockInfo::block_type_t btype) {}
+
+   // MMU access — allows TLB prefetchers to retrieve the MMU
+   virtual ParametricDramDirectoryMSI::MemoryManagementUnitBase *getMMU() { return nullptr; }
+
    Core *getCore() { return m_core; }
 
-   virtual void sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::msg_t msg_type, MemComponent::component_t sender_mem_component, MemComponent::component_t receiver_mem_component, core_id_t requester, core_id_t receiver, IntPtr address, Byte *data_buf = NULL, UInt32 data_length = 0, HitWhere::where_t where = HitWhere::UNKNOWN, ShmemPerf *perf = NULL, ShmemPerfModel::Thread_t thread_num = ShmemPerfModel::NUM_CORE_THREADS, CacheBlockInfo::block_type_t block_type = CacheBlockInfo::block_type_t::NON_PAGE_TABLE) = 0;
+   virtual void sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::msg_t msg_type, MemComponent::component_t sender_mem_component, MemComponent::component_t receiver_mem_component, core_id_t requester, core_id_t receiver, IntPtr address, Byte *data_buf = NULL, UInt32 data_length = 0, HitWhere::where_t where = HitWhere::UNKNOWN, ShmemPerf *perf = NULL, ShmemPerfModel::Thread_t thread_num = ShmemPerfModel::NUM_CORE_THREADS, CacheBlockInfo::block_type_t block_type = CacheBlockInfo::block_type_t::DATA) = 0;
    virtual void broadcastMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::msg_t msg_type, MemComponent::component_t sender_mem_component, MemComponent::component_t receiver_mem_component, core_id_t requester, IntPtr address, Byte *data_buf = NULL, UInt32 data_length = 0, ShmemPerf *perf = NULL, ShmemPerfModel::Thread_t thread_num = ShmemPerfModel::NUM_CORE_THREADS) = 0;
 
    static CachingProtocol_t parseProtocolType(String &protocol_type);
@@ -105,6 +119,12 @@ public:
                                        Core *core,
                                        Network *network,
                                        ShmemPerfModel *shmem_perf_model);
+
+   // get_is_userspace_mimicos_enabled
+   bool getIsUserspaceMimicosEnabled() const
+   {
+      return m_userspace_mimicos_enabled;
+   }
 };
 
 #endif /* __MEMORY_MANAGER_BASE_H__ */
