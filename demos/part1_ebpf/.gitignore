@@ -1,0 +1,6 @@
+instrument
+instrument.skel.h
+instrument.bpf.o
+minor_fault_stress
+plots/
+*.log

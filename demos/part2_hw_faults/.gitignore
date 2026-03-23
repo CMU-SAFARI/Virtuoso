@@ -1,0 +1,4 @@
+results_baseline/
+results_hwfaults/
+*.stdout.log
+plots/
