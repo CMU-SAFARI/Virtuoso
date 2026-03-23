@@ -117,8 +117,7 @@ namespace ParametricDramDirectoryMSI
      * @param _nested_mmu     Optional nested MMU for virtualization
      */
 	MemoryManagementUnitHWFault::MemoryManagementUnitHWFault(Core *_core, MemoryManagerBase *_memory_manager, ShmemPerfModel *_shmem_perf_model, String _name, MemoryManagementUnitBase *_nested_mmu)
-	: MemoryManagementUnitBase(_core, _memory_manager, _shmem_perf_model, _name, _nested_mmu), memory_manager(_memory_manager),
-                    hw_fault_handler(0,0,12)
+	: MemoryManagementUnitBase(_core, _memory_manager, _shmem_perf_model, _name, _nested_mmu), memory_manager(_memory_manager)
 	{
 		std::cout << std::endl;
 		std::cout << "[MMU] Initializing MMU for core " << core->getId() << std::endl;
@@ -179,15 +178,17 @@ namespace ParametricDramDirectoryMSI
      */
     void MemoryManagementUnitHWFault::instantiateHWFaultHandler()
     {
-        int delegated_memory_size = 4096; // In pages of 4KB
-        hw_fault_handler = HWFaultHandler(0, delegated_memory_size*4096, 12);
+        int delegated_memory_size = 40960; // In pages of 4KB (160MB pool)
+        hw_fault_handler = HWFaultHandler(0, (IntPtr)delegated_memory_size * 4096, 12);
 
-        int tag_array_entry_size = 8; // Each entry is 8 bytes (IntPtr)
-        // Number of pages needed to store the tag array: (entries * bytes_per_entry) / page_size
-        IntPtr tag_array_size = (delegated_memory_size * tag_array_entry_size + 4095) / 4096; // ceil division
-
+        int tag_array_entry_size = 8;
+        IntPtr tag_array_size = (delegated_memory_size * tag_array_entry_size + 4095) / 4096;
         hw_fault_handler.tag_array_start_ppn = 0;
         hw_fault_handler.tag_array_end_ppn = tag_array_size - 1;
+
+        hw_fault_latency = SubsecondTime::NS(50);
+        std::cout << "[MMU HW_FAULT] Delegated pool: " << delegated_memory_size << " pages ("
+                  << (delegated_memory_size * 4 / 1024) << " MB), HW fault latency: 50 ns" << std::endl;
     }
 
     /**
@@ -241,7 +242,9 @@ namespace ParametricDramDirectoryMSI
 		registerStatsMetric(name, core->getId(), "total_tlb_latency", &translation_stats.total_tlb_latency);
 		registerStatsMetric(name, core->getId(), "total_translation_latency", &translation_stats.total_translation_latency);
 		registerStatsMetric(name, core->getId(), "total_fault_latency", &translation_stats.total_fault_latency);
-
+		registerStatsMetric(name, core->getId(), "total_hw_fault_latency", &translation_stats.total_hw_fault_latency);
+		registerStatsMetric(name, core->getId(), "page_faults_hw_handled", &translation_stats.page_faults_hw_handled);
+		registerStatsMetric(name, core->getId(), "page_faults_os_handled", &translation_stats.page_faults_os_handled);
 
 		// This statistic can be used to compare it against the *.active counter which is exposed through performance counters in a real system
 		registerStatsMetric(name, core->getId(), "walker_is_active", &translation_stats.walker_is_active);
@@ -506,56 +509,42 @@ namespace ParametricDramDirectoryMSI
 			// Declare ptw_result outside the loop so it's accessible after
 			PTWOutcome ptw_result;
 
-			// Loop to handle page faults: perform PTW, handle fault if needed, retry
+			// Loop: perform PTW, handle fault if needed, always retry.
+			// HW pool only determines fault latency (50ns vs full OS trap).
+			bool hw_handled_this_fault = false;
 			do {
 				ptw_result = performPTW(address, modeled, count, false, eip, lock, page_table, restart_walk_after_fault, instruction);
-				total_walk_latency = ptw_result.latency; // Total walk latency is only the time it takes to walk the page table (excluding page faults)
-				// If the page fault latency is greater than zero, we need to charge the page fault latency
+				total_walk_latency = ptw_result.latency;
 				caused_page_fault = ptw_result.page_fault;
 
-				if (caused_page_fault){
-					had_page_fault = true;  // Track that a fault occurred
-					// ============================================================
-					// PHASE 3: Hardware Fault Handler (delegated memory)
-					// ============================================================
-					// Try to allocate page from delegated memory pool in hardware.
-
-					IntPtr result = hw_fault_handler.handleFault(address);
-					if (result != static_cast<IntPtr>(-1)){
-						// HW fault handler succeeded - page allocated from pool
-						caused_page_fault = false;
-						ppn_result = result;
-						page_size = 12; // We assume that the page size is 4KB
-					}
-					else {
-						// HW fault handler failed (pool exhausted), use kernel exception handler
-						if (!userspace_mimicos_enabled)
-						{
-							log_file << "[MMU] HW fault handler failed, calling exception handler" << std::endl;
-							ExceptionHandlerBase *handler = Sim()->getCoreManager()->getCoreFromID(core->getId())->getExceptionHandler();
-							ExceptionHandlerBase::FaultCtx fault_ctx{};
-							fault_ctx.vpn = address >> 12;
-							fault_ctx.page_table = page_table;
-							fault_ctx.alloc_in.metadata_frames = ptw_result.requested_frames;
-							handler->handle_page_fault(fault_ctx);
-							
-							log_file << "[MMU] Page fault handled, restarting PTW for address: " << address << std::endl;
-							// Loop will retry PTW after fault is handled
-						}
-					}
-				}
-
-				// TODO @vlnitu: uncomment lines below after debug
-				if (count)
-				{
+				if (count) {
 					translation_stats.total_walk_latency += total_walk_latency;
 					translation_stats.page_table_walks++;
 				}
 
-				if (caused_page_fault)
-				{
-					log_file << "[MMU] Page Fault caused in kernel-space (Sniper) by address: " << address << " at time " << shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS() << std::endl;
+				if (caused_page_fault) {
+					had_page_fault = true;
 					translation_stats.page_faults++;
+					hw_handled_this_fault = false;
+
+					bool hw_can_handle = hw_fault_handler.canHandleFault(address);
+
+					if (!userspace_mimicos_enabled) {
+						ExceptionHandlerBase *handler = Sim()->getCoreManager()->getCoreFromID(core->getId())->getExceptionHandler();
+						ExceptionHandlerBase::FaultCtx fault_ctx{};
+						fault_ctx.vpn = address >> 12;
+						fault_ctx.page_table = page_table;
+						fault_ctx.alloc_in.metadata_frames = ptw_result.requested_frames;
+						handler->handle_page_fault(fault_ctx);
+
+						if (hw_can_handle) {
+							hw_fault_handler.recordMapping(address);
+							hw_handled_this_fault = true;
+							translation_stats.page_faults_hw_handled++;
+						} else {
+							translation_stats.page_faults_os_handled++;
+						}
+					}
 				}
 			} while (caused_page_fault && !userspace_mimicos_enabled);
 			
@@ -579,33 +568,28 @@ namespace ParametricDramDirectoryMSI
 			4) Total fault latency
 			*/
 
-			// Charge page fault handling latency if a fault occurred during the loop
+			// Charge fault latency: HW-handled -> 50ns, OS-handled -> full OS latency
 			if (had_page_fault && !userspace_mimicos_enabled)
 			{
-				total_fault_latency = Sim()->getMimicOS()->getPageFaultLatency();
-				if (count)
-				{
-					translation_stats.total_fault_latency += total_fault_latency;
+				if (hw_handled_this_fault) {
+					total_fault_latency = hw_fault_latency;
+					if (count)
+						translation_stats.total_hw_fault_latency += total_fault_latency;
+				} else {
+					total_fault_latency = Sim()->getMimicOS()->getPageFaultLatency();
 				}
+				if (count)
+					translation_stats.total_fault_latency += total_fault_latency;
 			}
 
 			pt_walker_entry.completion_time = time_for_pt + delay + total_walk_latency + total_fault_latency;
 			pt_walkers->allocate(pt_walker_entry);
 
-			/* 
-			We need to set the time to the time after the PTW is completed. 
-			This is done so that the memory manager sends the request to the cache hierarchy after the PTW is completed
-			*/
-
-			if (had_page_fault && !userspace_mimicos_enabled){
+			if (had_page_fault && !userspace_mimicos_enabled) {
 				PseudoInstruction *i = new PageFaultRoutineInstruction(total_fault_latency);
 				getCore()->getPerformanceModel()->queuePseudoInstruction(i);
-				shmem_perf_model->setElapsedTime(ShmemPerfModel::_USER_THREAD, pt_walker_entry.completion_time);
 			}
-			else{
-				shmem_perf_model->setElapsedTime(ShmemPerfModel::_USER_THREAD, pt_walker_entry.completion_time);
-			}
-
+			shmem_perf_model->setElapsedTime(ShmemPerfModel::_USER_THREAD, pt_walker_entry.completion_time);
 
 			ppn_result = ptw_result.ppn;
 			page_size = ptw_result.page_size;
@@ -718,7 +702,7 @@ namespace ParametricDramDirectoryMSI
 		}
 
 		
-		translation_stats.total_translation_latency += charged_tlb_latency + total_walk_latency;
+		translation_stats.total_translation_latency += charged_tlb_latency + total_walk_latency + total_fault_latency;
 
 		// ====================================================================
 		// PHASE 5: Calculate Physical Address
