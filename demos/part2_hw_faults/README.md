@@ -4,118 +4,124 @@
 
 ## Overview
 
-In Part 1 you measured the cost of OS-handled minor page faults: 2--5 us per
-fault, thousands of instructions, and multiple LLC misses.  In this exercise
-you will use the **Virtuoso** simulation framework to prototype a *hardware
-page fault handler* that resolves simple faults without trapping into the OS
-kernel.
+In Part 1 you measured the cost of OS-handled minor page faults on a real
+system: 2-5 us per fault, thousands of instructions.  In this exercise you
+will use the **Virtuoso** simulation framework to prototype a *hardware page
+fault handler* that resolves faults without the full OS trap overhead.
 
-Virtuoso extends the Sniper multi-core simulator with a full MMU model,
-including TLB hierarchies, page table walkers, page tables, and physical
-memory allocators.  The `hw_fault` MMU design adds a **HWFaultHandler** --
-a hardware-managed pool of pre-allocated physical pages -- that can satisfy
-demand-paging faults in tens of nanoseconds instead of microseconds.
+## Background: Why are page faults expensive?
 
-## Architecture
+A traditional page fault goes through this path:
 
 ```
-Traditional Page Fault Flow:
-  TLB Miss -> PTW -> Not Present -> #PF Trap -> Kernel -> Allocate -> Return
-
-HW Fault Handler Flow:
-  TLB Miss -> PTW -> Not Present -> HW Fault Handler -> Allocate from Pool -> Continue
-                                    (NO TRAP if pool has pages!)
+  TLB Miss -> PTW -> PTE not present -> #PF exception
+    -> save registers, switch to kernel stack        (~200 ns)
+    -> VMA lookup (maple tree / red-black tree)       (~200 ns)
+    -> allocate physical page (buddy allocator)       (~200 ns)
+    -> zero the page (4096 bytes memset)              (~1000 ns)
+    -> install PTE, flush TLB                         (~200 ns)
+    -> restore registers, return to user              (~100 ns)
+                                            Total: ~2000-5000 ns
 ```
 
-The key hardware components are:
+The **hardware page fault handler** shortens this by pre-allocating a pool
+of physical pages and installing PTEs directly in hardware:
+
+```
+  TLB Miss -> PTW -> PTE not present -> HW Fault Handler
+    -> check tag array for free page                  (~10 ns)
+    -> allocate from pool, install PTE                (~40 ns)
+    -> continue (NO TRAP!)                   Total:   ~50 ns
+```
+
+The OS still allocates the page (it must maintain its data structures), but
+the latency charged to the application is just the tag array lookup time.
+
+## How it works in Virtuoso
+
+The `mmu_hw_fault` MMU design extends the baseline MMU with a **delegated
+memory pool**:
 
 | Component | Description |
 |---|---|
-| **Tag Array** | Tracks which pages in the delegated pool are allocated vs free |
-| **Delegated Pool** | A contiguous region of physical memory reserved at boot |
-| **Translation Logic** | On a page fault, checks the tag array; if a free page exists, installs the PTE and continues without trapping |
-| **Fallback Path** | If the pool is exhausted, falls back to the normal OS exception handler |
+| **Tag Array** | Tracks which virtual pages are mapped in the pool (40K entries) |
+| **Delegated Pool** | 160 MB of physical pages reserved for HW allocation |
+| **Fault Logic** | On page fault: if pool has a free slot, charge 50ns; otherwise fall back to OS trap |
+| **Fallback** | When the pool is full, faults go through the normal OS exception handler |
+
+Both the baseline and HW faults MMU:
+- Perform identical TLB lookups and page table walks
+- Always call the OS exception handler to allocate pages and install PTEs
+- Always retry the PTW after fault handling to find the now-present page
+- The **only difference** is the fault latency charged: 50ns (HW pool) vs 2000 cycles (OS trap)
 
 ## Prerequisites
 
-* Virtuoso built and `VIRTUOSO_ROOT` environment variable set
-* A SIFT trace (the demo uses `rnd.sift` from the traces directory)
-* Python 3.8+ with `matplotlib` and `numpy`
+- Virtuoso built (`cd simulator/sniper && make -j4`)
+- A SIFT trace (the demo uses `rnd.sift`)
+- Python 3.8+ with `matplotlib` and `numpy`
 
 ## Directory Contents
 
 ```
 part2_hw_faults/
-  README.md       # This file
-  run_demo.sh     # Automated script: runs baseline + hw_faults, prints comparison
-  compare.py      # Post-processing: reads sim.stats, generates comparison plots
+  README.md       This file
+  run_demo.sh     Runs baseline + hw_faults, prints comparison table
+  compare.py      Parses results, generates 4 comparison plots
 ```
 
-## Step 1 -- Run the Baseline Simulation
-
-The baseline uses the standard MMU (`mmu_base`) with the ReserveTHP allocator
-and zero fragmentation (all memory is 4 KiB pages).
+## Step 1: Run the demo
 
 ```bash
 cd demos/part2_hw_faults
-bash run_demo.sh
+bash run_demo.sh /path/to/traces/rnd.sift
 ```
 
-Or manually:
+This runs two simulations (2M instructions each):
+1. **Baseline**: `mmu_base` with `page_fault_latency=2000` cycles
+2. **HW Faults**: `mmu_hw_fault` with 160MB pool, 50ns HW fault latency
+
+Both charge the same OS fault latency (2000 cycles) for faults the HW pool
+cannot handle, ensuring a fair comparison.
+
+You can also specify a custom instruction count:
 
 ```bash
-SNIPER_ROOT="${VIRTUOSO_ROOT}/simulator/sniper"
-"${SNIPER_ROOT}/run-sniper" \
-    -c "${SNIPER_ROOT}/config/address_translation_schemes/reservethp.cfg" \
-    -d results_baseline \
-    -n 1 \
-    -s stop-by-icount:2000000 \
-    -g perf_model/reserve_thp/target_fragmentation=0.0 \
-    --traces="${VIRTUOSO_TRACES}/rnd.sift"
+bash run_demo.sh /path/to/traces/rnd.sift 5000000
 ```
 
-## Step 2 -- Run the HW Faults Simulation
+## Step 2: View results
 
-The HW faults variant uses `mmu_hwfault` -- the same TLB/PTW hierarchy but
-with a hardware fault handler that intercepts page faults before they reach
-the OS.
-
-```bash
-"${SNIPER_ROOT}/run-sniper" \
-    -c "${SNIPER_ROOT}/config/address_translation_schemes/reservethp.cfg" \
-    -d results_hwfaults \
-    -n 1 \
-    -s stop-by-icount:2000000 \
-    -g perf_model/mmu/type=hw_fault \
-    -g perf_model/mmu/count_page_fault_latency=true \
-    -g perf_model/reserve_thp/target_fragmentation=0.0 \
-    --traces="${VIRTUOSO_TRACES}/rnd.sift"
-```
-
-The key difference is `-g perf_model/mmu/type=hw_fault`, which swaps in the
-`MemoryManagementUnitHWFault` class.
-
-## Step 3 -- Compare Results
-
-The `run_demo.sh` script prints a side-by-side comparison table.  You can
-also run the comparison script manually:
+The script prints a comparison table. For plots:
 
 ```bash
 python3 compare.py results_baseline results_hwfaults --out-dir plots/
 ```
 
-Metrics to compare:
+This generates:
+1. **`ipc_comparison.png`** -- IPC bar chart
+2. **`fault_latency.png`** -- Stacked bar: HW fault latency vs OS fault latency
+3. **`translation_breakdown.png`** -- Stacked bar: TLB + PTW + Fault breakdown
+4. **`fault_coverage.png`** -- Pie chart: fraction of faults handled by HW pool
 
-| Metric | Baseline (mmu_base) | HW Faults (mmu_hw_fault) |
-|---|---|---|
-| IPC | lower | higher |
-| Page faults | N | N (same workload) |
-| Avg fault latency | higher (OS trap) | lower (HW pool) |
-| Total translation time | higher | lower |
+## Expected results
 
-## Step 4 -- Walk Through the Code
+With the `rnd` trace (random access pattern, 37K page faults in 2M instructions):
 
-Open the HW fault handler source code:
+| Metric | Baseline | HW Faults | Delta |
+|---|---|---|---|
+| IPC | 0.07 | 0.09 | +29% |
+| Page faults | 37,032 | 37,032 | same |
+| HW-handled faults | - | 26,517 (72%) | - |
+| OS-handled faults | 37,032 | 10,515 (28%) | - |
+| Total fault latency | 14.5T | 5.4T | -62% |
+
+The 160MB pool covers 72% of the unique pages, reducing total fault latency
+by 62% and improving IPC by 29%.
+
+## Step 3: Walk through the code
+
+The HW fault handler source:
 
 ```
 simulator/sniper/common/core/memory_subsystem/
@@ -123,56 +129,57 @@ simulator/sniper/common/core/memory_subsystem/
   parametric_dram_directory_msi/mmu_designs/mmu_hw_faults.cc
 ```
 
-Key classes and methods:
+### `HWFaultHandler` class (mmu_hw_faults.h)
 
-### `HWFaultHandler` (mmu_hw_faults.h, lines 21--73)
+- **`canHandleFault(addr)`** -- Checks if the pool has a free slot for
+  this virtual page (tag array lookup, modular indexing)
+- **`recordMapping(addr)`** -- Records that a page was mapped through the
+  pool (updates the tag array)
+- Pool size and tag array are allocated in the constructor
+- Move semantics handle ownership of the raw `tag_array` pointer
 
-* **`tag_array`** -- An array of `IntPtr` values, one per page in the
-  delegated pool.  `-1` means the slot is free.
-* **`translateAddress(addr)`** -- Checks if the page is already mapped in the
-  pool (tag match).
-* **`handleFault(addr)`** -- If `translateAddress` returns miss and the pool
-  has a free slot, installs the mapping and returns the physical page number.
+### `performAddressTranslation()` (mmu_hw_faults.cc)
 
-### `MemoryManagementUnitHWFault` (mmu_hw_faults.cc)
+The fault handling loop (same structure as baseline `mmu.cc`):
 
-* **`performAddressTranslation()`** -- The main entry point.  After a TLB
-  miss triggers a PTW and the walk discovers a not-present PTE, the code
-  calls `hw_fault_handler.handleFault()`.  If the pool satisfies the fault,
-  no OS exception handler latency is charged.
-* **`instantiateHWFaultHandler()`** -- Reads the delegated memory range from
-  the config and creates the `HWFaultHandler` object.
+```
+do {
+    ptw_result = performPTW(address, ...)     // Walk the page table
+    if (page_fault) {
+        hw_can_handle = hw_fault_handler.canHandleFault(address)
+        exception_handler->handle_page_fault(...)  // ALWAYS install PTE
+        if (hw_can_handle)
+            charge hw_fault_latency (50ns)
+        else
+            charge os_fault_latency (2000 cycles)
+    }
+} while (page_fault)    // Retry PTW -- page is now present
+```
 
-### MMU Factory (mmu_factory.h)
+The key design: the exception handler **always** runs (to maintain OS state),
+but the latency charged depends on whether the HW pool could have handled it.
 
-The factory recognises `type == "hw_fault"` and instantiates
-`MemoryManagementUnitHWFault`.
+## Step 4: Discussion
 
-## Step 5 -- Discussion: Design Tradeoffs
+1. **Pool size vs coverage**: With 40K entries (160MB), the pool covers 72%
+   of faults. A larger pool covers more but wastes physical memory.
 
-1. **Pool size**: A larger pool handles more faults in hardware but wastes
-   physical memory that the OS cannot reclaim.  What is a good pool size for
-   a 4 GiB system?
+2. **Pool refill**: When full, all faults fall back to the OS. A production
+   design needs background refill (OS replenishes during idle periods).
 
-2. **Pool refill**: When the pool runs out, all faults fall back to the OS.
-   A production design would need a background refill mechanism (e.g., the OS
-   replenishes the pool during idle periods).
+3. **Security**: The HW pool bypasses OS access-control checks. How would
+   you ensure only authorized pages are allocated?
 
-3. **Security**: The HW pool bypasses OS access-control checks.  How would
-   you ensure that the hardware only maps pages the process is allowed to
-   access?
-
-4. **Multi-process**: Each process needs its own pool (or the hardware must
-   tag entries with an ASID).  How does this affect area/complexity?
+4. **Workload sensitivity**: The `rnd` trace has high fault rates. Try with
+   different traces to see how coverage varies with access patterns.
 
 ## Key Takeaways
 
-* **Hardware can handle simple page faults without an OS trap**, avoiding
-  the 2--5 us overhead measured in Part 1.
-* The **delegated memory pool** pattern is simple to implement in hardware:
-  a tag array plus a free-page pointer.
-* Virtuoso makes it straightforward to prototype and evaluate such designs:
-  the entire change is a new MMU class (~200 lines of C++) plugged into the
-  existing TLB + PTW infrastructure.
-* The tradeoff is between **pool size** (memory overhead) and
-  **fault coverage** (fraction of faults handled in hardware).
+- Hardware can handle page faults **without the full OS trap overhead**,
+  reducing per-fault latency from ~2000 cycles to ~50ns.
+- The improvement depends on **pool coverage** -- what fraction of the
+  working set fits in the delegated pool.
+- Virtuoso makes it straightforward to prototype and evaluate such designs:
+  the entire change is a new MMU class plugged into the existing infrastructure.
+- Both baseline and HW faults perform **identical page table walks** and
+  **identical exception handling** -- the only difference is the latency model.
