@@ -15,12 +15,12 @@ A traditional page fault goes through this path:
 
 ```
   TLB Miss -> PTW -> PTE not present -> #PF exception
-    -> save registers, switch to kernel stack        (~200 ns)
-    -> VMA lookup (maple tree / red-black tree)       (~200 ns)
-    -> allocate physical page (buddy allocator)       (~200 ns)
-    -> zero the page (4096 bytes memset)              (~1000 ns)
-    -> install PTE, flush TLB                         (~200 ns)
-    -> restore registers, return to user              (~100 ns)
+    -> save registers, switch to kernel stack      
+    -> VMA lookup (maple tree / red-black tree)       
+    -> allocate physical page (buddy allocator)      
+    -> zero the page (4096 bytes memset)              
+    -> install PTE, flush TLB                         
+    -> restore registers, return to user             
                                             Total: ~2000-5000 ns
 ```
 

@@ -29,6 +29,114 @@ sudo apt install -y libbpf-dev clang llvm bpftool linux-tools-$(uname -r) \
     python3-numpy python3-matplotlib
 ```
 
+## How It Works
+
+The tool has three components: a **kernel-space BPF program**, a **userspace loader**,
+and a **stress-test workload**.  Here is the end-to-end data flow:
+
+```
+ minor_fault_stress                 Linux kernel                    instrument (BPF)
+ ==================                 ============                    ================
+
+ mmap(256 MiB, ANON)
+       |
+ touch page[i]  ──────────>  CPU raises #PF exception
+                                    |
+                             handle_mm_fault(vma, addr, flags)
+                                    |                          ──>  kprobe ENTRY
+                                    |                                 1. read vma->vm_file
+                                    |                                    NULL? => ANON
+                                    |                                    !NULL? => FILE
+                                    |                                 2. record timestamp (ns)
+                                    |                                 3. read LLC miss counter
+                                    |                                 4. read insn counter
+                                    |                                 5. record CPU id, cgroup
+                                    |                                 6. store in starts[tid]
+                                    |
+                             do_anonymous_page()
+                               - alloc zeroed frame
+                               - install PTE
+                               - flush TLB
+                                    |
+                             return to userspace            ──>  kretprobe EXIT
+                                                                   1. look up starts[tid]
+                                                                   2. check: major fault? skip
+                                                                   3. compute deltas:
+                                                                      - latency = now - ts
+                                                                      - llc = llc_now - llc_before
+                                                                      - insn = insn_now - insn_before
+                                                                   4. check: CPU migrated? zero PMUs
+                                                                   5. submit event to ring buffer
+       |
+ next page...                                                          |
+                                                                       v
+                                                              userspace ring_buffer__poll()
+                                                                  - print per-event line
+                                                                  - accumulate into agg bucket
+                                                                  - every N events: print summary
+                                                                       |
+                                                                       v
+                                                              stdout / ebpf_trace.log
+                                                                       |
+                                                                       v
+                                                              analyze.py -> plots/
+```
+
+### Kernel-space BPF program (`instrument.bpf.c`)
+
+The BPF program attaches two probes to `handle_mm_fault()` in `mm/memory.c`:
+
+1. **kprobe (entry)**: fires when any thread enters the page fault handler.
+   Captures a snapshot of the current state: monotonic timestamp, per-CPU
+   hardware PMU counters (LLC misses, retired instructions), the faulting
+   VMA's type (anonymous vs file-backed), and the CPU id.  All of this is
+   stored in a per-thread hash map (`starts`, keyed by Linux tid).
+
+2. **kretprobe (exit)**: fires when `handle_mm_fault()` returns.  Looks up
+   the entry record, computes deltas (latency, LLC misses, instructions),
+   checks whether the fault was major (disk I/O) or minor (in-memory), and
+   submits a completed event to a 16 MiB ring buffer.
+
+**Fault classification** uses the VMA's `vm_file` pointer:
+- `vm_file == NULL` => anonymous VMA (heap, stack, `MAP_ANONYMOUS`) => **ANON**
+- `vm_file != NULL` => file-backed VMA (mmap'd file, shared lib, shmem) => **FILE**
+
+**PMU counter handling**: hardware performance counters are per-CPU, so if the
+thread migrates between kprobe entry and kretprobe exit, the deltas are
+meaningless.  The BPF program detects migration (`cpu_enter != cpu_exit`) and
+zeros out the PMU fields, setting the `migrated` flag.
+
+### Userspace loader (`instrument.c`)
+
+The loader performs six steps:
+
+1. **Open** the BPF skeleton (compiled from `instrument.bpf.c`)
+2. **Configure** map sizes and the optional cgroup filter
+3. **Load** programs into the kernel (BPF verifier runs here)
+4. **Set up PMU counters**: opens `perf_event_open()` for LLC misses and
+   instructions on each CPU, stores the file descriptors in BPF maps
+5. **Attach** kprobe/kretprobe to `handle_mm_fault()`
+6. **Poll** the ring buffer, printing per-event lines and optional aggregation
+   summaries every N events
+
+The aggregation subsystem maintains a hash table of buckets (one global bucket,
+or one per PID with `--per-pid`).  Each bucket tracks running sums, min/max
+latency, and a per-reason histogram.  When a bucket reaches N events, it prints
+a summary line and resets.
+
+### Stress workload (`minor_fault_stress.c`)
+
+A simple loop that generates a predictable stream of minor anonymous faults:
+
+1. `mmap()` a large anonymous region (e.g., 256 MiB)
+2. `madvise(MADV_NOHUGEPAGE)` to force 4 KiB pages
+3. Touch one byte per page (write) to trigger a minor fault on each page
+4. `madvise(MADV_DONTNEED)` to discard all PTEs and frames
+5. Repeat from step 3
+
+This creates exactly `region_size / 4096` minor faults per cycle, with no
+disk I/O (all zero-fill).
+
 ## Directory Contents
 
 ```
