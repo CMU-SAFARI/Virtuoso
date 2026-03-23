@@ -408,10 +408,6 @@
                         <h3>Part 2: Accelerating Page Faults in Hardware with Virtuoso</h3>
                         <p>Building on the insights from Part 1, this demo will explore a <strong>hardware-accelerated approach to page fault handling</strong>. Attendees will use the Virtuoso simulation framework to prototype and evaluate a hardware mechanism that offloads page fault processing from the OS, significantly reducing the overhead identified in the first part. This hands-on session will demonstrate Virtuoso's full workflow, from defining a hardware/OS co-design to running simulations and analyzing performance results.</p>
                     </div>
-                    <div class="demo-item">
-                        <h3>Part 3: Conflict-Aware Memory Allocation for Page Table Walks</h3>
-                        <p>In this demo, attendees will use Virtuoso to <strong>change the physical memory allocator</strong> to avoid DRAM bank conflicts induced by page table walks. By making the allocator aware of how page table entries map to DRAM banks, we can eliminate the row conflicts that cause costly DRAM row activations during address translation. Participants will implement and evaluate a conflict-aware allocation policy in Virtuoso and observe the resulting reduction in page table walk latency.</p>
-                    </div>
                 </div>
 
                 <div class="callout" style="margin-top: 2rem;">
@@ -420,8 +416,8 @@
                     <ul style="margin-bottom: 0;">
                         <li>Environment setup and quickstart for both eBPF tools and Virtuoso</li>
                         <li>Guided, step-by-step implementation of each demo</li>
-                        <li>A complete journey from measuring real-system overheads to prototyping hardware solutions</li>
-                        <li>Practical skills in both software instrumentation and hardware/OS co-design simulation</li>
+                        <li>A complete journey from measuring real-system overheads (Part 1) to prototyping hardware solutions (Part 2)</li>
+                        <li>Practical skills in eBPF instrumentation and hardware/OS co-design simulation with Virtuoso</li>
                     </ul>
                 </div>
             </div>
