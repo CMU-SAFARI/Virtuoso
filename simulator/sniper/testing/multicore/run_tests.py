@@ -54,7 +54,7 @@ def get_configs_dir(config):
 
 
 def get_traces_dir(config):
-    return _path(config, "traces_dir", os.environ.get("VIRTUOSO_TRACES", "/path/to/traces"))
+    return _path(config, "traces_dir", "/mnt/panzer/kanellok/virtuoso_traces")
 
 
 def get_config_path(config_name, config_def, config):

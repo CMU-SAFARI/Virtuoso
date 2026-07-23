@@ -73,7 +73,7 @@ namespace ParametricDramDirectoryMSI
 	}
 
 	std::vector<query_entry> ArbitraryStridePrefetcher::performPrefetch(
-		IntPtr address, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count, PageTable *pt, bool instruction, bool tlb_hit, bool pq_hit)
+		IntPtr address, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count, PageTable *pt, bool instruction, bool tlb_hit, bool pq_hit, int page_size)
 	{
 		std::vector<query_entry> result;
 		int index = eip % table_size;
@@ -125,24 +125,31 @@ namespace ParametricDramDirectoryMSI
 
 				long long abs_stride = (table[index].stride >= 0) ? table[index].stride : -table[index].stride;
 				stats.sum_abs_stride += static_cast<UInt64>(abs_stride);
-				stats.prefetch_distance_sum += static_cast<UInt64>(abs_stride);
 
-				long long prefetch_vpn_signed = static_cast<long long>(VPN) + table[index].stride;
-				IntPtr prefetch_vpn = static_cast<IntPtr>(prefetch_vpn_signed);
-				query_entry prefetch_result = PTWTransparent(prefetch_vpn << 12, eip, lock, modeled, count, pt);
-
-				stats.prefetch_attempts++;
-
-				if (prefetch_result.ppn != 0)
+				// Lookahead + degree: prefetch pages at VPN + (lookahead + i) * stride, for i in [0, degree)
+				for (int d = 0; d < degree; d++)
 				{
-					stats.successful_prefetches++;
-					stats.trained_entries++;
-					result.push_back(prefetch_result);
-				}
-				else
-				{
-					stats.failed_prefetches++;
-					stats.trained_but_no_prefetch++;
+					long long offset = static_cast<long long>(lookahead + d) * table[index].stride;
+					long long prefetch_vpn_signed = static_cast<long long>(VPN) + offset;
+					IntPtr prefetch_vpn = static_cast<IntPtr>(prefetch_vpn_signed);
+
+					long long dist = (offset >= 0) ? offset : -offset;
+					stats.prefetch_distance_sum += static_cast<UInt64>(dist);
+
+					query_entry prefetch_result = PTWTransparent(prefetch_vpn << 12, eip, lock, modeled, count, pt);
+					stats.prefetch_attempts++;
+
+					if (prefetch_result.ppn != 0)
+					{
+						stats.successful_prefetches++;
+						stats.trained_entries++;
+						result.push_back(prefetch_result);
+					}
+					else
+					{
+						stats.failed_prefetches++;
+						stats.trained_but_no_prefetch++;
+					}
 				}
 
 				if (extra_prefetch)

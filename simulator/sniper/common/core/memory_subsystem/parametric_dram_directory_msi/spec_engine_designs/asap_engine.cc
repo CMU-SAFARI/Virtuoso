@@ -38,74 +38,37 @@ namespace ParametricDramDirectoryMSI
 
     void ASAP::invokeSpecEngine(IntPtr address, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled, SubsecondTime invoke_start_time, IntPtr physical_address, bool page_table_speculation)
     {
+        // Legacy overload without visited_pts — nothing to do
+    }
+
+    void ASAP::invokeSpecEngine(IntPtr address, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled, SubsecondTime invoke_start_time, IntPtr physical_address, const accessedAddresses& visited_pts, bool page_table_speculation)
+    {
+        if (!page_table_speculation)
+            return;
+
+        stats.invocations++;
+
 #ifdef DEBUG_ASAP
         log_file << std::endl;
-        log_file << "[ASAP] Invoking ASAP with address " << address << std::endl;
+        log_file << "[ASAP] Invoking ASAP with address " << address
+                 << " visited_pts size=" << visited_pts.size() << std::endl;
 #endif
-        /*
-        ASAP prefetches the 3rd and the 4th level of the Page Table leveraging page table contiguity. 
-        */
-        if(page_table_speculation){
-            stats.invocations++;
 
-            //Calculate the cache address of the page table entry in the 3rd level
-
-
-                IntPtr current_frame_id = 0;
-                IntPtr offset = 0;
-                int base = 0;
-                int old_base = 0;
-                int levels = 4;
-                int level = 4; // We have 4 levels of page tables
-                for (int i= 0; i < 4; i++)
-                {
+        // Prefetch the last two levels of the page table walk (PD: depth 2, PT: depth 3)
+        // using the real physical addresses from initializeWalk()
+        for (const auto& pt_access : visited_pts)
+        {
+            if (pt_access.depth >= 2)
+            {
+                IntPtr cache_address = pt_access.physical_addr & ~((IntPtr)(64 - 1));
 #ifdef DEBUG_ASAP
-
-                    log_file << "[ASAP] Level: " << level << " for address: " << address << std::endl;
-                    log_file << "[ASAP] We need to shift the address by: " << (48 - 9 * (levels - level)) << " bits" << std::endl;
+                log_file << "[ASAP] Prefetching depth=" << pt_access.depth
+                         << " physical_addr=" << pt_access.physical_addr
+                         << " cache_line=" << cache_address << std::endl;
 #endif
-                    offset = (address >> (48 - 9 * (levels - level))) & 0x1FF;
-
-#ifdef DEBUG_ASAP
-                    log_file << "[ASAP] Before mask:" << (address >> (48 - 9 * (levels - level))) << " After mask: " << offset << std::endl;
-#endif
-
-                    base += (i>=1) ? pow(512, i-1) : 0; // We start from the base of the                                                                                                                                       
-                    current_frame_id = (i>=1) ? ((base-1)+(current_frame_id-old_base)*512 +offset) : 0; // We start from the base of the first level
-#ifdef DEBUG_ASAP
-                    log_file << "[ASAP] Offset from previous level: " << offset << std::endl;
-                    log_file << "[ASAP] Base: " << base << " for level: " << level << std::endl;
-                    log_file << "[ASAP] Frame_id: " << current_frame_id << " for level: " << level << std::endl;
-#endif
-
-
-
-                    if (i > 1){
-                        IntPtr page_table_address = (current_frame_id << 12) + ((address >> (48 - 9 * (levels - level+1))) & 0x1FF)*8;
-                       
-                        if (i==3 || i==2){
-
-                            if (physical_address == page_table_address)
-                            {
-                                stats.hits++;
-                            }
-                            else
-                            {
-#ifdef DEBUG_ASAP
-                                log_file << "[ASAP] Prefetching page table address: " << page_table_address << " but physical address is: " << physical_address << std::endl;
-#endif
-                            }
-                        }
-
-                        IntPtr cache_address = page_table_address & (~((64 - 1)));
-#ifdef DEBUG_ASAP
-                        log_file << "[ASAP] Page Table Address: " << page_table_address << " Cache Address: " << cache_address << std::endl;
-#endif
-                        memory_manager->getCacheCntlrAt(core->getId(), MemComponent::component_t::L2_CACHE)->handleMMUPrefetch(eip, cache_address, invoke_start_time);
-                    }
-
-                old_base = base;
-                level--;
+                memory_manager->getCacheCntlrAt(core->getId(), MemComponent::component_t::L2_CACHE)
+                    ->handleMMUPrefetch(eip, cache_address, invoke_start_time);
+                stats.hits++;
             }
         }
     }

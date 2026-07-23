@@ -67,6 +67,21 @@ public:
     static constexpr uint64_t INVALID_CODE = 0;
     static constexpr uint64_t PAGE_FAULT = 1;
     static constexpr uint64_t SYSCALL = 2;
+    /* Stage 2 (Apr 18 2026): scheduler lifecycle events. */
+    static constexpr uint64_t NEW_THREAD = 3;
+    static constexpr uint64_t THREAD_EXIT = 4;
+    /* Stage 3 (Apr 18 2026): quantum-based preemption.
+       Posted by the TraceThread after it has executed `quantum`
+       DETAIL-mode instructions in app mode.  argv[1] = the currently-
+       running app_thread_id.  Kernel handler rotates runqueue and
+       SimContextSwitchTo's the new front. */
+    static constexpr uint64_t QUANTUM_EXPIRED = 5;
+    /* Stage 4 (Apr 18 2026): simulation shutdown.  Synthesized by the
+       SimReceiveMessage handler when TraceManager::stop() has been
+       called and the kernel's per-core event queue is empty — lets the
+       kernel pthread's poll_for_signal exit its loop cleanly instead
+       of asserting on an invalid message. */
+    static constexpr uint64_t SHUTDOWN = 6;
     
     /**
      * @brief Encode a protocol name to its code

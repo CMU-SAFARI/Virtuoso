@@ -1,0 +1,458 @@
+# Prefetcher Comparison v3 — Standalone Experiment Configuration
+# ==============================================================
+# 14 TLB prefetching strategies at frag=0.0 (full fragmentation, all 4KB pages)
+# Usage: python3 create_experiments.py --yaml clist_prefetcher_v3.yaml --suite <suite_name> --suite-dir-name <dir>
+
+# Traces
+trace_suite:
+  top250:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - top250_cvp1.tlist
+      - top250_dpc3.tlist
+      - top250_gap.tlist
+      - top250_google.tlist
+      - top250_huawei.tlist
+      - top250_safari.tlist
+      - top250_ml.tlist
+      - top250_virtuoso.tlist
+
+  randacc:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - randacc.tlist
+
+  xsbench:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - xsbench.tlist
+
+# Configurations
+configs:
+  configs_base_path: "../simulator/sniper/config/address_translation_schemes/"
+
+  # ==========================================================================
+  # 1. No prefetching baseline
+  # ==========================================================================
+  no-prefetch-frag0:
+    name: "no-prefetch-frag0"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "No TLB prefetching baseline (frag=0.0)"
+
+  # ==========================================================================
+  # 2. Next-page (stride length=1)
+  # ==========================================================================
+  next-page-frag0:
+    name: "next-page-frag0"
+    file: "baseline_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/prefetcher_list=stride"
+      - "--perf_model/mmu/tlb_prefetch/pq1/stride_prefetcher/length=1"
+    description: "Next-page TLB prefetcher (stride length=1, frag=0.0)"
+
+  # ==========================================================================
+  # 3. PC-Stride (ASP)
+  # ==========================================================================
+  pc-stride-frag0:
+    name: "pc-stride-frag0"
+    file: "baseline_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "PC-indexed stride TLB prefetcher (ASP, look=4 deg=3 thr=3, frag=0.0)"
+
+  pc-stride-threshold-sweep-frag0:
+    name: "asp-thr-sweep-frag0"
+    file: "baseline_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    sweeps:
+      - identifier: "thr"
+        option: "--perf_model/mmu/tlb_prefetch/pq1/asp_prefetcher/prefetch_threshold="
+        values: [0, 1, 5, 7]
+    description: "ASP threshold sweep (look=4, deg=3, thr=0/1/5/7)"
+
+  pc-stride-lookahead-sweep-frag0:
+    name: "asp-look-sweep-frag0"
+    file: "baseline_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    sweeps:
+      - identifier: ["look", "deg"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/asp_prefetcher/lookahead=", "--perf_model/mmu/tlb_prefetch/pq1/asp_prefetcher/degree="]
+        values:
+          - [1, 1, 2, 4, 4, 8]
+          - [1, 3, 3, 1, 6, 3]
+    description: "ASP lookahead/degree sweep (thr=3)"
+
+  # ==========================================================================
+  # 5. Recency (baseline + aggressive)
+  # ==========================================================================
+  recency-frag0:
+    name: "recency-frag0"
+    file: "baseline_recency.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Recency TLB prefetcher (same/pm1, pointer chase, frag=0.0)"
+
+  recency-aggressive-frag0:
+    name: "recency-agg-frag0"
+    file: "baseline_recency.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/recency_prefetcher/prefetch_on_tlb_hit=true"
+    description: "Recency aggressive (prefetch on hit, frag=0.0)"
+
+  # ==========================================================================
+  # 6. Distance Prefetcher (baseline + large table sweep)
+  # ==========================================================================
+  dp-frag0:
+    name: "dp-frag0"
+    file: "baseline_distance.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Distance TLB prefetcher baseline (256 rows, frag=0.0)"
+
+  dp-large-table-frag0:
+    name: "dp-large-frag0"
+    file: "baseline_distance.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    sweeps:
+      - identifier: ["rows"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/dp_prefetcher/num_rows="]
+        values: [[64, 128, 512, 1024, 2048, 4096, 8192]]
+    description: "Distance TLB prefetcher table size sweep (64—8192 rows, frag=0.0)"
+
+  # ==========================================================================
+  # 7. Recency + PC-Stride combo
+  # ==========================================================================
+  recency-asp-combo-frag0:
+    name: "recency-asp-frag0"
+    file: "baseline_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/number_of_prefetchers=2"
+      - "--perf_model/mmu/tlb_prefetch/pq1/prefetcher_list=recency,asp"
+    description: "Recency + ASP combo TLB prefetcher (frag=0.0)"
+
+  # ==========================================================================
+  # 8. Distance + PC-Stride combo
+  # ==========================================================================
+  dp-asp-combo-frag0:
+    name: "dp-asp-frag0"
+    file: "baseline_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/number_of_prefetchers=2"
+      - "--perf_model/mmu/tlb_prefetch/pq1/prefetcher_list=dp,asp"
+    description: "Distance + ASP combo TLB prefetcher (frag=0.0)"
+
+  # ==========================================================================
+  # 9. ATP (baseline + aggressive)
+  # ==========================================================================
+  atp-frag0:
+    name: "atp-frag0"
+    file: "baseline_atp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "ATP + SBFP baseline (paper design, frag=0.0)"
+
+  atp-aggressive-frag0:
+    name: "atp-agg-frag0"
+    file: "baseline_atp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/atp_prefetcher/fdt_threshold=0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/atp_prefetcher/fpq_size=32"
+      - "--perf_model/mmu/tlb_prefetch/pq1/atp_prefetcher/pq_size=128"
+    description: "ATP aggressive (FDT thresh=0, larger FPQ+PQ, frag=0.0)"
+
+  atp-fdt-sweep-frag0:
+    name: "atp-fdt-frag0"
+    file: "baseline_atp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    sweeps:
+      - identifier: ["fdt"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/atp_prefetcher/fdt_threshold="]
+        values: [[0, 25, 50, 200, 500]]
+    description: "ATP FDT threshold sweep (frag=0.0)"
+
+  atp-masp-sweep-frag0:
+    name: "atp-masp-frag0"
+    file: "baseline_atp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    sweeps:
+      - identifier: ["masp"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/atp_prefetcher/masp_entries="]
+        values: [[16, 32, 128, 256]]
+    description: "ATP MASP entries sweep (frag=0.0)"
+
+  # ==========================================================================
+  # 10. ASAP eager THP allocator
+  # ==========================================================================
+  asap-frag0:
+    name: "asap-frag0.0"
+    file: "asap.cfg"
+    extends:
+      - "--perf_model/asap_allocator/target_fragmentation=0.0"
+      - "--perf_model/asap_allocator/threshold_for_promotion=0.0"
+    description: "ASAP eager THP allocator: frag=0.0 (no free 2MB blocks), promote on first touch"
+
+  # ==========================================================================
+  # 10b. Trail (best) — single-core, standalone
+  # ==========================================================================
+  trail-best-frag0:
+    name: "trail-best-frag0"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.75"
+    description: "Trail (best) TLB prefetcher: region_shift=5, chain_edge_decay=0.75, frag=0.0"
+
+  # ==========================================================================
+  # 10c. Trail (best) + ASAP combo
+  # ==========================================================================
+  trail-asap-frag0:
+    name: "trail-asap-frag0"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      # Switch MMU to spec mode for ASAP speculative engine
+      - "--perf_model/mmu/type=spec"
+      - "--perf_model/mmu/spec/type=asap"
+      # Switch allocator from reserve_thp to asap_allocator
+      - "--perf_model/mimicos_host/memory_allocator_name=asap_allocator"
+      - "--perf_model/asap_allocator/memory_size=131072"
+      - "--perf_model/asap_allocator/kernel_size=32768"
+      - "--perf_model/asap_allocator/max_order=12"
+      - "--perf_model/asap_allocator/frag_type=largepage"
+      - "--perf_model/asap_allocator/target_fragmentation=0.0"
+      - "--perf_model/asap_allocator/threshold_for_promotion=0.0"
+      # Trail (best) temporal PTE prefetcher settings
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.75"
+    description: "Trail (best) + ASAP combo: TLB prefetching + eager THP, frag=0.0"
+
+  # ==========================================================================
+  # 14. Berti TLB Prefetcher
+  # ==========================================================================
+  berti-frag0:
+    name: "berti-frag0"
+    file: "baseline_berti.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Berti TLB prefetcher (region-stride, burst, frag=0.0)"
+
+  berti-aggressive-frag0:
+    name: "berti-agg-frag0"
+    file: "baseline_berti.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/berti_prefetcher/max_burst=6"
+      - "--perf_model/mmu/tlb_prefetch/pq1/berti_prefetcher/record_pages=512"
+    description: "Berti TLB prefetcher aggressive (max_burst=6, larger record, frag=0.0)"
+
+  berti-asp-combo-frag0:
+    name: "berti-asp-frag0"
+    file: "baseline_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/number_of_prefetchers=2"
+      - "--perf_model/mmu/tlb_prefetch/pq1/prefetcher_list=berti,asp"
+    description: "Berti + ASP combo TLB prefetcher (frag=0.0)"
+
+  # ==========================================================================
+  # 11. Large L2 TLB (32K / 64K entries, no prefetching)
+  # ==========================================================================
+  l2-tlb-32k-frag0:
+    name: "l2-tlb-32k-frag0"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_level_2/tlb1/size=32768"
+      - "--perf_model/mmu/tlb_level_2/tlb1/assoc=16"
+    description: "L2 TLB 32K entries (16-way, no prefetching, frag=0.0)"
+
+  l2-tlb-64k-frag0:
+    name: "l2-tlb-64k-frag0"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_level_2/tlb1/size=65536"
+      - "--perf_model/mmu/tlb_level_2/tlb1/assoc=16"
+    description: "L2 TLB 64K entries (16-way, no prefetching, frag=0.0)"
+
+  # ==========================================================================
+  # 12. ChIRP TLB Replacement Policy
+  # ==========================================================================
+  chirp-frag0:
+    name: "chirp-frag0"
+    file: "baseline_chirp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "ChIRP L2 TLB replacement (no prefetching, frag=0.0)"
+
+  chirp-asp-frag0:
+    name: "chirp-asp-frag0"
+    file: "baseline_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_level_2/tlb1/replacement_policy=chirp"
+    description: "ChIRP L2 TLB replacement + ASP prefetcher (frag=0.0)"
+
+  # ==========================================================================
+  # 13. Perfect L2 TLB (upper bound — uses perfect_l2_tlb knob)
+  # ==========================================================================
+  perfect-l2-tlb-frag0:
+    name: "perfect-l2-frag0"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/perfect_l2_tlb=true"
+    description: "Perfect L2 TLB: L1 misses always hit in L2, no PTW (frag=0.0)"
+
+  # ==========================================================================
+  # 13. Perfect L1 TLB (upper bound)
+  # ==========================================================================
+  perfect-l1-tlb-frag0:
+    name: "perfect-l1-frag0"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_level_1/tlb1/size=1048576"
+      - "--perf_model/mmu/tlb_level_1/tlb1/assoc=16"
+      - "--perf_model/mmu/tlb_level_1/tlb1/access_latency=0"
+      - "--perf_model/mmu/tlb_level_1/tlb2/size=1048576"
+      - "--perf_model/mmu/tlb_level_1/tlb2/assoc=16"
+      - "--perf_model/mmu/tlb_level_1/tlb2/access_latency=0"
+      - "--perf_model/mmu/tlb_level_1/tlb3/size=1048576"
+      - "--perf_model/mmu/tlb_level_1/tlb3/assoc=16"
+      - "--perf_model/mmu/tlb_level_1/tlb3/access_latency=0"
+    description: "Perfect L1 TLB (1M entries each, 0-cycle, frag=0.0)"
+
+
+# Experiment suites
+experiment_suites:
+
+  prefetcher-comparison-v3:
+    description: "Comprehensive TLB prefetcher comparison (frag=0.0)"
+    configs:
+      # Baselines & bounds
+      - no-prefetch-frag0
+      - perfect-l1-tlb-frag0
+      - perfect-l2-tlb-frag0
+      - l2-tlb-32k-frag0
+      - l2-tlb-64k-frag0
+      # Simple prefetchers
+      - next-page-frag0
+      - pc-stride-frag0
+      - pc-stride-threshold-sweep-frag0
+      - pc-stride-lookahead-sweep-frag0
+      # Prior work
+      - recency-frag0
+      - recency-aggressive-frag0
+      - dp-frag0
+      - dp-large-table-frag0
+      - recency-asp-combo-frag0
+      - dp-asp-combo-frag0
+      - atp-frag0
+      - atp-aggressive-frag0
+      - atp-fdt-sweep-frag0
+      - atp-masp-sweep-frag0
+      # Berti
+      - berti-frag0
+      - berti-aggressive-frag0
+      - berti-asp-combo-frag0
+      # ChIRP replacement
+      - chirp-frag0
+      - chirp-asp-frag0
+      # Allocator
+      - asap-frag0
+    trace_suite: top250
+    instruction_count: 300000000
+    enable_icache_for: ["srv"]
+    slurm_partitions: ["cpu_part", "bio_part"]
+    instruction_count_overrides:
+      top250_virtuoso.tlist: 100000000
+
+  prefetcher-comparison-v3-smoke:
+    description: "Quick smoke test for prefetcher comparison v3 (2M instr, randacc)"
+    configs:
+      - no-prefetch-frag0
+      - next-page-frag0
+      - pc-stride-frag0
+      - recency-frag0
+      - dp-frag0
+      - atp-frag0
+      - berti-frag0
+      - perfect-l2-tlb-frag0
+      - l2-tlb-32k-frag0
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  prefetcher-xsbench-test:
+    description: "Aggressive test on XSBench (10M instructions, all prefetchers)"
+    configs:
+      - no-prefetch-frag0
+      - next-page-frag0
+      - pc-stride-frag0
+      - pc-stride-threshold-sweep-frag0
+      - pc-stride-lookahead-sweep-frag0
+      - recency-frag0
+      - dp-frag0
+      - atp-frag0
+      - berti-frag0
+      - berti-aggressive-frag0
+      - perfect-l2-tlb-frag0
+    trace_suite: xsbench
+    instruction_count: 10000000
+
+  # ==========================================================================
+  # Trail + ASAP Orthogonality
+  # ==========================================================================
+  # Shows that Trail (TLB prefetching) and ASAP (eager THP allocation) are
+  # orthogonal: baseline, Trail-only, ASAP-only, Trail+ASAP combo.
+
+  trail-asap-orthogonality:
+    description: "Trail + ASAP orthogonality (4 configs, top250 traces, 300M instr)"
+    configs:
+      - no-prefetch-frag0
+      - asap-frag0
+      - trail-best-frag0
+      - trail-asap-frag0
+    trace_suite: top250
+    instruction_count: 300000000
+    instruction_count_overrides:
+      top250_virtuoso.tlist: 100000000
+
+  trail-asap-combo-only:
+    description: "Trail+ASAP combo only (resubmit after fix)"
+    configs:
+      - trail-asap-frag0
+    trace_suite: top250
+    instruction_count: 300000000
+    instruction_count_overrides:
+      top250_virtuoso.tlist: 100000000

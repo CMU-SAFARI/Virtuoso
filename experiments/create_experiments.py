@@ -249,8 +249,8 @@ def resolve_configs(
     return resolved, origins
 
 
-def _parse_tlist_with_metrics(tlist_path: str) -> List[Tuple[str, str, str, str]]:
-    rows: List[Tuple[str, str, str, str]] = []
+def _parse_tlist_with_metrics(tlist_path: str, tlist_name: str) -> List[Tuple[str, str, str, str, str]]:
+    rows: List[Tuple[str, str, str, str, str]] = []
     try:
         with open(tlist_path, "r") as f:
             lines = [ln.strip() for ln in f if ln.strip()]
@@ -261,7 +261,7 @@ def _parse_tlist_with_metrics(tlist_path: str) -> List[Tuple[str, str, str, str]
             parts = [p.strip() for p in line.split(",")]
             if len(parts) == 4:
                 tracename, filename, l2tlb_mpki, norm_ptw_lat = parts
-                rows.append((tracename, os.path.join(trace_dir, filename), l2tlb_mpki, norm_ptw_lat))
+                rows.append((tracename, os.path.join(trace_dir, filename), l2tlb_mpki, norm_ptw_lat, tlist_name))
             else:
                 print(f"Warning: Skipping malformed tlist entry: {line}", file=sys.stderr)
     except FileNotFoundError:
@@ -275,7 +275,7 @@ def resolve_traces(
     yaml_data: Dict[str, Any],
     yaml_dir: str,
     trace_suite_name: str,
-) -> List[Tuple[str, str, str, str]]:
+) -> List[Tuple[str, str, str, str, str]]:
     trace_suites = yaml_data.get("trace_suite", {})
     ts = trace_suites.get(trace_suite_name)
     if not ts:
@@ -289,10 +289,10 @@ def resolve_traces(
         sys.exit(1)
 
     trace_list_dir = os.path.join(yaml_dir, base_rel)
-    traces: List[Tuple[str, str, str, str]] = []
+    traces: List[Tuple[str, str, str, str, str]] = []
     for tl in tracelists:
         tl_path = os.path.join(trace_list_dir, tl)
-        traces.extend(_parse_tlist_with_metrics(tl_path))
+        traces.extend(_parse_tlist_with_metrics(tl_path, tl))
     return traces
 
 
@@ -322,9 +322,11 @@ def build_jobfile(
     sniper_path: str,
     instruction_count: int,
     configs: List[Tuple[str, str]],
-    traces: List[Tuple[str, str, str, str]],
+    traces: List[Tuple[str, str, str, str, str]],
     output_root: str,
     enable_icache_prefixes: List[str] = None,
+    slurm_partitions: List[str] = None,
+    tracelist_instruction_overrides: Dict[str, int] = None,
 ) -> List[Tuple[str, str, str, str]]:
     jobs: List[Tuple[str, str, str, str]] = []  # (id, cfg_name, trace_name, out_dir)
 
@@ -333,9 +335,16 @@ def build_jobfile(
 
         counter = 0
         for cfg_name, cfg_flags in configs:
-            for trace_name, trace_path, _, _ in traces:
+            for trace_name, trace_path, _, _, tlist_name in traces:
                 execution_command = os.path.join(sniper_path, "run-sniper")
-                sniper_parameters = f" --no-cache-warming --genstats -s stop-by-icount:{instruction_count}"
+                # Per-tracelist instruction count override
+                icount = instruction_count
+                if tracelist_instruction_overrides:
+                    for tl_pattern, tl_icount in tracelist_instruction_overrides.items():
+                        if tlist_name == tl_pattern or tlist_name.startswith(tl_pattern):
+                            icount = tl_icount
+                            break
+                sniper_parameters = f" --no-cache-warming --genstats -s stop-by-icount:{icount}"
 
                 # Sanitize names for directory/file usage (remove commas, etc.)
                 safe_cfg_name = sanitize_dirname(cfg_name)
@@ -357,8 +366,12 @@ def build_jobfile(
 
                 command = execution_command + sniper_parameters + cfg_flags + icache_flags + output_command + trace_arg
 
+                partition_flag = ""
+                if slurm_partitions:
+                    partition_flag = " --partition=" + ",".join(slurm_partitions)
+
                 sbatch_cmd = (
-                    "sbatch --exclude=kratos17 -J {}_{} --output="
+                    "sbatch --exclude=kratos17" + partition_flag + " -J {}_{} --output="
                     + os.path.join(output_directory, "slurm.out")
                     + " --error="
                     + os.path.join(output_directory, "slurm.err")
@@ -426,6 +439,15 @@ Examples:
         help="Enable icache modeling only for traces whose names start with the given prefix(es). "
              "E.g., --enable-icache-for srv  enables icache only for srv* workloads.",
     )
+    parser.add_argument(
+        "--partitions",
+        type=str,
+        nargs='+',
+        default=None,
+        metavar="PARTITION",
+        help="SLURM partition(s) to submit to (e.g., --partitions bio_part). "
+             "Can also be set via 'slurm_partitions' in the YAML suite definition.",
+    )
 
     args = parser.parse_args()
 
@@ -454,7 +476,9 @@ Examples:
     all_cfg_names: List[str] = []
     all_trace_suite_names: set = set()
     instruction_count: int = 0
-    
+    yaml_icache_prefixes: List[str] = []
+    yaml_slurm_partitions: List[str] = []
+
     for suite_name in suite_names:
         suite = suites_data[suite_name]
         cfg_names = suite.get("configs", [])
@@ -463,6 +487,24 @@ Examples:
         # Use the maximum instruction count across all suites
         suite_instr = int(suite.get("instruction_count", 300_000_000))
         instruction_count = max(instruction_count, suite_instr)
+        # Collect enable_icache_for prefixes from YAML suite definition
+        suite_icache = suite.get("enable_icache_for", [])
+        if isinstance(suite_icache, str):
+            suite_icache = [suite_icache]
+        yaml_icache_prefixes.extend(suite_icache)
+        # Collect slurm_partitions from YAML suite definition
+        suite_parts = suite.get("slurm_partitions", [])
+        if isinstance(suite_parts, str):
+            suite_parts = [suite_parts]
+        yaml_slurm_partitions.extend(suite_parts)
+
+    # Collect per-tracelist instruction count overrides from YAML suites
+    tracelist_instruction_overrides: Dict[str, int] = {}
+    for suite_name in suite_names:
+        suite = suites_data[suite_name]
+        overrides = suite.get("instruction_count_overrides", {})
+        for tl_name, tl_icount in overrides.items():
+            tracelist_instruction_overrides[tl_name] = int(tl_icount)
     
     # Remove duplicate config names while preserving order
     seen_cfgs = set()
@@ -511,14 +553,22 @@ Examples:
     write_csv(
         trace_list_path,
         ["trace_name", "trace_path", "L2TLB_MPKI", "normalized_ptw_latency"],
-        [(tname, tpath, mpki, nlat) for tname, tpath, mpki, nlat in traces],
+        [(tname, tpath, mpki, nlat) for tname, tpath, mpki, nlat, _tl in traces],
     )
     write_csv(config_list_path, ["config_name", "config_flags"], [(cname, cflags.strip()) for cname, cflags in configs])
 
     sniper_path = os.path.join(artifact_path, "simulator", "sniper")
+
+    # Merge icache prefixes from CLI (--enable-icache-for) and YAML (enable_icache_for)
+    icache_prefixes = list(set((args.enable_icache_for or []) + yaml_icache_prefixes)) or None
+    # Merge SLURM partitions from CLI (--partitions) and YAML (slurm_partitions)
+    slurm_partitions = list(set((args.partitions or []) + yaml_slurm_partitions)) or None
+
     jobs = build_jobfile(
         jobfile_path, sniper_path, instruction_count, configs, traces, results_dir,
-        enable_icache_prefixes=args.enable_icache_for,
+        enable_icache_prefixes=icache_prefixes,
+        slurm_partitions=slurm_partitions,
+        tracelist_instruction_overrides=tracelist_instruction_overrides or None,
     )
 
     write_csv(job_list_path, ["job_id", "config_name", "trace_name", "output_dir"], jobs)
@@ -530,8 +580,13 @@ Examples:
     print(f"  {Colors.BOLD}Instructions:{Colors.RESET} {Colors.GREEN}{instruction_count}{Colors.RESET}")
     print(f"  {Colors.BOLD}Traces:{Colors.RESET} {Colors.GREEN}{len(traces)}{Colors.RESET} -> {trace_list_path}")
     print(f"  {Colors.BOLD}Configs:{Colors.RESET} {Colors.GREEN}{len(configs)}{Colors.RESET} -> {config_list_path}")
-    if args.enable_icache_for:
-        print(f"  {Colors.BOLD}iCache for:{Colors.RESET} {Colors.YELLOW}{', '.join(args.enable_icache_for)}*{Colors.RESET} traces only")
+    if icache_prefixes:
+        print(f"  {Colors.BOLD}iCache for:{Colors.RESET} {Colors.YELLOW}{', '.join(icache_prefixes)}*{Colors.RESET} traces only")
+    if tracelist_instruction_overrides:
+        for tl, ic in tracelist_instruction_overrides.items():
+            print(f"  {Colors.BOLD}iCount override:{Colors.RESET} {Colors.YELLOW}{tl} -> {ic:,}{Colors.RESET}")
+    if slurm_partitions:
+        print(f"  {Colors.BOLD}Partitions:{Colors.RESET} {Colors.YELLOW}{', '.join(slurm_partitions)}{Colors.RESET}")
     print(f"  {Colors.BOLD}Jobfile:{Colors.RESET} {jobfile_path}")
     print(f"  {Colors.BOLD}Jobs:{Colors.RESET} {Colors.GREEN}{len(jobs)}{Colors.RESET} -> {job_list_path}")
 

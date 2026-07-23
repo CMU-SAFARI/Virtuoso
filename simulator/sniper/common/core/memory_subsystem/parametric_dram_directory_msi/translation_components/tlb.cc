@@ -106,6 +106,26 @@ namespace ParametricDramDirectoryMSI
         if (m_prefetch)
         {
             registerStatsMetric(name, core_id, "pq_dedup_skipped", &tlb_stats.m_pq_dedup_skipped);
+            registerStatsMetric(name, core_id, "pq_hits", &tlb_stats.m_pq_hits);
+            registerStatsMetric(name, core_id, "pq_materialized", &tlb_stats.m_pq_materialized);
+        }
+
+        // Read region_shift from the temporal_pte_prefetcher config if available.
+        // This determines the PQ dedup granularity: address >> (page_shift + region_shift).
+        // Default: page_shift=12 + region_shift=3 = 15 (32KB regions).
+        m_pq_region_bits = 15;
+        {
+            // Try to find the temporal_pte_prefetcher config for the first PQ
+            String cfg_probe = "perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift";
+            if (Sim()->getCfg()->hasKey(cfg_probe))
+            {
+                uint32_t region_shift = static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_probe));
+                uint32_t page_shift = 12;
+                String ps_probe = "perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/page_shift";
+                if (Sim()->getCfg()->hasKey(ps_probe))
+                    page_shift = static_cast<uint32_t>(Sim()->getCfg()->getInt(ps_probe));
+                m_pq_region_bits = page_shift + region_shift;
+            }
         }
 
     }
@@ -123,7 +143,7 @@ namespace ParametricDramDirectoryMSI
                 query_entry entry = entry_priority_queue.top();
                 entry_priority_queue.pop();
                 // Decrement region refcount on materialization
-                uint64_t region_id = static_cast<uint64_t>(entry.address) >> 15;  // 32KB region
+                uint64_t region_id = static_cast<uint64_t>(entry.address) >> m_pq_region_bits;
                 auto it = m_pq_region_refcount.find(region_id);
                 if (it != m_pq_region_refcount.end()) {
                     if (--it->second == 0)
@@ -131,6 +151,13 @@ namespace ParametricDramDirectoryMSI
                 }
                 tlb_log->debug("Materializing prefetch for address: ", entry.address, " at time: ", now.getNS(), " ns");
                 allocate(entry.address, entry.timestamp, false, lock_signal, entry.page_size, entry.ppn, true);
+                tlb_stats.m_pq_materialized++;
+                // Notify prefetchers that this translation has been installed in the TLB
+                if (prefetchers != NULL)
+                {
+                    for (int i = 0; i < number_of_prefetchers; i++)
+                        prefetchers[i]->notifyInstall(entry.address, entry.page_size);
+                }
             }
         }
 
@@ -158,6 +185,7 @@ namespace ParametricDramDirectoryMSI
         {
             pq_hit = true;
             hit->clearOption(CacheBlockInfo::PREFETCH);
+            tlb_stats.m_pq_hits++;
         }
 
         if (hit)
@@ -177,7 +205,8 @@ namespace ParametricDramDirectoryMSI
             {
                 tlb_log->debug("Using prefetcher ", i, " at time: ", now.getNS(), " ns");
 
-                std::vector<query_entry> generated_prefetches = prefetchers[i]->performPrefetch(address, eip, lock_signal, modeled, count, pt, instruction, /*tlb_hit=*/(hit != NULL), /*pq_hit=*/pq_hit);
+                int hit_page_size = hit ? hit->getPageSize() : 0;  // 0 = unknown (miss), let prefetcher discover
+                std::vector<query_entry> generated_prefetches = prefetchers[i]->performPrefetch(address, eip, lock_signal, modeled, count, pt, instruction, /*tlb_hit=*/(hit != NULL), /*pq_hit=*/pq_hit, /*page_size=*/hit_page_size);
                 tlb_log->debug("Prefetcher ", i, " generated ", generated_prefetches.size(), " prefetches at time: ", now.getNS(), " ns");
 
                 // PQ dedup: check at region granularity BEFORE inserting the batch.
@@ -189,7 +218,7 @@ namespace ParametricDramDirectoryMSI
                     for (auto &first_valid : generated_prefetches)
                     {
                         if (first_valid.ppn == 0) continue;
-                        uint64_t region_id = static_cast<uint64_t>(first_valid.address) >> 15;
+                        uint64_t region_id = static_cast<uint64_t>(first_valid.address) >> m_pq_region_bits;
                         if (m_pq_region_refcount.count(region_id) > 0)
                         {
                             tlb_stats.m_pq_dedup_skipped++;
@@ -210,7 +239,7 @@ namespace ParametricDramDirectoryMSI
 
                         if (current_prefetches >= static_cast<size_t>(max_prefetch_count))
                             break;
-                        uint64_t region_id = static_cast<uint64_t>(pref.address) >> 15;
+                        uint64_t region_id = static_cast<uint64_t>(pref.address) >> m_pq_region_bits;
                         entry_priority_queue.push(pref);
                         m_pq_region_refcount[region_id]++;
                         current_prefetches++;

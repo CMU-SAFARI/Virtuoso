@@ -834,7 +834,7 @@ namespace ParametricDramDirectoryMSI
         // Invoke spec engine for intra-page-table dependency prediction
         // This helps predict which PT entries will be needed next
         if (page_table->getType() == "radix" && !ptw_result.fault_happened)
-            spec_engine->invokeSpecEngine(address, count, lock, eip, modeled, time_for_pt, physical_result_last_level, true);
+            spec_engine->invokeSpecEngine(address, count, lock, eip, modeled, time_for_pt, physical_result_last_level, visited_pts, true);
 
         // Rebuild result with deduplicated visited entries (preserve requested_frames)
         ptw_result = PTWResult(ptw_result.page_size, visited_pts, ptw_result.ppn, ptw_result.pwc_latency, ptw_result.fault_happened, ptw_result.requested_frames);

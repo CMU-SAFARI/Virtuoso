@@ -89,6 +89,7 @@ namespace ParametricDramDirectoryMSI
 		
 		std::priority_queue<query_entry, std::vector<query_entry>, Compare> entry_priority_queue;
 		std::unordered_map<uint64_t, uint32_t> m_pq_region_refcount;  // Region ID → number of PQ entries (for dedup)
+		uint32_t m_pq_region_bits;  // Bits to right-shift an address to get region ID (page_shift + region_shift)
 
 		// External observers notified on TLB evictions (e.g., PQ prefetchers
 		// registered by the TLB subsystem so that main-TLB evictions reach
@@ -107,6 +108,8 @@ namespace ParametricDramDirectoryMSI
 			UInt64 m_insertions_instruction, m_insertions_data;
 			UInt64 m_eviction_instruction, m_eviction_data;
 			UInt64 m_pq_dedup_skipped;  // Prefetches skipped due to PQ region dedup
+			UInt64 m_pq_hits;           // Demand hits on prefetch-sourced entries (accuracy numerator)
+			UInt64 m_pq_materialized;   // Total prefetch entries materialized into TLB
 
 		} tlb_stats;
 

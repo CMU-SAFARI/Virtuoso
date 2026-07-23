@@ -6,9 +6,9 @@
 
 # Base paths
 paths:
-  sniper_root: "${VIRTUOSO_ROOT}/simulator/sniper"
-  traces_dir: "${VIRTUOSO_TRACES}"
-  champsim_traces_dir: "${CHAMPSIM_TRACES}"
+  sniper_root: "/home/kanellok/virtuoso_artifact/simulator/sniper"
+  traces_dir: "/mnt/panzer/kanellok/virtuoso_traces"
+  champsim_traces_dir: "/mnt/galactica/google-dpc4/gtrace_v2_champsim_1.3Binstr"
   configs_dir: "./config/address_translation_schemes"
   results_dir: "./results/multicore_testing"
 
@@ -101,6 +101,10 @@ configs:
   utopia_mplru_bandit:
     file: "utopia_mplru_bandit.cfg"
     description: "Utopia with MPLRU bandit controller"
+
+  revelator:
+    file: "revelator.cfg"
+    description: "Revelator with hash-based allocation"
 
   dmt:
     file: "dmt.cfg"
@@ -301,14 +305,14 @@ suites:
   translation_comparison_4core:
     description: "Compare all translation schemes on 4-core heterogeneous mix"
     topology: 4core
-    configs: [no_translation, baseline, reservethp_fully_fragmented, reservethp_no_fragmentation, utopia, dmt, asap, perfect]
+    configs: [no_translation, baseline, reservethp_fully_fragmented, reservethp_no_fragmentation, utopia, revelator, dmt, asap, perfect]
     trace_pool: graph_mix
     instruction_count: 20000000  # 20M
 
   translation_comparison_8core:
     description: "Compare all translation schemes on 8-core heterogeneous mix"
     topology: 8core
-    configs: [no_translation, baseline, reservethp_fully_fragmented, reservethp_no_fragmentation, utopia, dmt, asap, perfect]
+    configs: [no_translation, baseline, reservethp_fully_fragmented, reservethp_no_fragmentation, utopia, revelator, dmt, asap, perfect]
     trace_pool: graph_mix
     instruction_count: 20000000  # 20M
 

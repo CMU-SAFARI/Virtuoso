@@ -280,7 +280,7 @@ namespace ParametricDramDirectoryMSI
            UInt64 loads_state[CacheState::NUM_CSTATE_STATES][CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES], stores_state[CacheState::NUM_CSTATE_STATES][CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES];
            UInt64 loads_where[CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES][HitWhere::NUM_HITWHERES];
            UInt64 stores_where[CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES][HitWhere::NUM_HITWHERES];
-           UInt64 spec_prefetch_hits, spec_prefetch_total_preds;
+           UInt64 revelator_hits,revelator_total_preds;
 
 
            UInt64 load_misses_state[CacheState::NUM_CSTATE_STATES][CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES], store_misses_state[CacheState::NUM_CSTATE_STATES][CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES];
@@ -310,6 +310,11 @@ namespace ParametricDramDirectoryMSI
            UInt64 prefetches_fillup; // We track only the prefetches that actually caused a fillup in the L2 cache
            UInt64 late_metadata_prefetches;
 
+           // Per-fill-source useful/wasted (Stat 2)
+           UInt64 hits_prefetch_dram;     // useful prefetch fills sourced from DRAM
+           UInt64 hits_prefetch_nuca;     // useful prefetch fills sourced from NUCA/LLC
+           UInt64 evict_prefetch_dram;    // wasted prefetch fills sourced from DRAM
+           UInt64 evict_prefetch_nuca;    // wasted prefetch fills sourced from NUCA/LLC
 
            UInt64 spec_evict_total;    // L2 evictions caused by speculative prefetches
            UInt64 spec_evict_harmful;  // of those, demand misses within access window
@@ -369,7 +374,7 @@ namespace ParametricDramDirectoryMSI
          void copyDataFromNextLevel(Core::mem_op_t mem_op_type, IntPtr address, bool modeled, SubsecondTime t_start, CacheBlockInfo::block_type_t block_type);
          void trainPrefetcher(IntPtr eip, IntPtr address, Core::mem_op_t mem_op_type,  bool cache_hit, bool prefetch_hit, SubsecondTime t_issue);
          void Prefetch(IntPtr eip, SubsecondTime t_start);
-         bool specDoPrefetch(IntPtr eip, IntPtr prefetch_address, SubsecondTime t_start);
+         bool revelatordoPrefetch(IntPtr eip, IntPtr prefetch_address, SubsecondTime t_start);
          // Cache meta-data operationsz
          SharedCacheBlockInfo* getCacheBlockInfo(IntPtr address);
          CacheBlockInfo::block_type_t getCacheBlockType(IntPtr address);
@@ -490,8 +495,39 @@ namespace ParametricDramDirectoryMSI
                CacheBlockInfo::block_type_t block_type = CacheBlockInfo::block_type_t::DATA) override
          {
             m_doing_spec_prefetch = true;
+            // Propagate to L2 (and deeper) so evictions during this prefetch
+            // are tracked by spec-evict counters
+            if (m_next_cache_cntlr)
+               m_next_cache_cntlr->m_doing_spec_prefetch = true;
             doPrefetch(eip, prefetch_address, t_start, block_type);
+            if (m_next_cache_cntlr)
+               m_next_cache_cntlr->m_doing_spec_prefetch = false;
             m_doing_spec_prefetch = false;
+         }
+
+         void tagMMUPrefetch(IntPtr cache_address, HitWhere::where_t hit_where = HitWhere::UNKNOWN) override
+         {
+            // Only tag with PREFETCH when the walk actually brought data into
+            // L2 from beyond L2 (LLC, DRAM, etc.).  If the line was already in
+            // L1 or L2 the prefetch was redundant — tagging it would inflate
+            // L2.hits-prefetch because every subsequent demand walk that hits
+            // the same (already-resident) line would be counted as a useful
+            // prefetch hit.
+            if (hit_where == HitWhere::L1_OWN || hit_where == HitWhere::L2_OWN)
+               return;
+
+            SharedCacheBlockInfo* info = getCacheBlockInfo(cache_address);
+            if (info) {
+               info->setOption(CacheBlockInfo::PREFETCH);
+               ++stats.prefetches;
+               bool from_dram = (hit_where == HitWhere::DRAM_LOCAL || hit_where == HitWhere::DRAM_REMOTE || hit_where == HitWhere::DRAM);
+               if (from_dram) {
+                  info->setOption(CacheBlockInfo::PREFETCH_FROM_DRAM);
+                  ++stats.prefetches_fillup;
+               } else {
+                  info->clearOption(CacheBlockInfo::PREFETCH_FROM_DRAM);
+               }
+            }
          }
 
          void updateHits(Core::mem_op_t mem_op_type, UInt64 hits);

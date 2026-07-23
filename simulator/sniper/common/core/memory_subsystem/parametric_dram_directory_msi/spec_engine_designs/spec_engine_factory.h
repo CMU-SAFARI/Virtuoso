@@ -9,9 +9,14 @@
 #include "mmu_spec.h"
 #include "spec_engine_base.h"
 #include "spectlb.h"
+#include "revelator.h"
+#include "numa_revelator.h"
+#include "revelator_open_addressing_engine.h"
+#include "revelator_thp_engine.h"
 #include "asap_engine.h"
 #include "oracle_spec.h"
 #include "spot_engine.h"
+#include "mmu_midgard.h"
 
 namespace ParametricDramDirectoryMSI
 {
@@ -57,8 +62,23 @@ namespace ParametricDramDirectoryMSI
             {
                 return new ASAP(core, memory_manager, shmem_perf_model, name);
             }
+            else if (type == "revelator")
+            {
+                return new Revelator(core, memory_manager, shmem_perf_model, name);
+            }
+            else if (type == "revelator_open_addressing")
+            {
+                return new RevelatorOpenAddressingEngine(core, memory_manager, shmem_perf_model, name);
+            }
+            else if (type == "revelator_thp")
+            {
+                return new RevelatorTHP(core, memory_manager, shmem_perf_model, name);
+            }
             else if (type == "SpOT") {
                 return new Spot(core, memory_manager, shmem_perf_model, name);
+            }
+            else if (type == "numa_revelator") {
+                return new NumaRevelator(core, memory_manager, shmem_perf_model, name);
             }
             else {
                 // Handle invalid SpecEngine type error

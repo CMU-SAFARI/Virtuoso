@@ -113,7 +113,7 @@ namespace ParametricDramDirectoryMSI
 		std::unordered_map<IntPtr, UInt64> accesses_per_vpn;
 
 		// Shadow PTE payload: stores per-VPN temporal offset data for the
-		// TLB prefetcher.  Keyed by VPN (address >> 12).
+		// TemporalPTEPrefetcher.  Keyed by VPN (address >> 12).
 		std::unordered_map<uint64_t, __uint128_t> shadow_pte_payload;
 
 	public:
@@ -137,7 +137,7 @@ namespace ParametricDramDirectoryMSI
 		virtual int updatePageTableFrames(IntPtr address, IntPtr core_id, IntPtr ppn, int page_size, std::vector<UInt64> frames) = 0;
 
 		// ----------------------------------------------------------------
-		// Shadow PTE payload API  (used by TLB prefetcher)
+		// Shadow PTE payload API  (used by TemporalPTEPrefetcher)
 		// ----------------------------------------------------------------
 
 		/** Read the shadow payload word for a given VPN. Returns 0 if none stored. */
@@ -153,11 +153,23 @@ namespace ParametricDramDirectoryMSI
 			shadow_pte_payload[vpn] = payload;
 		}
 
-		/** Convenience: read payload during a walk and set it in the PTWResult. */
-		void fillPayloadBits(uint64_t vpn, PTWResult& result) const
+		// ----------------------------------------------------------------
+		// Shadow PMD payload API  (2MB huge-page plane for TemporalPTEPrefetcher)
+		// Keyed by 2MB VPN (address >> 21).
+		// ----------------------------------------------------------------
+		std::unordered_map<uint64_t, __uint128_t> shadow_pmd_payload;
+
+		__uint128_t readPMDPayloadBits(uint64_t vpn_2mb) const
 		{
-			result.payload_bits = readPayloadBits(vpn);
+			auto it = shadow_pmd_payload.find(vpn_2mb);
+			return (it != shadow_pmd_payload.end()) ? it->second : 0;
 		}
+
+		void writePMDPayloadBits(uint64_t vpn_2mb, __uint128_t payload)
+		{
+			shadow_pmd_payload[vpn_2mb] = payload;
+		}
+
 		UInt64 getAccessesPerVPN(IntPtr vpn)
 		{
 			if (accesses_per_vpn.find(vpn) != accesses_per_vpn.end())

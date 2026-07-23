@@ -23,6 +23,7 @@ This document tracks the status of simulator features, configurations, and compo
 
 | Config | Status | Description |
 |--------|--------|-------------|
+| `revelator_core.cfg` | ✅ Working | Nehalem-based ROB core, 2.9 GHz, 224-entry ROB |
 | `beefy.cfg` | ✅ Working | Larger caches (64KB L1, 1MB L2), 400-entry ROB |
 | `meteor_lake_pcore.cfg` | ✅ Working | Modern P-core: 5.1 GHz, 512-entry ROB, 2MB L2 |
 | `wimpy.cfg` | ❓ Unknown | Small core configuration |
@@ -40,6 +41,16 @@ This document tracks the status of simulator features, configurations, and compo
 | `asap.cfg` | 🔶 Untested | ASAP allocator with radix |
 | `dmt.cfg` | 🔶 Untested | Direct Memory Translation MMU |
 | `spot.cfg` | 🔶 Untested | SPOT prefetcher + contiguity allocator |
+
+### Revelator Variants
+| Config | Status | Description |
+|--------|--------|-------------|
+| `revelator.cfg` | 🔶 Untested | Hash-based allocator + speculative TLB |
+| `revelator_ech.cfg` | 🔶 Untested | Revelator + Elastic Cuckoo Hash PT |
+| `revelator_hdc.cfg` | 🔶 Untested | Revelator + Hash Don't Cache PT |
+| `revelator_open.cfg` | 🔶 Untested | Open addressing variant |
+| `revelator_thp.cfg` | 🔶 Untested | THP support variant |
+| `revelator_virt.cfg` | 🔶 Untested | Virtualized environment |
 
 ### Page Table Variants
 | Config | Status | Description |
@@ -72,6 +83,7 @@ This document tracks the status of simulator features, configurations, and compo
 |-----------|--------|----------|
 | `baseline_allocator` | ✅ Working | `physical_memory_allocators/baseline_allocator.cfg` |
 | `reserve_thp` | ✅ Working | `physical_memory_allocators/reserve_thp.cfg` |
+| `revelator_alloc` | ✅ Working | `physical_memory_allocators/revelator_alloc.cfg` |
 | `utopia` | 🔶 Untested | `physical_memory_allocators/utopia.cfg` |
 | `eager_paging` | 🔶 Untested | `physical_memory_allocators/eager_paging.cfg` |
 | `spot` | 🔶 Untested | `physical_memory_allocators/spot.cfg` |
@@ -118,6 +130,7 @@ This document tracks the status of simulator features, configurations, and compo
 
 | Engine | Status | Config Location |
 |--------|--------|-----------------|
+| `spec_engine_revelator` | ✅ Working | `spec_engine_configs/spec_engine_revelator.cfg` |
 | `spec_engine_oracle` | 🔶 Untested | `spec_engine_configs/spec_engine_oracle.cfg` |
 | `spec_engine_spectlb` | 🔶 Untested | `spec_engine_configs/spec_engine_spectlb.cfg` |
 | `spec_engine_spot` | 🔶 Untested | `spec_engine_configs/spec_engine_spot.cfg` |
@@ -199,6 +212,7 @@ config/
 ├── common_configs/                # Shared base settings
 │   └── base_system.cfg           # Simulation basics only
 ├── core_configs/                  # Core + cache configs
+│   ├── revelator_core.cfg
 │   ├── beefy.cfg
 │   └── meteor_lake_pcore.cfg
 ├── dram_configs/                  # DRAM timing configs

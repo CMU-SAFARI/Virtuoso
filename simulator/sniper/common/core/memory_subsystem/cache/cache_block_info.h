@@ -12,6 +12,7 @@ public:
 	{
 		PREFETCH,
 		WARMUP,
+		PREFETCH_FROM_DRAM,   // Set alongside PREFETCH when the fill came from DRAM (vs NUCA/LLC)
 		NUM_OPTIONS
 	};
 
@@ -49,7 +50,7 @@ private:
 
 	// @kanellok for TLB: added ppn to store the physical page number
 	IntPtr ppn;
-	bool m_tlb_entry;	  // @kanellok for caches that store TLB entries: flag to indicate if this is a TLB entry
+	bool m_tlb_entry;	  // @kanellok for caches that store TLB entries: flag to indicate if this is a TLB entry: this was used only in [Kanellopoulos et al. Victima MICRO 2023]
 	int m_page_size;	  //@kanellok for TLBs: hold page size for each cache block
 
 	IntPtr m_tag;

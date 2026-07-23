@@ -18,6 +18,7 @@
 #include "thread.h"
 #include "mmu.h"
 #include "metadata_info.h"
+// #include "mmu_midgard.h"
 #include "trace_thread.h"
 #include "trace_manager.h"
 #include "mimicos.h"
@@ -612,7 +613,18 @@ namespace ParametricDramDirectoryMSI
 		IntPtr translation_result; // Pair < How much time the translation took, the physical address >
 
 		SubsecondTime t_start_translation = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
-		if (!skip_translation)
+		// In the case of [Gupta et al. Midgard ISCA 2021], we need to perform the translation in two steps
+		// The first step is to perform the translation in the frontend from the virtual address to the intermediate address
+		if (mmu_type == "midgard" && !skip_translation)
+		{
+			translation_result = m_mmu->performAddressTranslationFrontend(eip, address,
+																		  is_instruction,
+																		  lock_signal,
+																		  modeled == Core::MEM_MODELED_NONE || modeled == Core::MEM_MODELED_COUNT ? false : true,
+																		  modeled == Core::MEM_MODELED_NONE ? false : true);
+
+		}
+		else if (!skip_translation)
 		{
 #if DEBUG_MEM_MANAGER >= DEBUG_DETAILED
 			log_file_mmu << "Memory Access: " << address << " Initiating Translation at time " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD).getNS() << std::endl;
@@ -796,6 +808,22 @@ namespace ParametricDramDirectoryMSI
 
 	
 
+		// If the memory access is a page table access, we need to update the translation stats
+		if (mmu_type == "midgard")
+		{
+
+			if (result == HitWhere::where_t::DRAM || result == HitWhere::where_t::DRAM_CACHE || result == HitWhere::where_t::DRAM_LOCAL || result == HitWhere::where_t::DRAM_REMOTE)
+			{
+
+				translation_result = m_mmu->performAddressTranslationBackend(eip, address,
+																			 is_instruction,
+																			 lock_signal,
+																			 modeled == Core::MEM_MODELED_NONE || modeled == Core::MEM_MODELED_COUNT ? false : true,
+																			 modeled == Core::MEM_MODELED_NONE ? false : true);
+
+			}
+		}
+		
 		return result;
 	}
 

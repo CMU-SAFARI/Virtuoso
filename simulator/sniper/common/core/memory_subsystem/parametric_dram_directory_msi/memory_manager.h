@@ -29,6 +29,7 @@ namespace ParametricDramDirectoryMSI
 	typedef std::map<CoreComponentType, CacheCntlr *> CacheCntlrMap;
 	
 	class MemoryManagementUnitBase;
+	// class MemoryManagementUnitMidgard;
 	class MemoryManagementUnitPOMTLB;
 	// class MemoryManagementUnitUtopia;
 	class MemoryManagementUnitNested;
@@ -48,7 +49,7 @@ namespace ParametricDramDirectoryMSI
 		AddressHomeLookup *m_dram_controller_home_lookup;
 
 		MemoryManagementUnitBase *m_mmu; //	Responsible for handling address translation
-		String mmu_type; // MMU type (Default, Range, POMTLB, Utopia, DMT, Nested, Speculative)
+		String mmu_type; // MMU type (Default, Range, Midgard, POMTLB, Utopia, DMT, Nested, Speculative)
 
 		bool m_native_environment; // Native execution
 		bool m_virtualized_environment; // We are running in a virtualized environment

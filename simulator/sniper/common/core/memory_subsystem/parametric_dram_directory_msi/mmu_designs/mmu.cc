@@ -578,6 +578,27 @@ namespace ParametricDramDirectoryMSI
 
 
         // ====================================================================
+        // PERFECT L2 TLB: Force L2 hit on any L1 miss
+        // ====================================================================
+        // When perfect_l2_tlb is enabled, any access that misses in L1 TLBs
+        // is guaranteed to hit in L2. We use translateWithoutTiming() to get
+        // the correct translation, then treat it as an L2 TLB hit.
+        // Page faults are handled internally by translateWithoutTiming().
+        if (!hit && perfect_l2_tlb_enabled)
+        {
+            auto [physical_address, ps] = translateWithoutTiming(address, page_table);
+            ppn_result = physical_address >> 12;  // PPN at 4KB granularity
+            page_size = ps;
+            hit = true;
+            hit_level = 1;  // L2 TLB level
+
+            mmu_log->log("Perfect L2 TLB: VA " + mmu_log->hex(address) +
+                       " -> PPN " + mmu_log->hex(ppn_result) +
+                       " (forced L2 hit, no PTW)");
+        }
+
+
+        // ====================================================================
         // Track TLB hits between PTWs (for temporal analysis)
         // ====================================================================
         if (hit)
@@ -614,11 +635,19 @@ namespace ParametricDramDirectoryMSI
         if (hit)
         {
             // Extract translation data from the hitting TLB entry
-            ppn_result = tlb_block_info_hit->getPPN();
-            page_size = tlb_block_info_hit->getPageSize();
+            // (skip if already set by perfect L2 TLB path)
+            if (tlb_block_info_hit != NULL) {
+                ppn_result = tlb_block_info_hit->getPPN();
+                page_size = tlb_block_info_hit->getPageSize();
+            }
 
-            mmu_log->log("TLB Hit at level " + std::to_string(hit_level) + 
-                        " at TLB " + std::string(hit_tlb->getName().c_str()));
+            if (hit_tlb != NULL) {
+                mmu_log->log("TLB Hit at level " + std::to_string(hit_level) + 
+                            " at TLB " + std::string(hit_tlb->getName().c_str()));
+            } else {
+                mmu_log->log("TLB Hit at level " + std::to_string(hit_level) + 
+                            " (perfect L2 TLB)");
+            }
             
             // Get the appropriate TLB path (instruction or data) for latency
             const TLBSubsystem& tlb_path = instruction ? 
@@ -651,14 +680,15 @@ namespace ParametricDramDirectoryMSI
                 // latency of the specific TLB that scored a hit.
                 if (hit_level != 1 ){
 
-                    if (tlb_path[hit_level][j] == hit_tlb)
+                    if (hit_tlb != NULL && tlb_path[hit_level][j] == hit_tlb)
 					{
 						translation_stats.total_tlb_latency += hit_tlb->getLatency();
 						charged_tlb_latency += hit_tlb->getLatency();
 						translation_stats.tlb_latency_per_level[hit_level] += hit_tlb->getLatency();
 					}
-                    mmu_log->debug("Charging TLB Hit Latency: " + std::to_string(hit_tlb->getLatency().getNS()) + 
-                                 "ns at level " + std::to_string(hit_level));
+                    if (hit_tlb != NULL)
+                        mmu_log->debug("Charging TLB Hit Latency: " + std::to_string(hit_tlb->getLatency().getNS()) + 
+                                     "ns at level " + std::to_string(hit_level));
                 }
 
 				// @kanellok: Page Size Prediction hit latency logic for L2 TLB hits
@@ -690,6 +720,16 @@ namespace ParametricDramDirectoryMSI
 						translation_stats.tlb_latency_per_level[hit_level] += l2_tlb_misprediction_latency;
 					}
 					// L2 latency charged once based on prediction, exit loop
+					break;
+				}
+				// L2 hit without page size prediction (e.g. perfect L2 TLB mode):
+				// charge the L2 TLB latency directly from the TLB config
+				else if (hit_level == 1 && !page_size_prediction_enabled)
+				{
+					SubsecondTime l2_lat = tlb_path[hit_level][j]->getLatency();
+					translation_stats.total_tlb_latency += l2_lat;
+					charged_tlb_latency += l2_lat;
+					translation_stats.tlb_latency_per_level[hit_level] += l2_lat;
 					break;
 				}
 

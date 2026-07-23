@@ -127,7 +127,7 @@ int VirtuosExceptionHandler::update_page_table_frames(ParametricDramDirectoryMSI
 #endif
     (void)frames_used;
 
-    // TODO @vlnitu: migrate deallocation allocators as well
+    // TODO @vlnitu: migrate deallocation allocators as well (i.e., reveleator, revelator_open, etc.)
     int frames_requested = frames_already_allocated_by_virtuos.size();
 #if DEBUG_EXCEPTION_HANDLER >= DEBUG_DETAILED
     std::cout << "[EXCEPTION_HANDLER] Frames requested: " <<  frames_requested << std::endl;

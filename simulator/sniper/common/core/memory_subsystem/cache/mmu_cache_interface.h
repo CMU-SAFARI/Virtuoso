@@ -53,5 +53,16 @@ public:
       return SubsecondTime::Zero();
    }
 
+   /**
+    * @brief Tag an existing cache line as prefetched (set CacheBlockInfo::PREFETCH).
+    *
+    * Called after a prefetch PTW walk fills a line via the normal demand path.
+    * A subsequent demand access that hits this line will increment hits-prefetch.
+    */
+   virtual void tagMMUPrefetch(IntPtr cache_address, HitWhere::where_t hit_where = HitWhere::UNKNOWN)
+   {
+      // Default: no-op
+   }
+
    virtual ~MMUCacheInterface() = default;
 };

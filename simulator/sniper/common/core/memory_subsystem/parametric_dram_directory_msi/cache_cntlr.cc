@@ -512,6 +512,10 @@ namespace ParametricDramDirectoryMSI
 		registerStatsMetric(name, core_id, "prefetches", &stats.prefetches);
 		registerStatsMetric(name, core_id, "prefetches-fillup", &stats.prefetches_fillup);
 		registerStatsMetric(name, core_id, "late-metadata-prefetches", &stats.late_metadata_prefetches);
+		registerStatsMetric(name, core_id, "hits-prefetch-dram", &stats.hits_prefetch_dram);
+		registerStatsMetric(name, core_id, "hits-prefetch-nuca", &stats.hits_prefetch_nuca);
+		registerStatsMetric(name, core_id, "evict-prefetch-dram", &stats.evict_prefetch_dram);
+		registerStatsMetric(name, core_id, "evict-prefetch-nuca", &stats.evict_prefetch_nuca);
 		registerStatsMetric(name, core_id, "spec-evict-total", &stats.spec_evict_total);
 		registerStatsMetric(name, core_id, "spec-evict-harmful", &stats.spec_evict_harmful);
 
@@ -1200,8 +1204,8 @@ namespace ParametricDramDirectoryMSI
 		acquireStackLock(prefetch_address);
 		MYLOG("prefetching %lx", prefetch_address);
 
-#ifdef SPEC_PREFETCH_DEBUG
-	std::cout << "Speculative prefetch for address: " << prefetch_address << std::endl;
+#ifdef REVELATOR_CACHE_DEBUG
+	std::cout << "Prefetching for Revelator address: " << prefetch_address << std::endl;
 #endif
 
 		SubsecondTime t_before = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
@@ -1210,8 +1214,8 @@ namespace ParametricDramDirectoryMSI
 
 		if (hit_where != HitWhere::MISS)
 		{
-#ifdef SPEC_PREFETCH_DEBUG
-			std::cout << "Speculative prefetch for address: " << prefetch_address << " was a hit and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
+#ifdef REVELATOR_CACHE_DEBUG
+			std::cout << "Prefetching for Revelator address: " << prefetch_address << " was a hit and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
 #endif
 		}
 		if (hit_where == HitWhere::MISS)
@@ -1224,8 +1228,8 @@ namespace ParametricDramDirectoryMSI
 
 			hit_where = processShmemReqFromPrevCache(eip, this, Core::READ, prefetch_address, 0, getCacheBlockSize(), false, false, block_type, Prefetch::OWN, t_start, false, Core::mem_origin_t::NORMAL);
 
-#ifdef SPEC_PREFETCH_DEBUG  
-	std::cout << "Speculative prefetch for address: " << prefetch_address << " was a miss and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
+#ifdef REVELATOR_CACHE_DEBUG  
+	std::cout << "Prefetching for Revelator address: " << prefetch_address << " was a miss and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
 #endif
 			LOG_ASSERT_ERROR(hit_where != HitWhere::MISS, "Line was not there after prefetch");
 			stats.prefetches_fillup++;
@@ -1317,9 +1321,13 @@ namespace ParametricDramDirectoryMSI
 			{
 				// This line was fetched by the prefetcher and has proven useful
 				stats.hits_prefetch++;
+				if (cache_block_info->hasOption(CacheBlockInfo::PREFETCH_FROM_DRAM))
+					++stats.hits_prefetch_dram;
+				else
+					++stats.hits_prefetch_nuca;
 				prefetch_hit = true;
 				cache_block_info->clearOption(CacheBlockInfo::PREFETCH);
-
+				cache_block_info->clearOption(CacheBlockInfo::PREFETCH_FROM_DRAM);
 			}
 			if (cache_block_info->hasOption(CacheBlockInfo::WARMUP) && Sim()->getInstrumentationMode() != InstMode::CACHE_ONLY)
 			{
@@ -2016,7 +2024,13 @@ namespace ParametricDramDirectoryMSI
 				++stats.evict[old_state];
 				// Line was prefetched, but is evicted without ever being used
 				if (evict_block_info.hasOption(CacheBlockInfo::PREFETCH))
+				{
 					++stats.evict_prefetch;
+					if (evict_block_info.hasOption(CacheBlockInfo::PREFETCH_FROM_DRAM))
+						++stats.evict_prefetch_dram;
+					else
+						++stats.evict_prefetch_nuca;
+				}
 				if (evict_block_info.hasOption(CacheBlockInfo::WARMUP))
 					++stats.evict_warmup;
 

@@ -1,6 +1,3 @@
-sift/libsift.a
-
-
 # Prerequisites
 *.d
 
@@ -22,6 +19,7 @@ sift/libsift.a
 # Fortran module files
 *.mod
 *.smod
+*.pyc
 
 # Compiled Static libraries
 *.lai
@@ -38,10 +36,32 @@ sift/libsift.a
 *.csv
 *.pdf
 
+# Logs
 *.log
+*.log.0
+heartbeat.txt
 
-# Ignore the directory "use_case_allocator"
+# Results
+results/
 
+sim.info
+sim.scripts.py
+sim.stats*
+sniper.py
+buildconf.makefile
+buildconf.sh
+simulator/sniper/.sift_done
+simulator/sniper/sim.cfg
+simulator/sniper/sim.memorytracker
+
+# Ignore sift symbolic links
+simulator/sniper/sift/frontend/pin-frontend/*.h
+simulator/sniper/sift/frontend/pin-frontend/*.cc
+
+simulator/sniper/frontend/pin-frontend/sift/*.h
+simulator/sniper/frontend/pin-frontend/sift/*.cc
+
+# Sniper related directories
 simulator/sniper/use_case_allocator/
 simulator/sniper/traces_sr/
 simulator/sniper/lib/
@@ -57,15 +77,30 @@ simulator/sniper/results/
 simulator/sniper/tools/__pycache__/
 simulator/sniper/scripts/__pycache__/
 simulator/sniper/scripts/sim/__pycache__/
-simulator/sniper/sift/recorder/sift/*.cc
-simulator/sniper/sift/recorder/sift/*.h
 
 simulator/sniper/sift/recorder/sift/*.h
 simulator/sniper/sift/recorder/sift/*.cc
+simulator/sniper/sift/recorder/obj-intel64
+simulator/sniper/sift/siftdump
 
+simulator/sniper/frontend/pin-frontend/obj-intel64
+
+simulator/sniper/mcpat
+
+simulator/sniper/include/linux
+
+# MimicOS related
+simulator/sniper/mimicos/build
+
+# Random things?
+motivation_paper/variation_mpf/ftrace_xs_thpoff
+aux_scripts/validation/validate_pf/traces_pf_off/trace_stress-ng
+
+# Some more things
 lib/libcarbon_sim.a
 sift/libsift.a
 
+# Workloads
 workloads/llama.cpp/models/mistral-7b-v0.1.Q2_K.gguf
 workloads/llama.cpp/models/llama-2-7b.gguf
 workloads/llama.cpp/models/ggml-bagel-2.8b-v0.2-f16.gguf
@@ -73,3 +108,9 @@ workloads/llama.cpp/models/dolphin-2.9.3-mistral-nemo-12b-llamacppfixed.IQ3_M.gg
 workloads/llama.cpp/perf.data
 workloads/graph_data_sets/graph500-scale23-ef16_adj/edge.csv
 workloads/graph_data_sets/CL-10M-1d8-L5/edge.csv
+
+simulator/sniper/test_results/
+# Ignore VSCode-related setups
+simulator/sniper/.vscode/*
+.vscode/*
+

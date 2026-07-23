@@ -1,5 +1,16 @@
-*.txt
+# Generated experiment run directories (created by create_experiments.py /
+# create_multicore_experiments.py and the AE harness).
 exp_*/
 .sift_done
 
-common/__pycache__/
+# Trace lists: distributed with the trace bundle, not the source repo
+# (each .tlist's first line is the reviewer's absolute trace-root path).
+vm_tlist/
+
+# AE harness: generated result tables + local trace manifests.
+ae/ae_out/
+ae/*.manifest
+
+# Python caches
+__pycache__/
+*.pyc

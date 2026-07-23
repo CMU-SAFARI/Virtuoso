@@ -42,7 +42,7 @@ public:
 		IntPtr address, IntPtr eip, Core::lock_signal_t lock,
 		bool modeled, bool count, PageTable *pt,
 		bool instruction = false, bool tlb_hit = false,
-		bool pq_hit = false) override;
+		bool pq_hit = false, int page_size = 12) override;
 
 private:
 	// ── Table helpers ─────────────────────────────────────────────

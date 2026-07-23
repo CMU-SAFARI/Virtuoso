@@ -9,6 +9,13 @@
 #include "memory_management/policies/hugetlbfs_policy.h"
 #include "memory_management/swap_cache.h"
 #include "memory_management/policies/swap_cache_policy.h"
+#include "memory_management/kcompactd.h"
+#include "memory_management/policies/kcompactd_policy.h"
+#include "memory_management/khugepaged.h"
+#include "memory_management/policies/khugepaged_policy.h"
+#include "memory_management/kswapd.h"
+#include "memory_management/policies/kswapd_policy.h"
+#include "hooks_manager.h"
 #include "subsecond_time.h"
 #include "fixed_types.h"
 
@@ -16,6 +23,9 @@
 #include <memory>
 #include <vector>
 #include <fstream>
+#include <atomic>
+#include <deque>
+#include <mutex>
 
 // Backward compatibility: old code used MimicOS_NS::Message
 namespace MimicOS_NS {
@@ -25,6 +35,9 @@ namespace MimicOS_NS {
 // Type aliases for Sniper-space policy-based templates
 using SniperHugeTLBfs  = ::HugeTLBfs<Sniper::HugeTLBfs::MetricsPolicy>;
 using SniperSwapCache  = ::SwapCache<Sniper::SwapCache::MetricsPolicy>;
+using SniperKcompactd  = ::Kcompactd<Sniper::Kcompactd::MetricsPolicy>;
+using SniperKhugepaged = ::Khugepaged<Sniper::Khugepaged::MetricsPolicy>;
+using SniperKswapd     = ::Kswapd<Sniper::Kswapd::MetricsPolicy>;
 
 /**
  * @brief Per-core performance statistics for adaptive policies
@@ -231,6 +244,24 @@ public:
      * @return true if hugetlbfs is enabled and initialized
      */
     bool isHugeTLBfsEnabled() const { return m_hugetlbfs != nullptr && m_hugetlbfs->isEnabled(); }
+
+    // ============ Kcompactd Management ============
+    SniperKcompactd* getKcompactd() { return m_kcompactd.get(); }
+    bool isKcompactdRunning() const { return m_kcompactd && m_kcompactd->isRunning(); }
+
+    /**
+     * @brief Start kcompactd after allocator initialization is complete.
+     *
+     * Call this after fragment_memory() has been called on the allocator.
+     * The allocator must be a ReserveTHP (or similar) that exposes two_mb_map.
+     */
+    template <typename AllocatorType>
+    void startKcompactd(AllocatorType* allocator)
+    {
+        if (!m_kcompactd) return;
+        m_kcompactd->bind(&allocator->getTwoMbMap(), allocator->getBuddyAllocator());
+        m_kcompactd->start();
+    }
     
     /**
      * @brief Get the HugeTLBfs service
@@ -312,17 +343,81 @@ public:
     
     bool isUserspaceMimicosEnabled() const { return m_userspace_enabled; }
     
-    MimicOSMessage* getMessage() { return &m_message; }
-    
-    template <typename... Args>
-    void buildMessageWithArgs(const std::string& message_type, Args&&... args) {
-        MimicOSProtocol::buildMessage(m_message, message_type, std::forward<Args>(args)...);
+    /* Stage 4 (Apr 18 2026): per-core event queue.
+       Replaces the Stage 2 single-slot m_messages[core] / m_message_ready[core]
+       design — that worked for one event at a time (page_fault OR new_thread),
+       but once the Stage 3/4 oversubscription path is in, multiple events can
+       pile up on a core (e.g. new_thread for worker2 arrives while the core
+       is busy running worker1; later quantum_expired on worker1 adds another).
+       A std::deque<MimicOSMessage> per core preserves FIFO order and protects
+       with a per-core mutex.  SimReceiveMessage pops the front (blocking
+       until non-empty). */
+
+    /* Get a pointer to the slot currently being delivered (valid only
+       between isEventReady returning true and popFront).  Callers that
+       only need to build/post use buildMessageWithArgs / popFront. */
+    MimicOSMessage* peekFront(int core_id) {
+        if (core_id < 0 || (size_t)core_id >= m_event_queues.size()) core_id = 0;
+        std::lock_guard<std::mutex> lk(*m_event_queue_locks[core_id]);
+        if (m_event_queues[core_id].empty()) return nullptr;
+        return &m_event_queues[core_id].front();
     }
+
+    template <typename... Args>
+    void buildMessageWithArgs(int core_id, const std::string& message_type, Args&&... args) {
+        if (core_id < 0 || (size_t)core_id >= m_event_queues.size()) core_id = 0;
+        MimicOSMessage msg;
+        MimicOSProtocol::buildMessage(msg, message_type, std::forward<Args>(args)...);
+        std::lock_guard<std::mutex> lk(*m_event_queue_locks[core_id]);
+        m_event_queues[core_id].push_back(std::move(msg));
+    }
+
+    /* Stage 4 (Apr 18 2026): replaces the old ready-flag.  Returns true
+       when the core's event queue has at least one event waiting. */
+    bool isEventReady(int core_id) {
+        if (core_id < 0 || (size_t)core_id >= m_event_queues.size()) return false;
+        std::lock_guard<std::mutex> lk(*m_event_queue_locks[core_id]);
+        return !m_event_queues[core_id].empty();
+    }
+
+    /* Copy-pop the front event into `out` (FIFO).  Returns false if
+       the queue was empty (caller should spin / block). */
+    bool popEvent(int core_id, MimicOSMessage& out) {
+        if (core_id < 0 || (size_t)core_id >= m_event_queues.size()) return false;
+        std::lock_guard<std::mutex> lk(*m_event_queue_locks[core_id]);
+        if (m_event_queues[core_id].empty()) return false;
+        out = std::move(m_event_queues[core_id].front());
+        m_event_queues[core_id].pop_front();
+        return true;
+    }
+
+    /* Backwards-compat shims used by legacy callers that still hold
+       MimicOSMessage* pointers.  Returns a per-call scratch buffer
+       that holds the most-recently-popped event for the given core.
+       DEPRECATED — use popEvent/peekFront in new code. */
+    MimicOSMessage* getMessage(int core_id) {
+        if (core_id < 0 || (size_t)core_id >= m_scratch_messages.size()) core_id = 0;
+        return &m_scratch_messages[core_id];
+    }
+    bool isMessageReady(int core_id) { return isEventReady(core_id); }
+    void consumeMessage(int /*core_id*/) { /* noop — pop handles it */ }
     
     // ============ Configuration ============
     
     String getName() const { return m_name; }
     SubsecondTime getPageFaultLatency() const { return m_page_fault_latency.getLatency(); }
+
+    /* Phase 5 (2026-04-22): per-fault charge (in simulated cycles) that
+       the MMU should queue on the app thread's perf model when the
+       fault is going to be handled by userspace MimicOS.  When 0, the
+       MMU skips this charge — meaning userspace MimicOS is expected to
+       advance the clock itself via the kernel pthread's real LinuxPhase
+       execution (the Phase 4 path).  When >0, the MMU charges this at
+       fault time so the kernel pthread can skip detailed work and fast-
+       replay (Phase 5 path).  Set by userspace MimicOS after profile
+       training via a new SIM_CMD magic. */
+    uint64_t getFastFaultChargeCycles() const { return m_fast_fault_charge_cycles.load(std::memory_order_relaxed); }
+    void setFastFaultChargeCycles(uint64_t c) { m_fast_fault_charge_cycles.store(c, std::memory_order_relaxed); }
     
     int getNumberOfPageSizes() const { return static_cast<int>(m_page_sizes.size()); }
     int* getPageSizeList() { return m_page_sizes.data(); }
@@ -420,13 +515,78 @@ private:
     std::unique_ptr<PhysicalMemoryAllocator> m_memory_allocator;
     std::unique_ptr<SniperSwapCache> m_swap_cache;
     std::unique_ptr<SniperHugeTLBfs> m_hugetlbfs;
-    
+    std::unique_ptr<SniperKcompactd> m_kcompactd;
+    UInt64 m_kcompactd_interval_ns = 0;
+    UInt64 m_kcompactd_last_scan_ns = 0;
+
+    std::unique_ptr<SniperKhugepaged> m_khugepaged;
+    UInt64 m_khugepaged_interval_ns = 0;
+    UInt64 m_khugepaged_last_scan_ns = 0;
+
+    std::unique_ptr<SniperKswapd> m_kswapd;
+    UInt64 m_kswapd_interval_ns = 0;
+    UInt64 m_kswapd_last_scan_ns = 0;
+
+    /**
+     * @brief HOOK_PERIODIC callback for kcompactd (sniper-space mode).
+     *
+     * Called by Sniper's barrier sync at the barrier quantum interval.
+     * Checks if enough simulated time has passed since last scan, and
+     * if so, runs compact_once().
+     */
+    static SInt64 hookKcompactdPeriodic(UInt64 self_ptr, UInt64 time_ns)
+    {
+        auto* self = reinterpret_cast<MimicOS*>(self_ptr);
+        if (!self->m_kcompactd || self->m_kcompactd_interval_ns == 0)
+            return 0;
+        if (time_ns >= self->m_kcompactd_last_scan_ns + self->m_kcompactd_interval_ns) {
+            self->m_kcompactd->compact_once();
+            self->m_kcompactd_last_scan_ns = time_ns;
+        }
+        return 0;
+    }
+
+    static SInt64 hookKhugepagedPeriodic(UInt64 self_ptr, UInt64 time_ns)
+    {
+        auto* self = reinterpret_cast<MimicOS*>(self_ptr);
+        if (!self->m_khugepaged || self->m_khugepaged_interval_ns == 0)
+            return 0;
+        if (time_ns >= self->m_khugepaged_last_scan_ns + self->m_khugepaged_interval_ns) {
+            self->m_khugepaged->scan_once();
+            self->m_khugepaged_last_scan_ns = time_ns;
+        }
+        return 0;
+    }
+
+    static SInt64 hookKswapdPeriodic(UInt64 self_ptr, UInt64 time_ns)
+    {
+        auto* self = reinterpret_cast<MimicOS*>(self_ptr);
+        if (!self->m_kswapd || self->m_kswapd_interval_ns == 0)
+            return 0;
+        if (time_ns >= self->m_kswapd_last_scan_ns + self->m_kswapd_interval_ns) {
+            self->m_kswapd->scan_once();
+            self->m_kswapd_last_scan_ns = time_ns;
+        }
+        return 0;
+    }
+
     // ============ Per-Application State ============
     std::unordered_map<int, std::unique_ptr<ApplicationContext>> m_applications;
     
     // ============ Page Fault State (per-core) ============
     std::vector<PageFaultState> m_pf_states;
-    MimicOSMessage m_message;
+
+    /* Stage 4 (Apr 18 2026): per-core event queue.  Events (page_fault,
+       new_thread, thread_exit, quantum_expired, ...) are pushed by
+       buildMessageWithArgs and popped by the SimReceiveMessage handler.
+       Per-core mutex protects the deque against concurrent push/pop from
+       different Sniper TraceThreads. */
+    std::vector<std::deque<MimicOSMessage>>         m_event_queues;
+    std::vector<std::unique_ptr<std::mutex>>        m_event_queue_locks;
+    /* Scratch slot per core — only kept for the deprecated getMessage()
+       shim used by pre-Stage-4 call sites; real event delivery uses
+       popEvent into a caller-provided buffer. */
+    std::vector<MimicOSMessage> m_scratch_messages;
     bool m_last_pf_caused_swapping;
     
     // ============ Configuration ============
@@ -436,6 +596,7 @@ private:
     String m_range_table_name;
     std::vector<int> m_page_sizes;
     ComponentLatency m_page_fault_latency;
+    std::atomic<uint64_t> m_fast_fault_charge_cycles{0};
     double m_target_fragmentation;
     
     // ============ Per-Core Statistics ============

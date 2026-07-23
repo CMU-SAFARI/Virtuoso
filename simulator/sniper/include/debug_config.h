@@ -44,13 +44,26 @@
 #define DEBUG_SPOT_ALLOCATOR        DEBUG_NONE /* 0, 1 or 2 */
 
 #define DEBUG_UTOPIA                DEBUG_NONE /* 0, 1 or 2 */ // Utopia allocator logging
-#define ENABLE_UTOPIA_MIGRATION_CSV 1          /* 0 = disabled, 1 = enabled */ // Log VPN migrations to CSV
+#define ENABLE_UTOPIA_MIGRATION_CSV 0          /* 0 = disabled, 1 = enabled */ // Log VPN migrations to CSV
 
 #define DEBUG_TLB                   DEBUG_NONE /* 0, 1 or 2 */
+#define DEBUG_TEMPORAL_PTE_PREFETCHER DEBUG_NONE /* 0, 1 or 2 */ // Temporal PTE TLB prefetcher logging
+
+// Temporal PTE Prefetcher — optional expensive tracking (simulation speed impact)
+// Set to 0 to disable and significantly speed up simulation wall-clock time.
+#define ENABLE_TPTE_UNIQUE_VPN_TRACKING  0  // (1) Unbounded unordered_sets tracking unique VPNs (8 sets, millions of entries)
+// NOTE: Timeliness tracking is now always-on via a fixed-size O(1) direct-mapped table (no compile flag needed).
+#define ENABLE_TPTE_PERIODIC_FINALIZE    0  // (3) finalizeUniquePageStats() every 10K queries (scans unique VPN sets)
+#define ENABLE_TPTE_ALLOC_OPT            1  // (4) Use stack-local small buffers instead of per-query heap allocs
 
 // HugeTLBfs & Swap Cache
 #define DEBUG_HUGETLBFS             DEBUG_NONE /* 0, 1 or 2 */
 #define DEBUG_SWAP_CACHE            DEBUG_NONE /* 0, 1 or 2 */
+
+// OS Daemons
+#define DEBUG_COMPACTD              DEBUG_NONE /* 0, 1 or 2 */ // kcompactd memory compaction daemon
+#define DEBUG_KHUGEPAGED            DEBUG_NONE /* 0, 1 or 2 */ // khugepaged THP coalescing daemon
+#define DEBUG_KSWAPD                DEBUG_NONE /* 0, 1 or 2 */ // kswapd page reclamation daemon
 
 // Range-based translation (RMM)
 #define DEBUG_RLB                   DEBUG_NONE /* 0, 1 or 2 */ // Range Lookup Buffer logging

@@ -48,6 +48,12 @@ namespace ParametricDramDirectoryMSI
             std::cout << "[MMU_BASE] PERFECT TRANSLATION MODE ENABLED - zero translation latency" << std::endl;
         }
 
+        // Perfect L2 TLB mode: L1 TLBs work normally, L2 always hits (no PTW)
+        perfect_l2_tlb_enabled = Sim()->getCfg()->getBoolDefault("perf_model/"+_name+"/perfect_l2_tlb", false);
+        if (perfect_l2_tlb_enabled) {
+            std::cout << "[MMU_BASE] PERFECT L2 TLB MODE ENABLED - L1 misses always hit L2" << std::endl;
+        }
+
         // Per-access PTW logging (runtime config option)
         ptw_access_logging_enabled = Sim()->getCfg()->getBoolDefault("perf_model/"+_name+"/ptw_access_logging", false);
         try {
@@ -133,6 +139,8 @@ namespace ParametricDramDirectoryMSI
         registerStatsMetric("mmu_walker", core->getId(), "L1D_accesses_prefetch", &walker_stats.L1D_accesses_prefetch);
         registerStatsMetric("mmu_walker", core->getId(), "L2_accesses_prefetch", &walker_stats.L2_accesses_prefetch);
         registerStatsMetric("mmu_walker", core->getId(), "NUCA_accesses_prefetch", &walker_stats.NUCA_accesses_prefetch);
+        registerStatsMetric("mmu_walker", core->getId(), "beyond_l2_fetches_demand", &walker_stats.beyond_l2_fetches_demand);
+        registerStatsMetric("mmu_walker", core->getId(), "beyond_l2_fetches_prefetch", &walker_stats.beyond_l2_fetches_prefetch);
     }
 
 	MemoryManagementUnitBase::~MemoryManagementUnitBase()
@@ -245,17 +253,12 @@ namespace ParametricDramDirectoryMSI
 
 		mmu_base_log->debug("Accessing cache with address:", SimLog::hex(packet.address), "at time", t_start.getNS(), "ns");
 		HitWhere::where_t hit_where = HitWhere::UNKNOWN;
-		if(is_prefetch){
-
-			mmu_base_log->debug("Prefetching address:", SimLog::hex(packet.address), "at time", t_start.getNS(), "ns");
-			IntPtr cache_address = ((IntPtr)(packet.address)) & (~((64 - 1)));
-
-			MMUCacheInterface *l2_cache = memory_manager->getCacheCntlrAt(core->getId(), MemComponent::L2_CACHE);
-			// Use PAGE_TABLE_DATA for page table prefetch (we don't distinguish here)
-			if (l2_cache) l2_cache->handleMMUPrefetch(packet.eip, cache_address, shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD), CacheBlockInfo::block_type_t::PAGE_TABLE_DATA);
-
-		}
-		else {
+		{
+			// Both demand and prefetch PTW accesses go through the same L1D→L2→LLC
+			// cache path so that latency and hit_where are computed identically.
+			// For prefetch walks, we additionally tag the resulting L2 cache line
+			// with CacheBlockInfo::PREFETCH so that a later demand walk hitting
+			// that line increments L2.hits-prefetch.
 			hit_where = l1d_cache->handleMMUCacheAccess(
 			packet.eip,
 			packet.lock_signal,
@@ -294,8 +297,17 @@ namespace ParametricDramDirectoryMSI
 				}
 			}
 			if (hit_where == HitWhere::where_t::L1_OWN)
-				walker_stats.L1D_accesses++;				
-				
+				walker_stats.L1D_accesses++;
+
+			// For prefetch walks, tag the L2 cache line with PREFETCH so that
+			// a subsequent demand walk hitting the same line is counted as
+			// L2.hits-prefetch.  The line was just fetched via the normal
+			// L1D→L2→LLC path above, so it now resides in L2.
+			if (is_prefetch) {
+				MMUCacheInterface *l2_cache = memory_manager->getCacheCntlrAt(core->getId(), MemComponent::L2_CACHE);
+				if (l2_cache)
+					l2_cache->tagMMUPrefetch(cache_address, hit_where);
+			}
 		}
 
 		out_hit_where = hit_where;
@@ -445,9 +457,13 @@ namespace ParametricDramDirectoryMSI
 							MetadataContext::set(core->getId(), ptw_info);
 							
 							mmu_base_log->debug("Metadata context set for PTW access - address:", SimLog::hex(current_address), "level:", level, "table:", tab, "ptw_id:", current_ptw_id);
-							latency = accessCache(packet, t_now+fetch_delay[tab], false, temp_hit_where);
+							latency = accessCache(packet, t_now+fetch_delay[tab], is_prefetch, temp_hit_where);
 							
-							// Track prefetch-specific walker stats
+							// Track prefetch-specific walker stats and bandwidth
+							bool beyond_l2 = (temp_hit_where == HitWhere::where_t::NUCA_CACHE ||
+							                  temp_hit_where == HitWhere::where_t::DRAM_LOCAL ||
+							                  temp_hit_where == HitWhere::where_t::DRAM_REMOTE ||
+							                  temp_hit_where == HitWhere::where_t::DRAM);
 							if (is_prefetch) {
 								if (temp_hit_where == HitWhere::where_t::L1_OWN)
 									walker_stats.L1D_accesses_prefetch++;
@@ -457,6 +473,11 @@ namespace ParametricDramDirectoryMSI
 									walker_stats.NUCA_accesses_prefetch++;
 								else if (temp_hit_where == HitWhere::where_t::DRAM_LOCAL || temp_hit_where == HitWhere::where_t::DRAM_REMOTE || temp_hit_where == HitWhere::where_t::DRAM)
 									walker_stats.DRAM_accesses_prefetch++;
+								if (beyond_l2)
+									walker_stats.beyond_l2_fetches_prefetch++;
+							} else {
+								if (beyond_l2)
+									walker_stats.beyond_l2_fetches_demand++;
 							}
 							
 							// Clear context after access
@@ -607,11 +628,18 @@ namespace ParametricDramDirectoryMSI
 			bool is_pagefault = ptw_result.fault_happened;
 			int requested_frames = ptw_result.requested_frames;
 
-			// Read shadow PTE payload for temporal prefetching
+			// Read shadow payload for temporal prefetching.
+			// For 4KB pages: read from PTE-level shadow (keyed by 4KB VPN).
+			// For 2MB pages: read from PMD-level shadow (keyed by 2MB VPN).
 			uint64_t leaf_payload_bits = 0;
 			if (!is_pagefault) {
-				uint64_t vpn = address >> 12;
-				leaf_payload_bits = page_table->readPayloadBits(vpn);
+				if (page_size == 21) {
+					uint64_t vpn_2mb = address >> 21;
+					leaf_payload_bits = page_table->readPMDPayloadBits(vpn_2mb);
+				} else {
+					uint64_t vpn = address >> 12;
+					leaf_payload_bits = page_table->readPayloadBits(vpn);
+				}
 			}
 
 			auto* mimicos = Sim()->getMimicOS();
