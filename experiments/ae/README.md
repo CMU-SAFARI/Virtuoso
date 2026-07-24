@@ -1,140 +1,113 @@
-# TRAIL — Artifact Evaluation Harness
+# TRAIL — Artifact Evaluation
 
-## Quick start — one command
+This guide reproduces the TRAIL TLB-prefetcher results inside a Docker container.
+Everything runs from a few scripts; the traces are a public Hugging Face dataset.
 
-Clone the repo and run:
+---
 
-```
-bash experiments/ae/reproduce.sh
-```
+## 0. Build & enter the container
 
-This does everything, with progress, up to a sanity check and then stops:
-
-```
-[1/4] install system build dependencies   (apt; uses sudo if not root)
-[2/4] build the trace-replay simulator    (no Pin/SDE/libtorch; ~2-3 min)
-[3/4] download traces + trace-lists        (Hugging Face dataset; resumable)
-[4/4] validate the setup on 3 random traces (short sims must yield a valid IPC)
-```
-
-Every phase is resumable — re-run `reproduce.sh` after an interruption and it
-skips whatever is already done. If the dataset is private, run `hf auth login`
-first. Override defaults with `--hf-repo`, `--bundle`, `--n`, `--skip-deps`,
-`--skip-download`.
-
-When it prints **"Setup is validated"**, launch a claim to produce its table:
-
-```
-experiments/ae/run_ae.sh --mode {slurm|local} --claim {CLAIM|all} \
-                         [--install-deps] [--build] [--jobs N] [--out DIR] [--dry-run]
-```
-
-## Claims (map to the paper)
-
-| `--claim`   | reproduces                                   | jobs  |
-|-------------|----------------------------------------------|------:|
-| `head8mb`   | Head-to-head @ 8MB NUCA (main result)        | 2761  |
-| `head2mb`   | Head-to-head @ 2MB NUCA                       | 2761  |
-| `table5`    | Table 5 — in-PTE payload budget sweep        | 5271  |
-| `table6`    | Table 6 — side-car (Trail-External) sweep    | 6275  |
-| `pqsweep`   | L2-TLB PQ-size sensitivity                    | 3765  |
-| `multicore` | 4-core, 100-mix head-to-head                 | 1000  |
-| `all`       | everything above                             | ~21.8k|
-
-Each single-core claim carries its own **ASP baseline**; the multicore claim
-carries its own **no-prefetch baseline**. Speedups are geomeans over the
-curated top-200 (`top200_trail_workloads.txt`); multicore uses the equal-work
-50M-per-core heartbeat-crossing method.
-
-## Traces & trace lists
-The ChampSim traces are large and are distributed **separately** as a Hugging
-Face dataset, not in this repo. The dataset has a flat layout:
-
-```
-traces/      all trace files in one folder (*.champsim.gz / *.sift / *.champsimtrace.xz)
-vm_tlist/    the trace lists (*.tlist) + setup_tlists.sh
-```
-
-Each experiment suite is driven by a **trace list** (`*.tlist`): its entries are
-`tracename, filename, ...` resolved against a single traces directory.
-
-Download the dataset and wire the trace lists into the repo:
+You only need Docker on the host. The image pulls the artifact branch itself, so
+**no host clone is needed**:
 
 ```bash
-# 1) download the dataset (traces/ + vm_tlist/)
-hf download <org>/trail-tlb-traces --repo-type dataset --local-dir ./bundle
+docker build -t trail-ae \
+  "https://github.com/CMU-SAFARI/Virtuoso.git#trail-artifact-release:experiments/ae"
 
-# 2) resolve the trace lists to your downloaded traces/ folder, writing them
-#    into experiments/vm_tlist/ (git-ignored; populated from the bundle)
-bash ./bundle/vm_tlist/setup_tlists.sh "$(realpath ./bundle/traces)" experiments/vm_tlist
+# mount a host dir so the (~250 GB) trace download survives container restarts
+mkdir -p ae_bundle
+docker run -it -v "$PWD/ae_bundle":/work/Virtuoso/ae_bundle trail-ae
 ```
 
-`setup_tlists.sh` just substitutes the traces path into each list, so if your
-traces live elsewhere, point its first argument there. `run_ae.sh` then reads
-the lists named by `clist_prefetcher_v3.yaml` (single-core) and
-`clist_multicore.yaml` (multicore), and a suite fails fast with a clear message
-if a trace list or any referenced trace is missing.
+You are now in `/work/Virtuoso` inside the container.
 
-## Requirements
-- **Traces + trace lists** installed as above (see *Traces & trace lists*).
-- **System packages** for the build — installed by `lib/install_deps.sh`
-  (Debian/Ubuntu). This is the **trace-replay** build: it needs **no Intel
-  Pin/SDE** (those are only for live-binary instrumentation); the instruction
-  decoder `libxed` is bundled with the artifact. Deps are just the toolchain +
-  `libboost-dev libsqlite3-dev zlib1g-dev libbz2-dev liblzma-dev
-  libexpat1-dev python3-dev`.
-- `--mode slurm` needs `sbatch`/`squeue`; `--mode local` needs none.
+---
 
-## Quick start (local mode, from source)
-```
-# 1) install build deps (once; needs sudo), 2) build+validate, 3) run+parse:
-sudo experiments/ae/lib/install_deps.sh
-cd experiments/ae
-./run_ae.sh --build --mode local --claim table5 --jobs 16
-```
-Or fold the install into one command:
-```
-./run_ae.sh --install-deps --build --mode local --claim table5 --jobs 16
-```
-`--build` compiles `lib/sniper` and runs a **post-build smoke test** (a short
-single-core sim that must yield a valid IPC) before any experiment launches —
-if the build or smoke sim fails, the run aborts.
+## 1. Setup + sanity check — one command
 
-## Usage
-```
-# SLURM cluster (submits all jobs, waits, parses):
-./run_ae.sh --build --mode slurm --claim all
-
-# single big machine (runs N sims at a time, blocks, parses):
-./run_ae.sh --build --mode local --claim head8mb --jobs 32
-
-# see what would run without launching:
-./run_ae.sh --mode local --claim all --dry-run
+```bash
+bash experiments/ae/reproduce.sh --skip-deps
 ```
 
-## Output
-Markdown tables land in `--out` (default `experiments/ae/ae_out/`), one per
-claim, each showing **ours (paper)** so the match is visible at a glance.
+`--skip-deps` because the image already has the build dependencies. This runs,
+with progress, and then **stops**:
 
-## Layout
 ```
-ae/
-  run_ae.sh                 # orchestrator (generate -> launch -> wait -> parse)
-  lib/
-    install_deps.sh         # apt install build deps (no Pin/SDE needed)
-    build_and_validate.sh   # make + post-build smoke sim (mandatory --build)
-    launch.sh               # slurm submit  |  local xargs -P run
-    jobfile_to_cmds.py      # strip sbatch wrapper -> bare run-sniper commands
-  parse/
-    parse_headtohead.py     # head8mb / head2mb
-    parse_table5.py         # Table 5
-    parse_table6.py         # Table 6
-    parse_pqsweep.py        # PQ sweep
-    parse_multicore.py      # 4-core equal-work (50M heartbeat crossings)
+[1/4] system build dependencies       (skipped)
+[2/4] build the trace-replay simulator  (~2-3 min; no Pin/SDE/libtorch)
+[3/4] download traces + trace-lists      (public HF dataset konkanello/trail_traces; resumable)
+[4/4] validate the setup on 3 random traces  ->  [PASS] <trace> IPC=...
+      "Setup is validated. You are ready to run the experiments."
 ```
 
-## Notes
-- `local` mode strips the SLURM wrapper and runs the identical `run-sniper`
-  commands directly, so both modes exercise the same binary and configs.
-- All experiments run on the **corrected cost model** binary (prefetch-fault
-  walks allocate the page *and* pay their walk latency).
+Every phase is resumable — re-run the command after an interruption and it skips
+whatever is already done. Flags: `--n N` (validation traces), `--skip-download`
+(reuse a bundle), `--hf-repo`, `--bundle`.
+
+The trace files are distributed flat as the public dataset
+[`konkanello/trail_traces`](https://huggingface.co/datasets/konkanello/trail_traces)
+(`traces/` + `vm_tlist/`); `reproduce.sh` downloads it and resolves the
+trace-lists into `experiments/vm_tlist/` for you.
+
+---
+
+## 2–4. Reproduce a claim (launch → watch → results)
+
+Each claim runs as three steps. Example for the headline **8 MB head-to-head**:
+
+```bash
+# 2. launch all jobs (non-blocking). On a SLURM cluster:
+bash experiments/ae/ae_launch.sh  --claim head8mb --mode slurm --partitions <partition>
+#    On a single machine (no SLURM):  --mode local --jobs $(nproc)
+
+# 3. start the background watcher, then check progress whenever you like
+bash experiments/ae/ae_watch.sh   --claim head8mb
+cat  experiments/ae/ae_out/head8mb.status      # done / running / failed — any time
+
+# 4. once the watcher writes ae_out/head8mb.DONE (green signal), parse + plot
+bash experiments/ae/ae_results.sh --claim head8mb            # add --wait to block
+#    -> experiments/ae/ae_out/head8mb.md   (table: ours vs paper)
+#    -> experiments/ae/ae_out/head8mb.pdf  (paper-format figure)
+```
+
+The watcher writes a live `ae_out/<claim>.status` (done/running/failed) and, when
+every job is accounted for, an `ae_out/<claim>.DONE` file with a **pass/fail
+report** listing any failed run-dirs (and their `slurm.err`).
+
+---
+
+## Claims
+
+| `--claim`   | reproduces                              | jobs  | figure |
+|-------------|-----------------------------------------|------:|--------|
+| `head8mb`   | Head-to-head @ 8 MB NUCA (main result)  | 2761  | family + GMEAN bars |
+| `head2mb`   | Head-to-head @ 2 MB NUCA                | 2761  | family + GMEAN bars |
+| `table5`    | Table 5 — in-PTE payload-budget sweep   | 5271  | bar of the table |
+| `table6`    | Table 6 — side-car payload sweep        | 6275  | bar of the table |
+| `pqsweep`   | L2-TLB PQ-size sensitivity              | 3012  | bar of the table |
+| `multicore` | 4-core, 100-mix head-to-head            | 1000  | equal-work harmonic-mean bars |
+| **all**     | everything above                        | **21080** | |
+
+Each single-core job is a **300 M-instruction** sim (virtuoso-family traces run
+100 M); multicore jobs run to the **equal-work 50 M-per-core** crossing. `all` is
+cluster-scale — on a single machine, run one claim at a time (or start with
+`head8mb`, the cheapest full claim and the headline result). If both `head8mb`
+and `head2mb` have run, `ae_results.sh` emits the paper's 2×2 (2 MB over 8 MB)
+figure.
+
+Speedups are geomeans over the curated top-200 (non-`srv`) workloads; multicore
+uses the equal-work heartbeat-crossing method (not `sim.stats` global cycles).
+
+---
+
+## Notes for reviewers
+
+- **No Intel Pin / SDE / libtorch** are needed — this is the trace-replay build
+  (`make SNIPER_TRACE_ONLY=1 replay`); the instruction decoder (xed) is fetched
+  and built automatically.
+- All experiments run on the **corrected cost model** (a prefetch that faults
+  allocates the page *and* pays its page-table-walk latency).
+- Without Docker: on any Debian/Ubuntu machine run
+  `sudo experiments/ae/lib/install_deps.sh` then `bash experiments/ae/reproduce.sh`.
+- `run_ae.sh --mode {slurm|local} --claim <c>` is the all-in-one alternative to
+  the launch/watch/results trio (it launches, blocks until done, and parses).

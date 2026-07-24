@@ -17,7 +17,7 @@
 # Every phase is resumable: a finished phase is detected and skipped on re-run.
 #
 # Options (env var or flag):
-#   --hf-repo   REPO   Hugging Face dataset      (default: $HF_REPO or konkanello/trail-tlb-traces)
+#   --hf-repo   REPO   Hugging Face dataset      (default: $HF_REPO or konkanello/trail_traces)
 #   --bundle    DIR    where to download traces  (default: <artifact>/ae_bundle)
 #   --n         N      random traces to validate (default: 3)
 #   --skip-deps        do not run install_deps.sh (deps already installed)
@@ -29,7 +29,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"                 # artifact root
 SNIPER="$ROOT/simulator/sniper"
 
-HF_REPO="${HF_REPO:-konkanello/trail-tlb-traces}"
+HF_REPO="${HF_REPO:-konkanello/trail_traces}"
 BUNDLE="$ROOT/ae_bundle"
 NVAL=3
 SKIP_DEPS=0
