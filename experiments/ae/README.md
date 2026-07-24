@@ -1,122 +1,142 @@
 # TRAIL — Artifact Evaluation
 
-This guide reproduces the TRAIL TLB-prefetcher results. Everything runs from a
-few scripts; the traces are a public Hugging Face dataset. Target: a
-Debian/Ubuntu machine (or cluster login node).
+This artifact reproduces the main results of the TRAIL paper. TRAIL is a temporal
+TLB prefetcher; the experiments compare it against prior TLB prefetchers on the
+Sniper architectural simulator (with the MimicOS operating-system model), across
+single-core (8 MB and 2 MB last-level-cache NUCA) and 4-core configurations.
+
+Reproducing a result takes three steps: **install dependencies → run a
+one-command setup + sanity check → launch the experiments.**
 
 ---
 
-## 0. Get the code + dependencies
+## Requirements
+
+**Software**
+- Linux (Debian/Ubuntu recommended; tested on Ubuntu 20.04 and 22.04). Other
+  distributions work if you install the equivalent packages.
+- A C++17 toolchain and Python 3.8+. All packages — plus the Hugging Face CLI
+  (trace download) and matplotlib (figures) — are installed by
+  `experiments/ae/lib/install_deps.sh`. No license-gated or proprietary tools are
+  required; the instruction decoder is fetched and built automatically.
+- Network access (to download the traces and fetch the decoder during the build).
+- *Optional:* a SLURM cluster to run the full experiments in parallel. Without
+  SLURM everything still runs locally.
+
+**Hardware**
+- **Disk:** ~300 GB free (≈250 GB of traces, plus the build and results).
+- **RAM:** 8 GB is enough for the build and the sanity check. Each simulation
+  uses a few GB, so budget more if you run many in parallel.
+- **CPU:** any x86-64 machine. More cores (or a cluster) only reduce wall time.
+
+---
+
+## Step 1 — Install dependencies
 
 ```bash
 git clone --branch trail-artifact-release https://github.com/CMU-SAFARI/Virtuoso.git
 cd Virtuoso
-bash experiments/ae/lib/install_deps.sh      # apt toolchain + huggingface_hub + matplotlib
+bash experiments/ae/lib/install_deps.sh        # uses sudo if you are not root
 ```
-
-`install_deps.sh` uses `sudo` if you are not root. On a non-Debian system,
-install the equivalents of the packages it lists.
 
 ---
 
-## 1. Setup + sanity check — one command
+## Step 2 — Setup + sanity check (minimal check that the artifact works)
 
 ```bash
 bash experiments/ae/reproduce.sh --skip-deps
 ```
 
-`--skip-deps` because you just ran `install_deps.sh`. This runs, with progress,
-and then **stops**:
+This builds the simulator, downloads the trace dataset, and runs a few short
+simulations on randomly chosen traces to confirm the whole pipeline works. It
+shows progress and then **stops**:
 
 ```
-[1/4] system build dependencies       (skipped)
-[2/4] build the trace-replay simulator  (~2-3 min; no Pin/SDE/libtorch)
-[3/4] download traces + trace-lists      (public HF dataset konkanello/trail_traces; resumable)
-[4/4] validate the setup on 3 random traces  ->  [PASS] <trace> IPC=...
+[1/4] system build dependencies       (skipped — done in Step 1)
+[2/4] build the simulator             (~2-3 min)
+[3/4] download traces + trace-lists    (public dataset; ~250 GB; resumable)
+[4/4] validate on 3 random traces      ->  [PASS] <trace> IPC=...
       "Setup is validated. You are ready to run the experiments."
 ```
 
 Every phase is resumable — re-run the command after an interruption and it skips
-whatever is already done. Flags: `--n N` (validation traces), `--skip-download`
-(reuse a bundle), `--hf-repo`, `--bundle`.
+whatever is already done. **This step alone is enough to confirm the artifact
+builds and runs;** the full paper numbers come from Step 3.
 
-The trace files are distributed flat as the public dataset
+Useful flags: `--n N` (number of validation traces), `--skip-download` (reuse an
+existing download), `--bundle DIR` (where to download). Traces are the public
+dataset
 [`konkanello/trail_traces`](https://huggingface.co/datasets/konkanello/trail_traces)
-(`traces/` + `vm_tlist/`); `reproduce.sh` downloads it and resolves the
-trace-lists into `experiments/vm_tlist/` for you.
+(`traces/` + `vm_tlist/`); `reproduce.sh` downloads it and wires the trace-lists
+into `experiments/vm_tlist/` for you.
 
 ---
 
-## 2–4. Reproduce the claims (launch → watch → results)
+## Step 3 — Reproduce the paper results
+
+Each claim corresponds to a paper figure or table (mapping below). Results and
+figures are written to `experiments/ae/ae_out/`.
 
 ### All claims in parallel (recommended on a cluster)
 
 ```bash
-# launch every claim and start a background watcher for each
+# launch every claim, each with its own background progress watcher
 bash experiments/ae/ae_run_all.sh --mode slurm --partitions <partition>
 
-# check the progress of all claims, any time
+# check progress of all claims, any time
 bash experiments/ae/ae_run_all.sh --status
 
-# once they finish, parse + plot every claim (tables + paper figures)
+# when they finish, produce every table and figure
 bash experiments/ae/ae_run_all.sh --results
 ```
 
-Claims run fully independently (separate result dirs, status files, and SLURM
-job names), so all six proceed in parallel. Restrict the set with
-`--claims "head8mb multicore"`. (Use `--mode local` only for one claim at a time
-— local sims all share this machine's CPUs.)
+Claims are independent, so all of them proceed in parallel. Restrict the set with
+`--claims "head8mb multicore"`. Use `--mode local` (single machine, no SLURM)
+**one claim at a time** — local simulations all share this machine's CPUs.
 
-### One claim at a time (the three steps underneath)
+### One claim at a time
 
 ```bash
 bash experiments/ae/ae_launch.sh  --claim head8mb --mode slurm --partitions <partition>
 bash experiments/ae/ae_watch.sh   --claim head8mb
-cat  experiments/ae/ae_out/head8mb.status        # done / running / failed — any time
-bash experiments/ae/ae_results.sh --claim head8mb   # after ae_out/head8mb.DONE (add --wait to block)
+cat  experiments/ae/ae_out/head8mb.status         # done / running / failed — any time
+bash experiments/ae/ae_results.sh --claim head8mb # after ae_out/head8mb.DONE (add --wait to block)
 ```
 
 The watcher writes a live `ae_out/<claim>.status` and, when every job is
-accounted for, an `ae_out/<claim>.DONE` with a **pass/fail report** (listing any
-failed run-dirs + their `slurm.err`). `ae_results.sh` then emits the table and
-the **paper figure** into `ae_out/`.
+accounted for, an `ae_out/<claim>.DONE` file with a **pass/fail report** (it lists
+any failed jobs and where to find their logs). `ae_results.sh` then writes the
+table and figure.
 
 ---
 
-## Claims → paper artifacts
+## Claims → paper
 
-| `--claim`   | reproduces                              | jobs  | output |
-|-------------|-----------------------------------------|------:|--------|
-| `head8mb`   | Head-to-head @ 8 MB NUCA (main result)  | 2761  | **Figure 12** (bottom row) |
-| `head2mb`   | Head-to-head @ 2 MB NUCA                | 2761  | **Figure 12** (top row) |
-| `table5`    | in-PTE payload-budget sweep             | 5271  | **Table 5** |
-| `table6`    | side-car payload sweep                  | 6275  | **Table 6** |
-| `pqsweep`   | L2-TLB PQ-size sensitivity              | 3012  | **Figure 20** |
-| `multicore` | 4-core, 100-mix head-to-head            | 1000  | **Figure 22** |
-| **all**     | everything above                        | **21080** | |
+| `--claim`   | reproduces                          |  jobs | output |
+|-------------|-------------------------------------|------:|--------|
+| `head8mb`   | Head-to-head @ 8 MB NUCA (headline) |  2761 | **Figure 12** (bottom row) |
+| `head2mb`   | Head-to-head @ 2 MB NUCA            |  2761 | **Figure 12** (top row) |
+| `table5`    | In-PTE payload-budget sweep         |  5271 | **Table 5** |
+| `table6`    | Side-car payload sweep              |  6275 | **Table 6** |
+| `pqsweep`   | L2-TLB prefetch-queue sensitivity   |  3012 | **Figure 20** |
+| `multicore` | 4-core, 100-mix head-to-head        |  1000 | **Figure 22** |
+| **all**     | everything above                    | **21080** | |
 
-Figures land in `ae_out/` named after the paper: `figure12.pdf` (the 2×2
-single-core, emitted once both `head8mb` and `head2mb` have run), `figure20.pdf`,
-`figure22.pdf`; `table5`/`table6` produce their markdown tables.
+Figures are written to `ae_out/` named after the paper: `figure12.pdf` (the 2×2
+single-core plot, produced once **both** `head8mb` and `head2mb` have run),
+`figure20.pdf`, `figure22.pdf`; `table5`/`table6` produce markdown tables.
 
-Each single-core job is a **300 M-instruction** sim (virtuoso-family traces run
-100 M); multicore jobs run to the **equal-work 50 M-per-core** crossing. `all` is
-cluster-scale — on a single machine, run one claim at a time (or start with
-`head8mb`, the cheapest full claim and the headline result). If both `head8mb`
-and `head2mb` have run, `ae_results.sh` emits the paper's 2×2 (2 MB over 8 MB)
-figure.
-
-Speedups are geomeans over the curated top-200 (non-`srv`) workloads; multicore
-uses the equal-work heartbeat-crossing method (not `sim.stats` global cycles).
+**Scale:** a single-core job simulates 300 M instructions (a few minutes to under
+an hour each); `all` is 21,080 jobs, i.e. cluster-scale. On a single machine, run
+one claim at a time — start with **`head8mb`**, the headline result and the
+cheapest full claim.
 
 ---
 
-## Notes for reviewers
+## Notes
 
-- **No Intel Pin / SDE / libtorch** are needed — this is the trace-replay build
-  (`make SNIPER_TRACE_ONLY=1 replay`); the instruction decoder (xed) is fetched
-  and built automatically.
-- All experiments run on the **corrected cost model** (a prefetch that faults
-  allocates the page *and* pays its page-table-walk latency).
-- `run_ae.sh --mode {slurm|local} --claim <c>` is the all-in-one alternative to
-  the launch/watch/results trio (it launches, blocks until done, and parses).
+- `run_ae.sh --mode {slurm|local} --claim <claim>` is an all-in-one alternative to
+  the launch/watch/results trio: it launches, blocks until every job finishes,
+  and writes the table.
+- Re-running a claim only re-submits jobs that do not yet have a valid result, so
+  an interrupted run resumes cleanly.
