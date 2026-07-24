@@ -218,5 +218,3 @@ successors), so they carry no speedup number.
 - `reproduce.sh` downloads the public dataset by default (no token, no
   `--hf-repo` needed). Override with `--hf-repo <owner/name>` only if you host a
   mirror.
-- A ready-to-include **artifact appendix** for the paper is in
-  [`artifact_appendix.tex`](artifact_appendix.tex).
