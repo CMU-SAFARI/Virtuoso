@@ -107,15 +107,20 @@ echo "${C_G} Setup is validated. You are ready to run the experiments.${C_0}"
 echo "${C_G}================================================================${C_0}"
 cat <<NEXT
 
-Launch a claim and get its table (results land in experiments/ae/ae_out/):
+Run a claim in three steps (results + figures land in experiments/ae/ae_out/):
 
-  # single big machine (no SLURM) — runs sims locally, then parses:
-  bash experiments/ae/run_ae.sh --mode local --claim head8mb --jobs "\$(nproc)"
+  # 2. launch all jobs for a claim (non-blocking)
+  bash experiments/ae/ae_launch.sh  --claim head8mb --mode slurm --partitions <partition>
+  #    (single machine, no SLURM:  --mode local --jobs \$(nproc))
 
-  # SLURM cluster — submits all jobs, waits, then parses:
-  bash experiments/ae/run_ae.sh --mode slurm --claim head8mb --partitions <partition>
+  # 3. start the background watcher, then check progress whenever you like
+  bash experiments/ae/ae_watch.sh   --claim head8mb
+  cat  experiments/ae/ae_out/head8mb.status      # done/running/failed, any time
 
-  claims: head8mb head2mb table5 table6 pqsweep multicore   (or: all)
+  # 4. once the watcher writes ae_out/head8mb.DONE, parse + plot
+  bash experiments/ae/ae_results.sh --claim head8mb            # (add --wait to block)
+
+  claims: head8mb head2mb table5 table6 pqsweep multicore
 
 Note: a full claim is thousands of 300M-instruction sims (cluster-scale). The
 random-trace check above already confirms the build, traces and simulator work.
