@@ -1,7 +1,28 @@
 # TRAIL — Artifact Evaluation Harness
 
-One command builds the simulator, runs an experiment, and emits the paper's
-table/figure — in **SLURM** or **local** mode (reviewer's choice).
+## Quick start — one command
+
+Clone the repo and run:
+
+```
+bash experiments/ae/reproduce.sh
+```
+
+This does everything, with progress, up to a sanity check and then stops:
+
+```
+[1/4] install system build dependencies   (apt; uses sudo if not root)
+[2/4] build the trace-replay simulator    (no Pin/SDE/libtorch; ~2-3 min)
+[3/4] download traces + trace-lists        (Hugging Face dataset; resumable)
+[4/4] validate the setup on 3 random traces (short sims must yield a valid IPC)
+```
+
+Every phase is resumable — re-run `reproduce.sh` after an interruption and it
+skips whatever is already done. If the dataset is private, run `hf auth login`
+first. Override defaults with `--hf-repo`, `--bundle`, `--n`, `--skip-deps`,
+`--skip-download`.
+
+When it prints **"Setup is validated"**, launch a claim to produce its table:
 
 ```
 experiments/ae/run_ae.sh --mode {slurm|local} --claim {CLAIM|all} \
