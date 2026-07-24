@@ -29,6 +29,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"                 # artifact root
 SNIPER="$ROOT/simulator/sniper"
+source "$HERE/lib/venv.sh"                        # put the AE Python venv on PATH (hf)
 
 HF_REPO="${HF_REPO:-konkanello/trail_traces}"
 BUNDLE="$ROOT/ae_bundle"
@@ -80,8 +81,11 @@ if [ "$SKIP_DL" -eq 1 ]; then
   echo "  --skip-download: reusing $BUNDLE"
 else
   command -v hf >/dev/null 2>&1 || {
-    echo "  installing huggingface_hub CLI ..."
-    python3 -m pip install -q -U "huggingface_hub[cli]" || die "could not install huggingface_hub (need python3-pip)."
+    echo "  hf not found — creating the local venv and installing huggingface_hub ..."
+    python3 -m venv "$AE_VENV" 2>/dev/null || true
+    "$AE_VENV/bin/pip" install -q -U huggingface_hub \
+      || die "could not install huggingface_hub — run experiments/ae/lib/install_deps.sh first."
+    export PATH="$AE_VENV/bin:$PATH"
   }
   echo "  downloading dataset '$HF_REPO' -> $BUNDLE"
   echo "  ${C_Y}(this is large — the full trace set; the download is resumable, so you can re-run build_and_validate.sh if it is interrupted)${C_0}"

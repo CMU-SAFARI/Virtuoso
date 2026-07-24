@@ -21,12 +21,16 @@ PKGS=(
   libbz2-dev            # -lbz2
   liblzma-dev           # -llzma
   libexpat1-dev         # libexpat
-  python3 python3-dev python3-pip   # embedded python + harness scripts + pip
+  python3 python3-venv python3-dev  # python3 + venv (all harness Python lives in a local venv)
 )
 
-# Python packages the harness uses: Hugging Face CLI (trace download) and
-# matplotlib (figures).
-PIP_PKGS=(huggingface_hub[cli] matplotlib)
+# All Python the harness needs goes into a self-contained virtualenv (created
+# below), so nothing touches system Python — no PEP 668 / externally-managed
+# error on Ubuntu 24.04+, and no --break-system-packages.
+#   PyYAML            — jobfile generation (create_experiments.py)
+#   numpy, matplotlib — the plotters
+#   huggingface_hub   — the `hf` trace-download CLI
+PIP_PKGS=(pyyaml numpy matplotlib huggingface_hub)
 
 if ! command -v apt-get >/dev/null 2>&1; then
   echo "This installer targets Debian/Ubuntu (apt-get)."
@@ -46,8 +50,15 @@ $SUDO apt-get update
 echo "==> installing ${#PKGS[@]} apt packages"
 $SUDO apt-get install -y "${PKGS[@]}"
 
-echo "==> installing Python packages: ${PIP_PKGS[*]}"
-$SUDO python3 -m pip install --no-cache-dir -U "${PIP_PKGS[@]}" \
-  || echo "WARNING: pip install failed — huggingface_hub (download) / matplotlib (plots) may be missing." >&2
+# --- Python virtualenv (self-contained; no system-Python changes) ------------
+# Create/populate it as the invoking user (NOT with sudo) so the repo owns it.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/venv.sh"   # sets AE_VENV
+echo "==> creating Python virtualenv: $AE_VENV"
+python3 -m venv "$AE_VENV"
+echo "==> installing Python packages into the venv: ${PIP_PKGS[*]}"
+"$AE_VENV/bin/python" -m pip install --upgrade -q pip
+"$AE_VENV/bin/python" -m pip install --no-cache-dir -U "${PIP_PKGS[@]}" \
+  || { echo "ERROR: could not install Python packages into the venv." >&2; exit 1; }
+echo "   venv ready: $("$AE_VENV/bin/python" -V);  hf $("$AE_VENV/bin/hf" version 2>/dev/null | head -1 || echo installed)"
 
 echo "==> done. Next:  bash experiments/ae/build_and_validate.sh --skip-deps"

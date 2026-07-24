@@ -17,6 +17,7 @@
 # ===========================================================================
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+source "$HERE/../lib/venv.sh"                  # put the AE Python venv on PATH (numpy/matplotlib)
 DUMPS=""; MODE="local"; JOBS=$(( $(nproc) - 2 )); PARTS=""; OUT="$HERE/motivation_out"
 while [ $# -gt 0 ]; do case "$1" in
   --dumps) DUMPS="$2"; shift 2;;

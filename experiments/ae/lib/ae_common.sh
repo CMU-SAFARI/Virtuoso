@@ -7,6 +7,7 @@ AE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AE_DIR="$(cd "$AE_LIB/.." && pwd)"            # experiments/ae
 EXP="$(cd "$AE_DIR/.." && pwd)"               # experiments
 ROOT="$(cd "$EXP/.." && pwd)"                 # artifact root
+source "$AE_LIB/venv.sh"                       # put the AE Python venv on PATH (python3, hf)
 YAML_SC="$EXP/clist_prefetcher_v3.yaml"
 YAML_MC="$EXP/clist_multicore.yaml"
 TOP200="$EXP/top200_trail_workloads.txt"
