@@ -95,7 +95,7 @@ def main():
                 fontsize=7.5, fontweight="bold", color="#c0392b")
     ax.set_xticks(list(x)); ax.set_xticklabels(labels, fontsize=8.5, rotation=30, ha="right")
     ax.set_ylabel("Equal-work Harmonic-mean IPC \nSpeedup over No-TLB Prefetch (%)", fontsize=10)
-    ax.text(0.32, 0.86, f"{len(mixes)} mixes from the top-40\nmost translation-intensive workloads",
+    ax.text(0.32, 0.86, "100 mixes from the top-40\nmost translation-intensive workloads",
             transform=ax.transAxes, ha="center", va="center", fontsize=10,
             bbox=dict(boxstyle="round,pad=0.5", facecolor="#fdf6e3", edgecolor="black", linewidth=1.0, alpha=0.95), zorder=5)
     for sp_ in ax.spines.values(): sp_.set_color("black"); sp_.set_linewidth(1.2)
