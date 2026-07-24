@@ -50,6 +50,30 @@ $SUDO apt-get update
 echo "==> installing ${#PKGS[@]} apt packages"
 $SUDO apt-get install -y "${PKGS[@]}"
 
+# --- embedded-Python dev library ---------------------------------------------
+# The simulator links the embedded CPython via `python3-config --libs --embed`
+# (common/Makefile.common). If `python3` is a non-default build (e.g. 3.13 from a
+# PPA) whose -dev lib is absent, the final link fails with `cannot find -lpythonX.Y`.
+# Make sure the dev lib MATCHING python3-config is installed.
+ensure_python_embed() {
+  local cc pyv
+  cc=$(command -v gcc || command -v cc || echo gcc)
+  pyv=$(python3-config --ldversion 2>/dev/null)
+  _links() { echo 'int main(void){return 0;}' | "$cc" -xc - \
+      $(python3-config --includes 2>/dev/null) $(python3-config --ldflags --embed 2>/dev/null) \
+      -o /tmp/_ae_pyembed 2>/dev/null; local r=$?; rm -f /tmp/_ae_pyembed; return $r; }
+  if _links; then echo "==> embedded Python OK (python ${pyv})"; return 0; fi
+  echo "==> embedded-Python dev lib for python ${pyv:-?} missing — installing it"
+  $SUDO apt-get install -y "libpython${pyv}-dev" 2>/dev/null \
+    || $SUDO apt-get install -y "python${pyv}-dev" 2>/dev/null || true
+  if _links; then echo "   ok (python ${pyv})"; return 0; fi
+  echo "WARNING: python3-config reports Python ${pyv}, but its dev library (-lpython${pyv}) is missing" >&2
+  echo "         and could not be auto-installed. Install it manually, e.g.:" >&2
+  echo "           $SUDO apt-get install libpython${pyv}-dev   # or  python${pyv}-dev" >&2
+  echo "         The simulator links -lpython${pyv} (common/Makefile.common)." >&2
+}
+ensure_python_embed
+
 # --- Python virtualenv (self-contained; no system-Python changes) ------------
 # Create/populate it as the invoking user (NOT with sudo) so the repo owns it.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/venv.sh"   # sets AE_VENV

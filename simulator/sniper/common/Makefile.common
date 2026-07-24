@@ -53,8 +53,11 @@ ifneq ($(BOOST_INCLUDE),)
 	CPPFLAGS += -I$(BOOST_INCLUDE)
 endif
 
-# Assuming python3 include dir is within the gcc search path
-PYTHON_LD_LIBS := $(shell python3-config --libs --embed)
+# Embedded CPython. --libs gives -lpython<ver>; --ldflags adds the -L<libdir> so
+# the linker also finds a non-system python (pyenv/conda/PPA in /usr/local, etc.).
+PYTHON_LD_FLAGS := $(shell python3-config --ldflags --embed)
+PYTHON_LD_LIBS  := $(shell python3-config --libs --embed)
+LD_FLAGS += $(PYTHON_LD_FLAGS)
 LD_LIBS += -ldecoder -lsift -lxed -lrt -lz -lbz2 -llzma -lsqlite3 $(PYTHON_LD_LIBS)
 
 LD_FLAGS += -L$(SIM_ROOT)/lib -L$(SIM_ROOT)/decoder_lib/ -L$(SIM_ROOT)/sift -L$(XED_HOME)/lib

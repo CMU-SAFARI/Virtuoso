@@ -68,6 +68,18 @@ step "[2/4] Build the trace-replay simulator"
 if [ -x "$SNIPER/lib/sniper" ]; then
   echo "  ${C_Y}lib/sniper already built — skipping.${C_0} (delete it to force a rebuild)"
 else
+  # Preflight: the final link needs the embedded-Python dev lib that matches
+  # python3-config (the build uses `python3-config --libs --embed`). Fail early
+  # with the exact package instead of a cryptic `ld: cannot find -lpythonX.Y`.
+  _cc=$(command -v gcc || command -v cc || echo gcc); _pyv=$(python3-config --ldversion 2>/dev/null)
+  if ! echo 'int main(void){return 0;}' | "$_cc" -xc - $(python3-config --includes 2>/dev/null) \
+        $(python3-config --ldflags --embed 2>/dev/null) -o /tmp/_ae_pyembed 2>/dev/null; then
+    rm -f /tmp/_ae_pyembed
+    die "embedded-Python dev lib (-lpython${_pyv}) is missing — the build links it.
+       Fix:  sudo apt-get install libpython${_pyv}-dev   (or python${_pyv}-dev),
+       or re-run  bash experiments/ae/lib/install_deps.sh  which now installs it."
+  fi
+  rm -f /tmp/_ae_pyembed
   echo "  building (this takes a few minutes; no Pin/SDE/libtorch downloads) ..."
   ( cd "$SNIPER" && make -j"$(nproc)" SNIPER_TRACE_ONLY=1 replay ) || die "build failed."
   [ -x "$SNIPER/lib/sniper" ] || die "build finished but lib/sniper is missing."
