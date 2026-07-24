@@ -124,8 +124,9 @@ table and figure.
 
 Every claim produces both a table (`ae_out/<claim>.md`) and a rendered image in
 `ae_out/`: `figure12.pdf` (the 2×2 single-core plot, produced once **both**
-`head8mb` and `head2mb` have run), `figure20.pdf`, `figure22.pdf`, and
-`table5.pdf`/`table6.pdf` (the tables rendered as images).
+`head8mb` and `head2mb` have run), `figure13.pdf` (the mechanism panels, from
+`head8mb`), `figure20.pdf`, `figure22.pdf`, and `table5.pdf`/`table6.pdf` (the
+tables rendered as images).
 
 **Scale & runtime:** a single-core job simulates 300 M instructions (a few
 minutes to under an hour each); `all` is 21,080 jobs. On a **~1300-core cluster
