@@ -326,6 +326,7 @@ def build_jobfile(
     output_root: str,
     enable_icache_prefixes: List[str] = None,
     slurm_partitions: List[str] = None,
+    slurm_exclude: str = None,
     tracelist_instruction_overrides: Dict[str, int] = None,
 ) -> List[Tuple[str, str, str, str]]:
     jobs: List[Tuple[str, str, str, str]] = []  # (id, cfg_name, trace_name, out_dir)
@@ -369,9 +370,10 @@ def build_jobfile(
                 partition_flag = ""
                 if slurm_partitions:
                     partition_flag = " --partition=" + ",".join(slurm_partitions)
+                exclude_flag = f" --exclude={slurm_exclude}" if slurm_exclude else ""
 
                 sbatch_cmd = (
-                    "sbatch --exclude=kratos17" + partition_flag + " -J {}_{} --output="
+                    "sbatch" + exclude_flag + partition_flag + " -J {}_{} --output="
                     + os.path.join(output_directory, "slurm.out")
                     + " --error="
                     + os.path.join(output_directory, "slurm.err")
@@ -447,6 +449,14 @@ Examples:
         metavar="PARTITION",
         help="SLURM partition(s) to submit to (e.g., --partitions bio_part). "
              "Can also be set via 'slurm_partitions' in the YAML suite definition.",
+    )
+    parser.add_argument(
+        "--exclude",
+        type=str,
+        default=None,
+        metavar="NODELIST",
+        help="SLURM nodes to exclude, e.g. --exclude node01,node02 (default: none). "
+             "Cluster-specific; leave unset on clusters without bad nodes.",
     )
 
     args = parser.parse_args()
@@ -568,6 +578,7 @@ Examples:
         jobfile_path, sniper_path, instruction_count, configs, traces, results_dir,
         enable_icache_prefixes=icache_prefixes,
         slurm_partitions=slurm_partitions,
+        slurm_exclude=args.exclude,
         tracelist_instruction_overrides=tracelist_instruction_overrides or None,
     )
 

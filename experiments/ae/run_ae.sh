@@ -23,7 +23,7 @@ TOP200="$EXP/top200_trail_workloads.txt"
 source "$HERE/lib/jobtools.sh"
 
 MODE=""; CLAIMS=""; JOBS=$(( $(nproc) - 2 )); DO_BUILD=0; DO_INSTALL=0
-OUT="$EXP/ae/ae_out"; DRY=0; PARTS="cpu_part,bio_part"; NO_PREFLIGHT=0; MAX_RETRIES=3
+OUT="$EXP/ae/ae_out"; DRY=0; PARTS="cpu_part,bio_part"; NO_PREFLIGHT=0; MAX_RETRIES=3; EXCLUDE=""
 while [ $# -gt 0 ]; do case "$1" in
   --mode) MODE="$2"; shift 2;;
   --claim) CLAIMS="$2"; shift 2;;
@@ -32,6 +32,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --install-deps) DO_INSTALL=1; shift;;
   --out) OUT="$2"; shift 2;;
   --partitions) PARTS="$2"; shift 2;;
+  --exclude) EXCLUDE="$2"; shift 2;;
   --no-preflight) NO_PREFLIGHT=1; shift;;
   --max-retries) MAX_RETRIES="$2"; shift 2;;
   --artifact-root) ROOT="$2"; shift 2;;
@@ -115,10 +116,10 @@ for claim in $CLAIMS; do
   EXPDIR="$EXP/exp_${DIR}"
   if [ "$GEN" = "sc" ]; then
     python3 "$EXP/create_experiments.py" --artifact-path "$ROOT" --yaml "$YAML_SC" \
-      --suite $SUITE --suite-dir-name "$DIR" --force >/dev/null
+      --suite $SUITE --suite-dir-name "$DIR" --force ${EXCLUDE:+--exclude "$EXCLUDE"} >/dev/null
   else
     python3 "$EXP/create_multicore_experiments.py" --artifact-path "$ROOT" --yaml "$YAML_MC" \
-      --suite $SUITE --suite-dir-name "$DIR" --force >/dev/null
+      --suite $SUITE --suite-dir-name "$DIR" --force ${EXCLUDE:+--exclude "$EXCLUDE"} >/dev/null
   fi
   EXPECTED=$(grep -c '^sbatch' "$EXPDIR/jobfile.sh")
   echo "[gen] exp_${DIR}: $EXPECTED jobs (suite: $SUITE)"
