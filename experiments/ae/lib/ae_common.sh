@@ -17,8 +17,8 @@ ALL_CLAIMS="head8mb head2mb table5 table6 pqsweep multicore"
 # claim -> (generator, suite(s), exp-dir, parser, parser-args, paper label, figure file)
 ae_claim_cfg() {  # sets GEN SUITE DIR PARSER PARGS FIG FIGFILE ; returns 1 on unknown claim
   case "$1" in
-    head8mb)   GEN=sc; SUITE="trail_comparison_v4";             DIR="ae_head8mb"; PARSER=parse_headtohead.py; PARGS="--suffix ";        FIG="Figure 12 (bottom, 8 MB NUCA)"; FIGFILE="figure12";;
-    head2mb)   GEN=sc; SUITE="trail_comparison_v4_nuca2mb";     DIR="ae_head2mb"; PARSER=parse_headtohead.py; PARGS="--suffix -nuca2mb"; FIG="Figure 12 (top, 2 MB NUCA)";     FIGFILE="figure12";;
+    head8mb)   GEN=sc; SUITE="trail_comparison_v4";             DIR="ae_head8mb"; PARSER=parse_headtohead.py; PARGS="";                 FIG="Figure 12 (bottom, 8 MB NUCA)"; FIGFILE="figure12";;
+    head2mb)   GEN=sc; SUITE="trail_comparison_v4_nuca2mb";     DIR="ae_head2mb"; PARSER=parse_headtohead.py; PARGS="--suffix=-nuca2mb"; FIG="Figure 12 (top, 2 MB NUCA)";     FIGFILE="figure12";;
     table5)    GEN=sc; SUITE="trail-pte-budget-grid-corrected"; DIR="ae_table5";  PARSER=parse_table5.py;    PARGS="";                 FIG="Table 5";  FIGFILE="table5";;
     table6)    GEN=sc; SUITE="sidecar-payload-sweep-corrected"; DIR="ae_table6";  PARSER=parse_table6.py;    PARGS="";                 FIG="Table 6";  FIGFILE="table6";;
     pqsweep)   GEN=sc; SUITE="pq-size-sweep";                   DIR="ae_pqsweep"; PARSER=parse_pqsweep.py;   PARGS="";                 FIG="Figure 20"; FIGFILE="figure20";;
