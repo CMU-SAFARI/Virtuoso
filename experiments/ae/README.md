@@ -59,42 +59,57 @@ trace-lists into `experiments/vm_tlist/` for you.
 
 ---
 
-## 2–4. Reproduce a claim (launch → watch → results)
+## 2–4. Reproduce the claims (launch → watch → results)
 
-Each claim runs as three steps. Example for the headline **8 MB head-to-head**:
+### All claims in parallel (recommended on a cluster)
 
 ```bash
-# 2. launch all jobs (non-blocking). On a SLURM cluster:
-bash experiments/ae/ae_launch.sh  --claim head8mb --mode slurm --partitions <partition>
-#    On a single machine (no SLURM):  --mode local --jobs $(nproc)
+# launch every claim and start a background watcher for each
+bash experiments/ae/ae_run_all.sh --mode slurm --partitions <partition>
 
-# 3. start the background watcher, then check progress whenever you like
-bash experiments/ae/ae_watch.sh   --claim head8mb
-cat  experiments/ae/ae_out/head8mb.status      # done / running / failed — any time
+# check the progress of all claims, any time
+bash experiments/ae/ae_run_all.sh --status
 
-# 4. once the watcher writes ae_out/head8mb.DONE (green signal), parse + plot
-bash experiments/ae/ae_results.sh --claim head8mb            # add --wait to block
-#    -> experiments/ae/ae_out/head8mb.md   (table: ours vs paper)
-#    -> experiments/ae/ae_out/head8mb.pdf  (paper-format figure)
+# once they finish, parse + plot every claim (tables + paper figures)
+bash experiments/ae/ae_run_all.sh --results
 ```
 
-The watcher writes a live `ae_out/<claim>.status` (done/running/failed) and, when
-every job is accounted for, an `ae_out/<claim>.DONE` file with a **pass/fail
-report** listing any failed run-dirs (and their `slurm.err`).
+Claims run fully independently (separate result dirs, status files, and SLURM
+job names), so all six proceed in parallel. Restrict the set with
+`--claims "head8mb multicore"`. (Use `--mode local` only for one claim at a time
+— local sims all share this machine's CPUs.)
+
+### One claim at a time (the three steps underneath)
+
+```bash
+bash experiments/ae/ae_launch.sh  --claim head8mb --mode slurm --partitions <partition>
+bash experiments/ae/ae_watch.sh   --claim head8mb
+cat  experiments/ae/ae_out/head8mb.status        # done / running / failed — any time
+bash experiments/ae/ae_results.sh --claim head8mb   # after ae_out/head8mb.DONE (add --wait to block)
+```
+
+The watcher writes a live `ae_out/<claim>.status` and, when every job is
+accounted for, an `ae_out/<claim>.DONE` with a **pass/fail report** (listing any
+failed run-dirs + their `slurm.err`). `ae_results.sh` then emits the table and
+the **paper figure** into `ae_out/`.
 
 ---
 
-## Claims
+## Claims → paper artifacts
 
-| `--claim`   | reproduces                              | jobs  | figure |
+| `--claim`   | reproduces                              | jobs  | output |
 |-------------|-----------------------------------------|------:|--------|
-| `head8mb`   | Head-to-head @ 8 MB NUCA (main result)  | 2761  | family + GMEAN bars |
-| `head2mb`   | Head-to-head @ 2 MB NUCA                | 2761  | family + GMEAN bars |
-| `table5`    | Table 5 — in-PTE payload-budget sweep   | 5271  | bar of the table |
-| `table6`    | Table 6 — side-car payload sweep        | 6275  | bar of the table |
-| `pqsweep`   | L2-TLB PQ-size sensitivity              | 3012  | bar of the table |
-| `multicore` | 4-core, 100-mix head-to-head            | 1000  | equal-work harmonic-mean bars |
+| `head8mb`   | Head-to-head @ 8 MB NUCA (main result)  | 2761  | **Figure 12** (bottom row) |
+| `head2mb`   | Head-to-head @ 2 MB NUCA                | 2761  | **Figure 12** (top row) |
+| `table5`    | in-PTE payload-budget sweep             | 5271  | **Table 5** |
+| `table6`    | side-car payload sweep                  | 6275  | **Table 6** |
+| `pqsweep`   | L2-TLB PQ-size sensitivity              | 3012  | **Figure 20** |
+| `multicore` | 4-core, 100-mix head-to-head            | 1000  | **Figure 22** |
 | **all**     | everything above                        | **21080** | |
+
+Figures land in `ae_out/` named after the paper: `figure12.pdf` (the 2×2
+single-core, emitted once both `head8mb` and `head2mb` have run), `figure20.pdf`,
+`figure22.pdf`; `table5`/`table6` produce their markdown tables.
 
 Each single-core job is a **300 M-instruction** sim (virtuoso-family traces run
 100 M); multicore jobs run to the **equal-work 50 M-per-core** crossing. `all` is

@@ -37,9 +37,9 @@ if [ ! -f "$DONEF" ]; then
   fi
 fi
 
-echo "==== [results] $CLAIM ===="
+echo "==== [results] $CLAIM  ->  paper $FIG ===="
 sed 's/^/  /' "$DONEF" | head -8
-MD="$AE_OUT/$CLAIM.md"; PDF="$AE_OUT/$CLAIM.pdf"
+MD="$AE_OUT/$CLAIM.md"; PDF="$AE_OUT/$FIGFILE.pdf"
 echo "parsing -> $MD"
 python3 "$HERE/parse/$PARSER" --results-dir "$RESULTS" --top200 "$TOP200" $PARGS --md "$MD" >/dev/null 2>&1 \
   || python3 "$HERE/parse/$PARSER" --results-dir "$RESULTS" $PARGS --md "$MD"   # multicore has no --top200
