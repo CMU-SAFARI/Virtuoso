@@ -57,6 +57,11 @@ case "$CLAIM" in
     python3 "$HERE/plot/plot_singlecore.py" $args --out "$PDF" && echo "  figure: $PDF" \
       || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
     ;;
+  multicore)
+    # paper-format multicore figure (equal-work harmonic-mean from heartbeats)
+    python3 "$HERE/plot/plot_multicore.py" --results-dir "$RESULTS" --out "$PDF" && echo "  figure: $PDF" \
+      || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
+    ;;
   *)
     python3 "$HERE/plot/plot_claim.py" --md "$MD" --out "$PDF" && echo "  figure: $PDF" \
       || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
