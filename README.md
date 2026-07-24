@@ -15,22 +15,15 @@ Virtuoso integrates with diverse architectural simulators, each specializing in 
 
 ## 🔬 Artifact Evaluation — TRAIL (TLB Prefetcher)
 
-**Reproducing the TRAIL paper?** Everything is in **[`experiments/ae/`](experiments/ae/README.md)** — start there. The short version, on a Debian/Ubuntu machine:
+**Reproducing the TRAIL paper?** All artifact instructions — dependencies, the
+one-command setup, running each claim, and the paper figure/table it reproduces
+— are in **[`experiments/ae/README.md`](experiments/ae/README.md)**. Start there.
 
-```bash
-git clone --branch trail-artifact-release https://github.com/CMU-SAFARI/Virtuoso.git
-cd Virtuoso
-bash experiments/ae/lib/install_deps.sh        # toolchain + huggingface_hub + matplotlib
-bash experiments/ae/reproduce.sh --skip-deps   # build + download traces + validate on random traces
-bash experiments/ae/ae_run_all.sh --mode slurm --partitions <partition>   # launch all claims
-bash experiments/ae/ae_run_all.sh --status     # progress, any time
-bash experiments/ae/ae_run_all.sh --results    # tables + paper figures
-```
-
-Traces are the public HF dataset [`konkanello/trail_traces`](https://huggingface.co/datasets/konkanello/trail_traces).
-Claims map to the paper as: `head8mb`/`head2mb` → **Figure 12**, `pqsweep` → **Figure 20**,
-`multicore` → **Figure 22**, `table5`/`table6` → **Tables 5/6**. See the
-**[TRAIL AE guide](experiments/ae/README.md)** for the full flow.
+The artifact lives on the `trail-artifact-release` branch; the traces and
+page-table-walk dumps are the public Hugging Face datasets
+[`konkanello/trail_traces`](https://huggingface.co/datasets/konkanello/trail_traces)
+and
+[`konkanello/trail_ptw_dumps`](https://huggingface.co/datasets/konkanello/trail_ptw_dumps).
 
 ---
 

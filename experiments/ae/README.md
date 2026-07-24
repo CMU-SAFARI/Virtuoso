@@ -1,12 +1,17 @@
 # TRAIL — Artifact Evaluation
 
 This artifact reproduces the main results of the TRAIL paper. TRAIL is a temporal
-TLB prefetcher; the experiments compare it against prior TLB prefetchers on the
-Sniper architectural simulator (with the MimicOS operating-system model), across
+TLB prefetcher that makes address translation *self-prefetching*: each page-table
+entry carries the translations that most often follow it, so one prefetch both
+installs a translation and delivers the next prediction. The experiments compare
+TRAIL against a no-prefetch baseline, prior TLB prefetchers (ASP, Stride/NextPage,
+DP, Recency, ATP, Berti), and a Perfect-L2TLB upper bound on the Sniper
+architectural simulator (with the MimicOS operating-system model), across
 single-core (8 MB and 2 MB last-level-cache NUCA) and 4-core configurations.
 
-Reproducing a result takes three steps: **install dependencies → run a
-one-command setup + sanity check → launch the experiments.**
+Reproducing a result takes three steps: **(1) install dependencies → (2) build &
+validate → (3) run the experiments.** The motivation figures (4, 5, 6, 8, 9) are
+a separate, trace-free step.
 
 ---
 
@@ -41,7 +46,7 @@ bash experiments/ae/lib/install_deps.sh        # uses sudo if you are not root
 
 ---
 
-## Step 2 — Setup + sanity check (minimal check that the artifact works)
+## Step 2 — Build & validate (one-command setup + sanity check)
 
 ```bash
 bash experiments/ae/build_and_validate.sh --skip-deps
