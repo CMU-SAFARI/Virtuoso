@@ -26,7 +26,14 @@ ifeq ($(SNIPER_TARGET_ARCH),intel64)
   LD_FLAGS +=
 endif
 
+# Trace-replay build has no Pin, so pinversion.py yields an empty PIN_REV and the
+# `#if PIN_REV >= N` guards (e.g. the xed decoded-inst API include) break. Define
+# a high PIN_REV so those version-gated includes are taken.
+ifeq ($(SNIPER_TRACE_ONLY),1)
+CXXFLAGS += -DPIN_REV=99999
+else
 CXXFLAGS += -DPIN_REV=$(shell $(SIM_ROOT)/tools/pinversion.py $(PIN_HOME) | cut -d. -f3)
+endif
 
 ifeq ($(BUILD_RISCV),0)
 CXXFLAGS += -DSNIPER_RISCV=0

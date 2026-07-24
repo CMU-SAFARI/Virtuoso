@@ -8,10 +8,12 @@ ROOT="${1:?usage: build_and_validate.sh ARTIFACT_ROOT}"
 SNIPER="$ROOT/simulator/sniper"
 
 echo "==================================================================="
-echo " [1/2] Building Sniper (make -j) ..."
+echo " [1/2] Building Sniper (trace-replay build; no Pin/SDE/libtorch) ..."
 echo "==================================================================="
 cd "$SNIPER"
-make -j"$(nproc)"
+# Trace-replay build: standalone lib/sniper only. SNIPER_TRACE_ONLY=1 skips the
+# Pin frontend, Intel SDE, and libtorch downloads (lib/sniper links none of them).
+make -j"$(nproc)" SNIPER_TRACE_ONLY=1 replay
 test -x "$SNIPER/lib/sniper" || { echo "BUILD FAILED: lib/sniper missing"; exit 1; }
 echo "lib/sniper built: $(ls -la lib/sniper | awk '{print $5" bytes, "$6" "$7" "$8}')"
 

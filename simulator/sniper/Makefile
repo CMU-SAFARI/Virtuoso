@@ -84,7 +84,13 @@ endif
 
 include common/Makefile.common
 
+# Trace-replay-only build (lib/sniper) does NOT link Pin/SDE/libtorch, so skip
+# fetching+building them.  Enable with:  make SNIPER_TRACE_ONLY=1 replay
+ifeq ($(SNIPER_TRACE_ONLY),1)
+dependencies: package_deps xed mcpat linux builddir showdebugstatus
+else
 dependencies: package_deps sde_kit $(PIN_ROOT) pin xed mcpat torch linux builddir showdebugstatus
+endif
 
 BUILD_CAPSTONE ?=
 ifeq ($(BUILD_ARM),1)
@@ -104,6 +110,12 @@ dependencies: dynamorio
 endif
 
 $(SIM_TARGETS): dependencies
+
+# Trace-replay build: standalone simulator (lib/sniper) + its libs only —
+# no Pin frontend, SDE, libtorch or DynamoRIO.  Use with SNIPER_TRACE_ONLY=1.
+replay: mimicos message dependencies $(LIB_DECODER) $(LIB_CARBON) $(LIB_SIFT) $(STANDALONE) configscripts sniper_epilogue
+	@echo "===> Trace-replay build complete: lib/sniper (Pin/SDE/libtorch skipped)"
+.PHONY: replay
 
 message:
 	@echo -n Building for x86 \($(SNIPER_TARGET_ARCH)\)

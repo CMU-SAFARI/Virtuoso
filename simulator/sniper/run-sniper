@@ -674,10 +674,13 @@ configfile = os.path.join(HOME, 'config/sniper.py')
 config = {}
 exec(compile(open(configfile, "rb").read(), configfile, 'exec'), {}, config)
 
-# convert paths in config to absolute paths
+# convert paths in config to absolute paths.  In standalone (trace-replay) mode
+# only the instruction decoder (xed) is needed; Pin and libtorch are not used, so
+# do not require their directories to exist (a trace-replay build omits them).
+required_dirs = ('xed_home',) if standalone else ('pin_home', 'xed_home', 'torch_home')
 for d in ('pin_home','xed_home', 'torch_home'):
   absdir = os.path.join(HOME, config[d])
-  if not os.path.isdir(absdir):
+  if d in required_dirs and not os.path.isdir(absdir):
     sys.stderr.write('Cannot find %s %s, please check %s\n' % (d, absdir, configfile))
     sys.exit(-1)
   exec("%s = '%s'" % (d, absdir))
