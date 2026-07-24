@@ -114,7 +114,7 @@ table and figure.
 
 | `--claim`   | reproduces                          |  jobs | output |
 |-------------|-------------------------------------|------:|--------|
-| `head8mb`   | Head-to-head @ 8 MB NUCA (headline) |  2761 | **Figure 12** (bottom row) |
+| `head8mb`   | Head-to-head @ 8 MB NUCA (headline) |  2761 | **Figure 12** (bottom row) + **Figure 13** (mechanism) |
 | `head2mb`   | Head-to-head @ 2 MB NUCA            |  2761 | **Figure 12** (top row) |
 | `table5`    | In-PTE payload-budget sweep         |  5271 | **Table 5** |
 | `table6`    | Side-car payload sweep              |  6275 | **Table 6** |

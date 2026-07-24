@@ -56,6 +56,11 @@ case "$CLAIM" in
     have_valid "$EXP/exp_ae_head8mb/results" && args="$args --head8mb $EXP/exp_ae_head8mb/results"
     python3 "$HERE/plot/plot_singlecore.py" $args --out "$PDF" && echo "  figure: $PDF" \
       || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
+    # Figure 13: TRAIL mechanism metrics, from the 8 MB single-core results
+    if have_valid "$EXP/exp_ae_head8mb/results"; then
+      python3 "$HERE/plot/plot_mechanism.py" --results-dir "$EXP/exp_ae_head8mb/results" \
+        --out "$AE_OUT/figure13.pdf" && echo "  figure: $AE_OUT/figure13.pdf (mechanism)" || true
+    fi
     ;;
   multicore)
     # paper-format multicore figure (equal-work harmonic-mean from heartbeats)
