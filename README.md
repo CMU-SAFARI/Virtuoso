@@ -11,8 +11,32 @@ Virtuoso integrates with diverse architectural simulators, each specializing in 
 
 > Konstantinos Kanellopoulos, Konstantinos Sgouras, F. Nisa Bostanci, Andreas Kosmas Kakolyris, Berkin Kerim Konar, Rahul Bera, Mohammad Sadrosadati, Rakesh Kumar, Nandita Vijaykumar, and Onur Mutlu, "Virtuoso: Enabling Fast and Accurate Virtual Memory Research via an Imitation-based Operating System Simulation Methodology," **ASPLOS 2025**. [[Paper]](https://arxiv.org/pdf/2403.04635v2)
 
+---
+
+## 🔬 Artifact Evaluation — TRAIL (TLB Prefetcher)
+
+**Reproducing the TRAIL paper?** Everything is in **[`experiments/ae/`](experiments/ae/README.md)** — start there. The short version, from a clean machine or container:
+
+```bash
+git clone --branch trail-artifact-release https://github.com/CMU-SAFARI/Virtuoso.git
+cd Virtuoso
+bash experiments/ae/lib/install_deps.sh        # toolchain + huggingface_hub + matplotlib
+bash experiments/ae/reproduce.sh --skip-deps   # build + download traces + validate on random traces
+bash experiments/ae/ae_run_all.sh --mode slurm --partitions <partition>   # launch all claims
+bash experiments/ae/ae_run_all.sh --status     # progress, any time
+bash experiments/ae/ae_run_all.sh --results    # tables + paper figures
+```
+
+Traces are the public HF dataset [`konkanello/trail_traces`](https://huggingface.co/datasets/konkanello/trail_traces).
+Claims map to the paper as: `head8mb`/`head2mb` → **Figure 12**, `pqsweep` → **Figure 20**,
+`multicore` → **Figure 22**, `table5`/`table6` → **Tables 5/6**. See the
+**[TRAIL AE guide](experiments/ae/README.md)** for the Docker recipe and the full flow.
+
+---
+
 ## Table of Contents
 
+- [Artifact Evaluation — TRAIL](experiments/ae/README.md)
 - [Key Features](#key-features)
 - [Repository Structure](#repository-structure)
 - [Prerequisites](#prerequisites)
