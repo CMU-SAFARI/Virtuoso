@@ -132,21 +132,23 @@ bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode slu
 
 ### B) Run on a single machine (no SLURM)
 
-No cluster needed — the same command with `--mode local`. Local simulations all
-share this machine's CPUs, so run **one claim at a time** (`--claims <claim>`);
-running several at once only slows them down:
+No cluster needed — the same command with `--mode local`. Launch **as many
+claims as you like** (all of them, if you want): a single shared scheduler runs
+their simulations through this machine's cores, keeping at most `--jobs` (default:
+cores − 2) running at a time, so the machine is never oversubscribed regardless of
+how many claims you pick.
 
 ```bash
-bash experiments/ae/ae_run_all.sh --mode local --claims head8mb --jobs $(nproc)   # launch one claim
-bash experiments/ae/ae_run_all.sh --status                                         # progress, any time
-bash experiments/ae/ae_run_all.sh --results --claims head8mb                       # table + figure
+bash experiments/ae/ae_run_all.sh --mode local --jobs $(nproc)   # launch all claims
+bash experiments/ae/ae_run_all.sh --status                        # progress, any time
+bash experiments/ae/ae_run_all.sh --results                       # tables + figures
 ```
 
-Repeat with the next claim. Start with **`head8mb`** (the headline and cheapest
-full claim). A full 300 M-instruction claim is large on one machine — add
-`--icount 2000000` to shrink every job to a minutes-long end-to-end smoke test
-(the numbers won't match the paper at 2 M instructions). `--icount` works in
-SLURM mode too.
+Add `--claims "head8mb multicore"` to run only a subset. A full 300 M-instruction
+claim is still large on one machine — add `--icount 2000000` to shrink every job
+to a minutes-long end-to-end smoke test (the numbers won't match the paper at
+2 M instructions). `--icount` works in SLURM mode too. If you only want one, start
+with **`head8mb`** (the headline and cheapest full claim).
 
 **Motivation figures (Figures 4, 5, 6, 8, 9) — a separate step.** `ae_run_all.sh`
 does **not** produce these. To get them you must run the two extra commands below
@@ -172,8 +174,9 @@ failed jobs and where to find their logs). The motivation run writes Figures 4, 
 **Scale & runtime:** a single-core job simulates 300 M instructions (a few
 minutes to under an hour each); `all` is 21,080 jobs. On a **~1300-core cluster
 the entire set finishes within ~1 day**, and the longest single claim (`table6`)
-takes **~10 hours**. On a single machine, run one claim at a time — start with
-**`head8mb`**, the headline result and the cheapest full claim.
+takes **~10 hours**. On a single machine the shared scheduler spreads whatever you
+launch across your cores; a full local run is still large, so start with
+**`head8mb`** (the cheapest full claim) or use `--icount` for a quick pass.
 
 ### If something goes wrong — manual per-claim control
 

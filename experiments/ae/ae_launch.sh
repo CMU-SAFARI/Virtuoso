@@ -20,7 +20,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/lib/ae_common.sh"
 source "$HERE/lib/jobtools.sh"
 
-CLAIM=""; MODE="slurm"; PARTS=""; AE_EXCLUDE=""; JOBS=$(( $(nproc) - 2 )); NO_PREFLIGHT=0; ICOUNT=""
+CLAIM=""; MODE="slurm"; PARTS=""; AE_EXCLUDE=""; JOBS=$(( $(nproc) - 2 )); NO_PREFLIGHT=0; ICOUNT=""; EMIT_CMDS=""
 while [ $# -gt 0 ]; do case "$1" in
   --claim) CLAIM="$2"; shift 2;;
   --mode) MODE="$2"; shift 2;;
@@ -29,6 +29,9 @@ while [ $# -gt 0 ]; do case "$1" in
   --jobs) JOBS="$2"; shift 2;;
   --icount) ICOUNT="$2"; shift 2;;
   --no-preflight) NO_PREFLIGHT=1; shift;;
+  # local only: write this claim's NUL-separated commands to FILE and DON'T start
+  # a pool. ae_run_all.sh uses this to feed one shared scheduler across suites.
+  --emit-cmds) EMIT_CMDS="$2"; shift 2;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
 [ -n "$CLAIM" ] || { echo "ERROR: --claim required"; exit 2; }
@@ -65,15 +68,21 @@ if [ "$MODE" = "slurm" ]; then
   rm -f "$ntmp"
   echo "  submitted $cnt jobs."
 else
-  echo "starting local run pool ($JOBS at a time), detached ..."
-  # strip sbatch wrapper -> bare run-sniper commands (NUL-separated), run JOBS at
-  # a time in a detached background pool. jobfile_to_cmds.py emits NUL-separated
-  # commands; the grep fallback is NUL-terminated to match, so `xargs -0` is safe.
+  # strip sbatch wrapper -> bare run-sniper commands (NUL-separated). jobfile_to_cmds.py
+  # emits NUL-separated commands; the grep fallback is NUL-terminated to match.
   cmds=$(mktemp)
   python3 "$HERE/lib/jobfile_to_cmds.py" "$JOBFILE" > "$cmds" 2>/dev/null
   [ -s "$cmds" ] || grep -oE '/[^ ]*run-sniper[^"]*' "$JOBFILE" | tr '\n' '\0' > "$cmds"
-  setsid -f bash -c "xargs -a '$cmds' -0 -n1 -P $JOBS bash -c >/dev/null 2>&1; rm -f '$cmds'"
-  echo "  local pool started."
+  if [ -n "$EMIT_CMDS" ]; then
+    # feed a shared scheduler (ae_run_all): hand off the command list, no pool here.
+    cp "$cmds" "$EMIT_CMDS"; rm -f "$cmds"
+    echo "  local: queued $EXPECTED jobs for the shared scheduler."
+  else
+    echo "starting local run pool ($JOBS at a time), detached ..."
+    # run JOBS at a time in a detached background pool (`xargs -0` matches the NUL list).
+    setsid -f bash -c "xargs -a '$cmds' -0 -n1 -P $JOBS bash -c >/dev/null 2>&1; rm -f '$cmds'"
+    echo "  local pool started."
+  fi
 fi
 
 # --- record launch state for the watcher ------------------------------------
