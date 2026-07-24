@@ -19,22 +19,17 @@
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Build toolchain + libraries lib/sniper links against (same set as
-# experiments/ae/lib/install_deps.sh) plus git / python / pip.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        git ca-certificates wget curl less \
-        build-essential g++ make cmake automake autoconf libtool pkg-config \
-        libboost-dev libsqlite3-dev zlib1g-dev libbz2-dev liblzma-dev libexpat1-dev \
-        python3 python3-pip python3-dev \
+# git (to clone the repo); everything else is installed by install_deps.sh below.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates less \
     && rm -rf /var/lib/apt/lists/*
-
-# Hugging Face CLI (trace download) + matplotlib (figures).
-RUN pip3 install --no-cache-dir -U "huggingface_hub[cli]" matplotlib
 
 # Clone the artifact branch.
 ARG REPO_URL=https://github.com/CMU-SAFARI/Virtuoso.git
 ARG BRANCH=trail-artifact-release
 RUN git clone --depth 1 --branch ${BRANCH} ${REPO_URL} /work/Virtuoso
-
 WORKDIR /work/Virtuoso
+
+# All build + Python dependencies (apt toolchain + libs, huggingface_hub, matplotlib).
+RUN bash experiments/ae/lib/install_deps.sh
+
 CMD ["/bin/bash"]
