@@ -30,6 +30,7 @@
 #include <map>
 #include <tuple>
 #include <iostream>
+#include <functional>   // std::function (not pulled in transitively on GCC 13 / Ubuntu 24.04)
 #include <unistd.h>
 
 struct CompactdConfig {
