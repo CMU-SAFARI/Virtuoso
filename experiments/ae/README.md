@@ -90,10 +90,12 @@ dumps (no simulation). Outputs land in `experiments/ae/ae_out/` (simulation) and
 | `motivation` | Temporal-locality characterization (no simulation) |   — | **Figures 4, 5, 6, 8, 9** |
 | **all sim.** | every simulation claim above                     | **21080** | |
 
-Pick the one that matches your environment: **[A) a SLURM cluster](#a-run-on-a-slurm-cluster-recommended)**
-(recommended, for the full run) or **[B) a single machine](#b-run-on-a-single-machine-no-slurm)**.
-Both use the same launch → watch → results flow and write the same outputs; only
-the launch commands differ.
+`ae_run_all.sh` is the **one command you drive** — it launches the claims, tracks
+them in the background, and produces the figures/tables. Pick the block for your
+environment: **A) a SLURM cluster** (recommended, for the full run) or **B) a
+single machine**. In normal operation you never touch the individual
+`ae_launch`/`ae_watch`/`ae_results` scripts; those are only for recovery if a
+claim fails (see [**If something goes wrong**](#if-something-goes-wrong--manual-per-claim-control), below).
 
 ### A) Run on a SLURM cluster (recommended)
 
@@ -109,14 +111,6 @@ Claims are independent and proceed in parallel. `--partitions` is optional (omit
 it to use your cluster's default; no `--partition` is passed to `sbatch`).
 Restrict the set with `--claims "head8mb multicore"`.
 
-Or one claim at a time:
-
-```bash
-bash experiments/ae/ae_launch.sh  --claim head8mb --mode slurm --partitions <partition>
-bash experiments/ae/ae_watch.sh   --claim head8mb
-bash experiments/ae/ae_results.sh --claim head8mb --wait
-```
-
 **Motivation figures** (one SLURM job per workload):
 
 ```bash
@@ -126,21 +120,21 @@ bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode slu
 
 ### B) Run on a single machine (no SLURM)
 
-No cluster needed. Run the simulation claims **one at a time** — local
-simulations all share this machine's CPUs, so running several at once only slows
-them down:
+No cluster needed — the same command with `--mode local`. Local simulations all
+share this machine's CPUs, so run **one claim at a time** (`--claims <claim>`);
+running several at once only slows them down:
 
 ```bash
-bash experiments/ae/ae_launch.sh  --claim head8mb --mode local --jobs $(nproc)
-bash experiments/ae/ae_watch.sh   --claim head8mb
-bash experiments/ae/ae_results.sh --claim head8mb --wait
+bash experiments/ae/ae_run_all.sh --mode local --claims head8mb --jobs $(nproc)   # launch one claim
+bash experiments/ae/ae_run_all.sh --status                                         # progress, any time
+bash experiments/ae/ae_run_all.sh --results --claims head8mb                       # table + figure
 ```
 
-Repeat for each claim. Start with **`head8mb`** (the headline and cheapest full
-claim). A full 300 M-instruction claim is large on one machine — add
+Repeat with the next claim. Start with **`head8mb`** (the headline and cheapest
+full claim). A full 300 M-instruction claim is large on one machine — add
 `--icount 2000000` to shrink every job to a minutes-long end-to-end smoke test
-that exercises the whole launch → watch → results pipeline (the numbers won't
-match the paper at 2 M instructions). `--icount` works in SLURM mode too.
+(the numbers won't match the paper at 2 M instructions). `--icount` works in
+SLURM mode too.
 
 **Motivation figures** (up to `N` local cores):
 
@@ -151,13 +145,13 @@ bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode loc
 
 ### What you get (either mode)
 
-The watcher writes a live `ae_out/<claim>.status` and, when every job is
-accounted for, an `ae_out/<claim>.DONE` file with a **pass/fail report** (it lists
-any failed jobs and where to find their logs). `ae_results.sh` then writes the
-table (`ae_out/<claim>.md`) and the rendered image in `ae_out/`: `figure12.pdf`
-(the 2×2 plot, once **both** `head8mb` and `head2mb` have run), `figure13.pdf`,
-`figure20.pdf`, `figure22.pdf`, and `table5.pdf`/`table6.pdf`. The motivation run
-writes Figures 4, 5, 6, 8, 9 to `experiments/ae/motivation/motivation_out/` (see
+`ae_run_all.sh --results` writes, for each claim, a table (`ae_out/<claim>.md`)
+and a rendered image in `ae_out/`: `figure12.pdf` (the 2×2 plot, once **both**
+`head8mb` and `head2mb` have run), `figure13.pdf`, `figure20.pdf`, `figure22.pdf`,
+and `table5.pdf`/`table6.pdf`. Progress lives in `ae_out/<claim>.status`, and each
+finished claim gets an `ae_out/<claim>.DONE` **pass/fail report** (listing any
+failed jobs and where to find their logs). The motivation run writes Figures 4, 5,
+6, 8, 9 to `experiments/ae/motivation/motivation_out/` (see
 [`motivation/README.md`](motivation/)).
 
 **Scale & runtime:** a single-core job simulates 300 M instructions (a few
@@ -165,6 +159,23 @@ minutes to under an hour each); `all` is 21,080 jobs. On a **~1300-core cluster
 the entire set finishes within ~1 day**, and the longest single claim (`table6`)
 takes **~10 hours**. On a single machine, run one claim at a time — start with
 **`head8mb`**, the headline result and the cheapest full claim.
+
+### If something goes wrong — manual per-claim control
+
+**You normally never run these.** `ae_run_all.sh` already launches, watches, and
+parses every claim. Reach for the per-claim scripts **only to recover a claim that
+reported failures** — to re-launch just that claim, re-attach a watcher, or
+re-parse its existing results:
+
+```bash
+bash experiments/ae/ae_launch.sh  --claim head8mb --mode slurm --partitions <partition>
+#                                  single machine instead:  --mode local --jobs $(nproc)
+bash experiments/ae/ae_watch.sh   --claim head8mb
+bash experiments/ae/ae_results.sh --claim head8mb --wait
+```
+
+Re-running `ae_launch.sh` only resubmits jobs that do not yet have a valid result,
+so it cleanly heals a partially-failed claim without repeating finished work.
 
 ---
 
