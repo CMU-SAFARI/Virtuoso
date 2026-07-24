@@ -53,10 +53,13 @@ ifneq ($(BOOST_INCLUDE),)
 	CPPFLAGS += -I$(BOOST_INCLUDE)
 endif
 
-# Embedded CPython. --libs gives -lpython<ver>; --ldflags adds the -L<libdir> so
-# the linker also finds a non-system python (pyenv/conda/PPA in /usr/local, etc.).
-PYTHON_LD_FLAGS := $(shell python3-config --ldflags --embed)
-PYTHON_LD_LIBS  := $(shell python3-config --libs --embed)
+# Embedded CPython. PYTHON3_CONFIG defaults to python3-config but build_and_validate.sh
+# pins it to the OS /usr/bin/python3-config, so an active conda/pyenv can't hijack the
+# embedded-Python link. --libs gives -lpython<ver>; --ldflags adds -L<libdir> so a
+# non-system python (pyenv/conda/PPA in /usr/local) is still found.
+PYTHON3_CONFIG ?= python3-config
+PYTHON_LD_FLAGS := $(shell $(PYTHON3_CONFIG) --ldflags --embed)
+PYTHON_LD_LIBS  := $(shell $(PYTHON3_CONFIG) --libs --embed)
 LD_FLAGS += $(PYTHON_LD_FLAGS)
 LD_LIBS += -ldecoder -lsift -lxed -lrt -lz -lbz2 -llzma -lsqlite3 $(PYTHON_LD_LIBS)
 
@@ -70,7 +73,7 @@ endif
 export LD_LIBRARY_PATH := $(SIM_ROOT)/lib:$(LD_LIBRARY_PATH)
 
 # Include paths
-PYTHON_INCLUD_PATH := $(shell python3-config --includes)
+PYTHON_INCLUD_PATH := $(shell $(PYTHON3_CONFIG) --includes)
 CPPFLAGS+=$(foreach dir,$(INCLUDE_DIRECTORIES),-I$(dir)) \
 	  $(PYTHON_INCLUD_PATH) \
           -I$(SIM_ROOT)/capstone/include -I$(SIM_ROOT)/capstone/include/capstone 

@@ -56,11 +56,13 @@ $SUDO apt-get install -y "${PKGS[@]}"
 # PPA) whose -dev lib is absent, the final link fails with `cannot find -lpythonX.Y`.
 # Make sure the dev lib MATCHING python3-config is installed.
 ensure_python_embed() {
-  local cc pyv
+  local cc pyv pycfg
+  # match the OS python3-config the build pins to (build_and_validate.sh)
+  pycfg=$(command -v /usr/bin/python3-config || command -v python3-config || echo python3-config)
   cc=$(command -v gcc || command -v cc || echo gcc)
-  pyv=$(python3-config --ldversion 2>/dev/null)
+  pyv=$("$pycfg" --includes 2>/dev/null | grep -oE 'python3\.[0-9]+t?' | head -1 | sed 's/python//')
   _links() { echo 'int main(void){return 0;}' | "$cc" -xc - \
-      $(python3-config --includes 2>/dev/null) $(python3-config --ldflags --embed 2>/dev/null) \
+      $("$pycfg" --includes 2>/dev/null) $("$pycfg" --ldflags --embed 2>/dev/null) \
       -o /tmp/_ae_pyembed 2>/dev/null; local r=$?; rm -f /tmp/_ae_pyembed; return $r; }
   if _links; then echo "==> embedded Python OK (python ${pyv})"; return 0; fi
   echo "==> embedded-Python dev lib for python ${pyv:-?} missing — installing it"
