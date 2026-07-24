@@ -96,8 +96,10 @@ dumps (no simulation). Outputs land in `experiments/ae/ae_out/` (simulation) and
 | **all sim.** | every simulation suite above                     | **21080** | |
 
 For the six **simulation** suites, `ae_run_all.sh` is the **one command you
-drive** — it launches them, tracks them in the background, and produces their
-figures and tables. Pick the block for your environment: **A) a SLURM cluster**
+drive**, in three passes: **launch** once (non-blocking — the watchers run in the
+background), poll **`--status`** until every suite reads `DONE`, then run
+**`--results`** to produce the figures and tables. Don't run the three back-to-back;
+`--results` only works once the jobs finish. Pick the block for your environment: **A) a SLURM cluster**
 (recommended, for the full run) or **B) a single machine**. In normal operation
 you never touch the individual `ae_launch`/`ae_watch`/`ae_results` scripts; those
 are only for recovery if a suite fails (see
@@ -113,7 +115,7 @@ they need two extra commands, shown at the end of each block below.
 ```bash
 bash experiments/ae/ae_run_all.sh --mode slurm --partitions <partition>   # launch every suite
 bash experiments/ae/ae_run_all.sh --status                                 # progress, any time
-bash experiments/ae/ae_run_all.sh --results                                # tables + figures
+bash experiments/ae/ae_run_all.sh --results                                # once every suite reads DONE
 ```
 
 Suites are independent and proceed in parallel. `--partitions` is optional (omit
@@ -141,7 +143,7 @@ how many suites you pick.
 ```bash
 bash experiments/ae/ae_run_all.sh --mode local --jobs $(nproc)   # launch all suites
 bash experiments/ae/ae_run_all.sh --status                        # progress, any time
-bash experiments/ae/ae_run_all.sh --results                       # tables + figures
+bash experiments/ae/ae_run_all.sh --results                       # once every suite reads DONE
 ```
 
 Add `--suites "head8mb multicore"` to run only a subset. A full 300 M-instruction
