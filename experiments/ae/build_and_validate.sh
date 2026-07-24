@@ -127,21 +127,29 @@ echo "${C_G} Setup is validated. You are ready to run the experiments.${C_0}"
 echo "${C_G}================================================================${C_0}"
 cat <<NEXT
 
-Run a suite in three steps (results + figures land in experiments/ae/ae_out/):
+Reproduce the paper results with ONE driver — ae_run_all.sh. It launches every
+suite, tracks them in the background, and writes the tables/figures to
+experiments/ae/ae_out/. You do NOT run anything per-suite.
 
-  # 2. launch all jobs for a suite (non-blocking)
-  bash experiments/ae/ae_launch.sh  --suite head8mb --mode slurm --partitions <partition>
-  #    (single machine, no SLURM:  --mode local --jobs \$(nproc))
+  On a SLURM cluster (all suites in parallel):
+    bash experiments/ae/ae_run_all.sh --mode slurm [--partitions <p>]   # launch
+    bash experiments/ae/ae_run_all.sh --status                          # progress, any time
+    bash experiments/ae/ae_run_all.sh --results                         # once every suite reads DONE
 
-  # 3. start the background watcher, then check progress whenever you like
-  bash experiments/ae/ae_watch.sh   --suite head8mb
-  cat  experiments/ae/ae_out/head8mb.status      # done/running/failed, any time
+  On a single machine (no SLURM; one shared scheduler across your cores):
+    bash experiments/ae/ae_run_all.sh --mode local --jobs \$(nproc)      # launch
+    bash experiments/ae/ae_run_all.sh --status
+    bash experiments/ae/ae_run_all.sh --results
 
-  # 4. once the watcher writes ae_out/head8mb.DONE, parse + plot
-  bash experiments/ae/ae_results.sh --suite head8mb            # (add --wait to block)
+  Subset:  --suites "head8mb multicore"   |   quick test:  --icount 2000000
+  Suites:  head8mb head2mb table5 table6 pqsweep multicore
 
-  suites: head8mb head2mb table5 table6 pqsweep multicore
+Motivation figures (Figures 4, 5, 6, 8, 9 — separate, no simulation):
 
-Note: a full suite is thousands of 300M-instruction sims (cluster-scale). The
-random-trace check above already confirms the build, traces and simulator work.
+    hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
+    bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode local --jobs \$(nproc)
+    #   on a cluster instead:  --mode slurm [--partitions <p>]
+
+Don't run launch/status/results back-to-back: launch once, poll --status until
+every suite reads DONE, then --results. Full details: experiments/ae/README.md.
 NEXT
