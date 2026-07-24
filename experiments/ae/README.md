@@ -26,22 +26,33 @@ curated top-200 (`top200_trail_workloads.txt`); multicore uses the equal-work
 50M-per-core heartbeat-crossing method.
 
 ## Traces & trace lists
-The ChampSim traces are large and are distributed **separately** (with the
-trace bundle), not in this repo. Each experiment suite is driven by a **trace
-list** (`*.tlist`) whose **first line is the absolute path to your trace root**
-and whose remaining lines are `tracename, filename, ...`.
+The ChampSim traces are large and are distributed **separately** as a Hugging
+Face dataset, not in this repo. The dataset has a flat layout:
 
-The `.tlist` files ship **with the trace bundle** (their paths already match the
-bundle layout). After downloading the traces:
+```
+traces/      all trace files in one folder (*.champsim.gz / *.sift / *.champsimtrace.xz)
+vm_tlist/    the trace lists (*.tlist) + setup_tlists.sh
+```
 
-1. Copy the bundle's `.tlist` files into **`experiments/vm_tlist/`** (this
-   directory is git-ignored — it is populated from the bundle, not the repo).
-2. If your traces live somewhere else, edit the **first line** of each `.tlist`
-   to point at your trace root.
+Each experiment suite is driven by a **trace list** (`*.tlist`): its entries are
+`tracename, filename, ...` resolved against a single traces directory.
 
-`run_ae.sh` reads the `.tlist` files named by `clist_prefetcher_v3.yaml`
-(single-core) and `clist_multicore.yaml` (multicore); a suite fails fast with a
-clear message if its trace list or any referenced trace is missing.
+Download the dataset and wire the trace lists into the repo:
+
+```bash
+# 1) download the dataset (traces/ + vm_tlist/)
+hf download <org>/trail-tlb-traces --repo-type dataset --local-dir ./bundle
+
+# 2) resolve the trace lists to your downloaded traces/ folder, writing them
+#    into experiments/vm_tlist/ (git-ignored; populated from the bundle)
+bash ./bundle/vm_tlist/setup_tlists.sh "$(realpath ./bundle/traces)" experiments/vm_tlist
+```
+
+`setup_tlists.sh` just substitutes the traces path into each list, so if your
+traces live elsewhere, point its first argument there. `run_ae.sh` then reads
+the lists named by `clist_prefetcher_v3.yaml` (single-core) and
+`clist_multicore.yaml` (multicore), and a suite fails fast with a clear message
+if a trace list or any referenced trace is missing.
 
 ## Requirements
 - **Traces + trace lists** installed as above (see *Traces & trace lists*).
