@@ -90,12 +90,16 @@ dumps (no simulation). Outputs land in `experiments/ae/ae_out/` (simulation) and
 | `motivation` | Temporal-locality characterization (no simulation) |   — | **Figures 4, 5, 6, 8, 9** |
 | **all sim.** | every simulation claim above                     | **21080** | |
 
-`ae_run_all.sh` is the **one command you drive** — it launches the claims, tracks
-them in the background, and produces the figures/tables. Pick the block for your
-environment: **A) a SLURM cluster** (recommended, for the full run) or **B) a
-single machine**. In normal operation you never touch the individual
-`ae_launch`/`ae_watch`/`ae_results` scripts; those are only for recovery if a
-claim fails (see [**If something goes wrong**](#if-something-goes-wrong--manual-per-claim-control), below).
+For the six **simulation** claims, `ae_run_all.sh` is the **one command you
+drive** — it launches them, tracks them in the background, and produces their
+figures and tables. Pick the block for your environment: **A) a SLURM cluster**
+(recommended, for the full run) or **B) a single machine**. In normal operation
+you never touch the individual `ae_launch`/`ae_watch`/`ae_results` scripts; those
+are only for recovery if a claim fails (see
+[**If something goes wrong**](#if-something-goes-wrong--manual-per-claim-control), below).
+
+The **motivation** figures (4, 5, 6, 8, 9) are **not** part of `ae_run_all.sh` —
+they need two extra commands, shown at the end of each block below.
 
 ### A) Run on a SLURM cluster (recommended)
 
@@ -111,7 +115,10 @@ Claims are independent and proceed in parallel. `--partitions` is optional (omit
 it to use your cluster's default; no `--partition` is passed to `sbatch`).
 Restrict the set with `--claims "head8mb multicore"`.
 
-**Motivation figures** (one SLURM job per workload):
+**Motivation figures (Figures 4, 5, 6, 8, 9) — a separate step.** `ae_run_all.sh`
+does **not** produce these. To get them you must run the two extra commands below
+(download the page-table-walk dumps, then analyse them as one SLURM job per
+workload):
 
 ```bash
 hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
@@ -136,7 +143,10 @@ full claim). A full 300 M-instruction claim is large on one machine — add
 (the numbers won't match the paper at 2 M instructions). `--icount` works in
 SLURM mode too.
 
-**Motivation figures** (up to `N` local cores):
+**Motivation figures (Figures 4, 5, 6, 8, 9) — a separate step.** `ae_run_all.sh`
+does **not** produce these. To get them you must run the two extra commands below
+(download the page-table-walk dumps, then analyse them locally on up to `N`
+cores):
 
 ```bash
 hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
