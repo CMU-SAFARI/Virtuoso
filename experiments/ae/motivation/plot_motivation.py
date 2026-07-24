@@ -163,18 +163,19 @@ def main():
     ax.set_ylim(0, 105); ax.grid(axis="y"); spines(ax); ax.legend(fontsize=9, loc="lower left")
     fig.tight_layout(); save(fig, "figure8_granularity")
 
-    # Figure 4 — unique (PC, delta) pairs vs resident footprint
-    xs = [d["n_unique_regions"]*32/1024 for d in rows if d.get("n_unique_pc_delta",0)>0 and d.get("n_unique_regions",0)>0]
-    ys = [d["n_unique_pc_delta"] for d in rows if d.get("n_unique_pc_delta",0)>0 and d.get("n_unique_regions",0)>0]
+    # Figure 4 — CDF of unique (PC, delta) pairs per workload
+    vals = sorted(d["n_unique_pc_delta"] for d in rows if d.get("n_unique_pc_delta", 0) > 0)
+    ecdf = [(i + 1) / len(vals) * 100 for i in range(len(vals))]
     fig, ax = plt.subplots(figsize=(4.8, 3.0))
-    ax.scatter(xs, ys, s=18, alpha=0.6, color="#1f77b4", edgecolors="white", linewidths=0.3)
-    if len(xs) > 2:
-        sl, ic = np.polyfit(np.log10(xs), np.log10(ys), 1)
-        xf = np.logspace(math.log10(min(xs)), math.log10(max(xs)), 100)
-        ax.plot(xf, 10**(ic+sl*np.log10(xf)), color="#c0392b", lw=2, label=f"slope={sl:.2f}"); ax.legend(fontsize=9, loc="lower right")
-    ax.set_xscale("log"); ax.set_yscale("log")
-    ax.set_xlabel("Resident footprint (MB)"); ax.set_ylabel("Unique (PC, $\\Delta$) pairs")
-    ax.grid(axis="both", which="both"); spines(ax); fig.tight_layout(); save(fig, "figure4_pc_delta_pairs")
+    ax.plot(vals, ecdf, color="#1f77b4", lw=2.4)
+    ax.set_xscale("log")
+    ax.set_xlabel("Unique (PC, $\\Delta$) pairs per workload"); ax.set_ylabel("Workloads (CDF, %)")
+    ax.set_ylim(0, 100); ax.grid(axis="both", which="both"); spines(ax)
+    if vals:
+        med = vals[len(vals) // 2]
+        ax.axvline(med, color="#c0392b", ls="--", lw=1.2)
+        ax.text(med, 6, f" median {med:,}", color="#c0392b", fontsize=9, ha="left")
+    fig.tight_layout(); save(fig, "figure4_pc_delta_pairs")
 
     # Figure 9 — % of representable delta occurrences (freq-weighted)
     gw = [mean([d["global_wt"][j] for d in sel])*100 for j in range(len(BITS))]
