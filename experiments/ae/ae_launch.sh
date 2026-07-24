@@ -3,7 +3,12 @@
 # ae_launch.sh — PHASE 2: launch the experiments for a claim (non-blocking).
 #
 #   experiments/ae/ae_launch.sh --claim <claim> [--mode slurm|local]
-#         [--partitions cpu_part,bio_part] [--exclude node01,...] [--jobs N]
+#         [--partitions p1,p2] [--exclude node01,...] [--jobs N] [--icount N]
+#
+# --partitions is optional: if omitted, no --partition is passed to sbatch (your
+#   cluster's default partition is used).
+# --icount overrides every job's instruction budget (default 300M, 100M for the
+#   virtuoso traces) — e.g. --icount 2000000 for a quick end-to-end test.
 #
 # Generates the jobfile, checks the traces are present, submits ALL jobs, and
 # returns immediately. It does NOT wait — start the watcher next:
@@ -15,13 +20,14 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/lib/ae_common.sh"
 source "$HERE/lib/jobtools.sh"
 
-CLAIM=""; MODE="slurm"; PARTS="cpu_part,bio_part"; AE_EXCLUDE=""; JOBS=$(( $(nproc) - 2 )); NO_PREFLIGHT=0
+CLAIM=""; MODE="slurm"; PARTS=""; AE_EXCLUDE=""; JOBS=$(( $(nproc) - 2 )); NO_PREFLIGHT=0; ICOUNT=""
 while [ $# -gt 0 ]; do case "$1" in
   --claim) CLAIM="$2"; shift 2;;
   --mode) MODE="$2"; shift 2;;
   --partitions) PARTS="$2"; shift 2;;
   --exclude) AE_EXCLUDE="$2"; shift 2;;
   --jobs) JOBS="$2"; shift 2;;
+  --icount) ICOUNT="$2"; shift 2;;
   --no-preflight) NO_PREFLIGHT=1; shift;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
@@ -34,6 +40,11 @@ mkdir -p "$AE_OUT"
 echo "==== [launch] claim=$CLAIM  mode=$MODE ===="
 echo "generating jobfile ..."
 ae_generate "$CLAIM" || { echo "generation failed"; exit 1; }
+# --icount: override every job's instruction budget (quick testing; default 300M/100M)
+if [ -n "$ICOUNT" ]; then
+  sed -i -E "s/stop-by-icount:[0-9]+/stop-by-icount:${ICOUNT}/g" "$JOBFILE"
+  echo "  NOTE: instruction count overridden to ${ICOUNT} for all jobs (quick test)."
+fi
 EXPECTED=$(grep -c '^sbatch' "$JOBFILE")
 echo "  $EXPECTED jobs -> $RESULTS"
 
@@ -44,7 +55,9 @@ fi
 # --- submit -----------------------------------------------------------------
 LAUNCH="$AE_OUT/$CLAIM.launch"
 if [ "$MODE" = "slurm" ]; then
-  echo "submitting $EXPECTED SLURM jobs (partitions=$PARTS${AE_EXCLUDE:+, exclude=$AE_EXCLUDE}) ..."
+  desc="${PARTS:+partition=$PARTS}"; desc="${desc:-default partition}"
+  [ -n "$AE_EXCLUDE" ] && desc="$desc, exclude=$AE_EXCLUDE"
+  echo "submitting $EXPECTED SLURM jobs ($desc) ..."
   # submit every job lacking a valid result, injecting partitions
   ntmp=$(mktemp); ae_missing_lines "$JOBFILE" "$PARTS" > "$ntmp"
   cnt=0

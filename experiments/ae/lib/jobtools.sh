@@ -12,8 +12,9 @@ ae_valid_result() {  # $1 = rundir (the -d dir)
 }
 
 # --- ensure a sbatch line targets the requested partitions (pure bash) ---
-ae_ensure_partition() {  # $1=line $2=partitions(csv)
+ae_ensure_partition() {  # $1=line $2=partitions(csv, empty = leave as-is)
   local line="$1" parts="$2" val
+  [ -z "$parts" ] && { printf '%s' "$line"; return; }   # no partition requested -> don't inject one
   case "$line" in
     *--partition=*)
       val="${line#*--partition=}"; val="${val%% *}"

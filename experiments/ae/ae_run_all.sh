@@ -23,13 +23,14 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/lib/ae_common.sh"
 
-CLAIMS="$ALL_CLAIMS"; MODE="slurm"; PARTS="cpu_part,bio_part"; EXCLUDE=""; JOBS=""; ACTION="run"
+CLAIMS="$ALL_CLAIMS"; MODE="slurm"; PARTS=""; EXCLUDE=""; JOBS=""; ICOUNT=""; ACTION="run"
 while [ $# -gt 0 ]; do case "$1" in
   --claims) CLAIMS="$2"; shift 2;;
   --mode) MODE="$2"; shift 2;;
   --partitions) PARTS="$2"; shift 2;;
   --exclude) EXCLUDE="$2"; shift 2;;
   --jobs) JOBS="$2"; shift 2;;
+  --icount) ICOUNT="$2"; shift 2;;
   --status) ACTION="status"; shift;;
   --results) ACTION="results"; shift;;
   *) echo "unknown arg: $1"; exit 2;;
@@ -69,8 +70,10 @@ fi
 
 for c in $CLAIMS; do
   echo; echo "########## $c ##########"
-  bash "$HERE/ae_launch.sh" --claim "$c" --mode "$MODE" --partitions "$PARTS" \
-       ${EXCLUDE:+--exclude "$EXCLUDE"} ${JOBS:+--jobs "$JOBS"} || { echo "[skip] $c launch failed"; continue; }
+  bash "$HERE/ae_launch.sh" --claim "$c" --mode "$MODE" \
+       ${PARTS:+--partitions "$PARTS"} ${EXCLUDE:+--exclude "$EXCLUDE"} \
+       ${JOBS:+--jobs "$JOBS"} ${ICOUNT:+--icount "$ICOUNT"} \
+       || { echo "[skip] $c launch failed"; continue; }
   bash "$HERE/ae_watch.sh" --claim "$c"
 done
 

@@ -108,6 +108,14 @@ accounted for, an `ae_out/<claim>.DONE` file with a **pass/fail report** (it lis
 any failed jobs and where to find their logs). `ae_results.sh` then writes the
 table and figure.
 
+**Options for `ae_launch.sh` / `ae_run_all.sh`:**
+- `--partitions p1,p2` is optional — omit it to use your cluster's default
+  partition (no `--partition` is passed to `sbatch`).
+- `--icount N` shrinks every job's instruction budget (default 300 M) for a fast
+  end-to-end smoke test, e.g. `--icount 2000000`. The numbers won't match the
+  paper at 2 M instructions, but it confirms the full launch → watch → results
+  pipeline works in minutes rather than hours.
+
 ---
 
 ## Claims → paper
