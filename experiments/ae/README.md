@@ -180,6 +180,11 @@ bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode loc
 
 - `run_ae.sh --mode {slurm|local} --claim <claim>` is an all-in-one alternative to
   the launch/watch/results trio: it launches, blocks until every job finishes,
-  and writes the table.
+  and writes the table. Like `ae_launch.sh`, `--partitions` is optional.
 - Re-running a claim only re-submits jobs that do not yet have a valid result, so
   an interrupted run resumes cleanly.
+- `reproduce.sh` downloads the public dataset by default (no token, no
+  `--hf-repo` needed). Override with `--hf-repo <owner/name>` only if you host a
+  mirror.
+- A ready-to-include **artifact appendix** for the paper is in
+  [`artifact_appendix.tex`](artifact_appendix.tex).

@@ -1,0 +1,253 @@
+% =====================================================================
+%  Artifact Appendix for the TRAIL paper.
+%
+%  Drop-in LaTeX. Place near the end of the paper, after \bibliography, e.g.
+%
+%      \appendix
+%      \input{experiments/ae/artifact_appendix}
+%
+%  It uses only \section/\subsection, itemize, \texttt, and \url (hyperref).
+%  If your template already issues \appendix, delete the \appendix line below.
+%
+%  FILL-INS (search for <<>>): paper title and, if you mint one, a Zenodo DOI.
+% =====================================================================
+
+\appendix
+\section{Artifact Appendix}
+
+\subsection{Abstract}
+
+This artifact reproduces the main results of TRAIL, a temporal TLB
+prefetcher that makes the page table self-prefetching: each translation
+carries its likely successors, so prefetching a translation simultaneously
+delivers the next prediction. The artifact evaluates TRAIL against prior
+TLB prefetchers (ASP, Stride/NextPage, DP, Recency, ATP, Berti) and the
+Perfect-L2TLB upper bound on the Sniper architectural simulator extended
+with the MimicOS operating-system model. It reproduces the single-core
+head-to-head results at an 8\,MB and a 2\,MB last-level-cache NUCA
+(Figures~12 and~13), the in-PTE and side-car payload-budget sweeps
+(Tables~5 and~6), the L2-TLB prefetch-queue sensitivity study
+(Figure~20), and the four-core multi-programmed study (Figure~22). It also
+reproduces the temporal-locality motivation figures (Figures~4, 5, 6, 8,
+and~9) directly from page-table-walk dumps. Evaluation is trace-driven, so
+no proprietary tools (Intel Pin/SDE) are required: a single script installs
+dependencies, builds the simulator, downloads the public traces, and runs a
+sanity check; a three-command launch/watch/results workflow then reproduces
+each claim and renders the corresponding figure or table.
+
+\subsection{Artifact check-list (meta-information)}
+
+\begin{itemize}
+  \item \textbf{Program:} Sniper multi-core simulator with the MimicOS OS
+        model and the TRAIL prefetcher (C++17); Python analysis and plotting
+        scripts. All included.
+  \item \textbf{Compilation:} \texttt{g++} (C++17); the instruction decoder
+        (libxed) is bundled and built automatically. No Intel Pin/SDE or
+        libtorch is needed for the trace-replay build.
+  \item \textbf{Run-time environment:} Linux (tested on Ubuntu 20.04 and
+        22.04). Root/\texttt{sudo} only to install system packages.
+  \item \textbf{Hardware:} any x86-64 machine. A SLURM cluster is recommended
+        for the full run but not required; every step also runs locally.
+  \item \textbf{Metrics:} instructions-per-cycle (IPC) and its speedup over a
+        no-prefetch baseline. Single-core speedups are geometric means over the
+        workload suite; the multi-core metric is an equal-work harmonic mean
+        across the four cores.
+  \item \textbf{Output:} per-claim markdown tables and rendered figures/tables
+        (PDF\,+\,PNG) under \texttt{experiments/ae/ae\_out/}.
+  \item \textbf{Experiments:} six simulation claims (\texttt{head8mb},
+        \texttt{head2mb}, \texttt{table5}, \texttt{table6}, \texttt{pqsweep},
+        \texttt{multicore}) plus the trace-free motivation analysis, driven by
+        the provided bash harness.
+  \item \textbf{How much disk space required (approximately)?} $\sim$300\,GB
+        ($\sim$250\,GB of traces plus the build and results).
+  \item \textbf{How much time is needed to prepare workflow (approximately)?}
+        $\sim$30--60\,min: a 2--3\,min build plus the (resumable) trace
+        download, which dominates and depends on bandwidth.
+  \item \textbf{How much time is needed to complete experiments
+        (approximately)?} The full set is $\approx$21{,}000 short simulations.
+        On a $\sim$1300-core cluster the entire set finishes within
+        $\sim$1\,day; the longest single claim (\texttt{table6}) takes
+        $\sim$10\,h. A single claim, e.g.\ the headline \texttt{head8mb}, is
+        far cheaper; an \texttt{--icount} flag shrinks every job to a
+        minutes-long smoke test.
+  \item \textbf{Publicly available?} Yes. Source on GitHub; traces and
+        page-table-walk dumps as public Hugging Face datasets (no token
+        required).
+  \item \textbf{Code licenses (if publicly available)?} See the repository
+        \texttt{LICENSE}. \emph{<<confirm license, e.g.\ MIT>>}
+  \item \textbf{Data licenses (if publicly available)?} Public Hugging Face
+        datasets (traces and dumps).
+  \item \textbf{Workflow automation framework used?} A self-contained bash
+        harness (\texttt{reproduce.sh} for setup, then
+        \texttt{ae\_launch.sh}\,/\,\texttt{ae\_watch.sh}\,/\,%
+        \texttt{ae\_results.sh}, or \texttt{ae\_run\_all.sh} to run every claim
+        in parallel).
+  \item \textbf{Archived (provide DOI)?} \emph{<<add Zenodo DOI if minted;
+        otherwise the GitHub tag + Hugging Face datasets>>}
+\end{itemize}
+
+\subsection{Description}
+
+\subsubsection{How to access}
+Clone the artifact branch of the repository:
+\begin{quote}\small
+\texttt{git clone -{}-branch trail-artifact-release \textbackslash}\\
+\texttt{\ \ https://github.com/CMU-SAFARI/Virtuoso.git}
+\end{quote}
+The traces and page-table-walk dumps are separate public Hugging Face
+datasets and are fetched by the setup script:
+\begin{itemize}
+  \item Traces + trace-lists: \url{https://huggingface.co/datasets/konkanello/trail_traces}
+  \item Motivation dumps: \url{https://huggingface.co/datasets/konkanello/trail_ptw_dumps}
+\end{itemize}
+All artifact material lives under \texttt{experiments/ae/}.
+
+\subsubsection{Hardware dependencies}
+An x86-64 machine. The build and the sanity check need $\sim$8\,GB of RAM;
+each simulation uses a few GB, so a machine (or cluster) with more memory and
+cores runs more jobs in parallel. $\sim$300\,GB of free disk is required for
+the traces, build, and results. A SLURM cluster is optional but strongly
+recommended to complete the full set in reasonable wall-clock time.
+
+\subsubsection{Software dependencies}
+Linux with a C++17 toolchain and Python~3.8+. All system packages, plus the
+Hugging Face CLI (trace download) and matplotlib (figures), are installed by
+\texttt{experiments/ae/lib/install\_deps.sh} on Debian/Ubuntu (equivalents
+exist on other distributions). Network access is needed to download the traces
+and to fetch the decoder during the build. No license-gated or proprietary
+tools are required.
+
+\subsubsection{Benchmarks / data sets}
+The workload suite spans server, graph-analytics, machine-learning, HPC, and
+industrial traces. The public trace dataset ships the trace files together
+with the trace-lists; the setup script wires them into the repository. The
+motivation figures use a separate $\sim$3\,GB dataset of per-workload
+page-table-walk dumps.
+
+\subsection{Installation}
+
+\begin{enumerate}
+  \item Install dependencies:
+\begin{quote}\small
+\texttt{bash experiments/ae/lib/install\_deps.sh}
+\end{quote}
+  \item Build, download traces, and sanity-check (resumable; re-run to resume
+        after any interruption):
+\begin{quote}\small
+\texttt{bash experiments/ae/reproduce.sh -{}-skip-deps}
+\end{quote}
+        This performs a trace-replay build of the simulator
+        (\texttt{make SNIPER\_TRACE\_ONLY=1 replay}; no Pin/SDE/libtorch),
+        downloads the public trace dataset, resolves the trace-lists into
+        \texttt{experiments/vm\_tlist/}, and runs a few short simulations on
+        randomly chosen traces, printing \texttt{[PASS] <trace> IPC=...} for
+        each. It then stops and prints the commands for Step~3. This step alone
+        confirms that the artifact builds and runs end-to-end.
+\end{enumerate}
+
+\subsection{Experiment workflow}
+
+Each claim maps to one paper figure or table. Results and rendered figures are
+written to \texttt{experiments/ae/ae\_out/}.
+
+\emph{All claims in parallel (recommended on a cluster):}
+\begin{quote}\small
+\texttt{bash experiments/ae/ae\_run\_all.sh -{}-mode slurm \textbackslash}\\
+\texttt{\ \ [-{}-partitions <p>]}\qquad\textit{\# launch every claim}\\
+\texttt{bash experiments/ae/ae\_run\_all.sh -{}-status}\quad\textit{\# progress}\\
+\texttt{bash experiments/ae/ae\_run\_all.sh -{}-results}\quad\textit{\# figures/tables}
+\end{quote}
+\texttt{-{}-partitions} is optional (omit it to use the cluster default; nothing
+is then passed to \texttt{sbatch}).
+
+\emph{One claim at a time (launch $\rightarrow$ watch $\rightarrow$ results):}
+\begin{quote}\small
+\texttt{bash experiments/ae/ae\_launch.sh\ -{}-claim head8mb -{}-mode slurm}\\
+\texttt{bash experiments/ae/ae\_watch.sh\ \ -{}-claim head8mb}\\
+\texttt{bash experiments/ae/ae\_results.sh -{}-claim head8mb}\quad\textit{\# after .DONE}
+\end{quote}
+The watcher self-detaches and maintains a human-readable
+\texttt{ae\_out/<claim>.status}; when every job is accounted for it writes a
+pass/fail report to \texttt{ae\_out/<claim>.DONE}, and \texttt{ae\_results.sh}
+then parses the results and renders the figure/table. Launching is
+validity-based and resumable: only jobs without a valid \texttt{sim.stats} are
+(re)submitted, so an interrupted run resumes cleanly. On a single machine, use
+\texttt{-{}-mode local} one claim at a time; \texttt{-{}-icount N} shrinks every
+job's instruction budget for a quick end-to-end test.
+
+The claim-to-paper mapping is:
+
+\begin{center}\small
+\begin{tabular}{@{}llr@{}}
+\toprule
+\texttt{-{}-claim} & reproduces & jobs \\
+\midrule
+\texttt{head8mb}   & Fig.~12 (bottom, 8\,MB) + Fig.~13 & 2761 \\
+\texttt{head2mb}   & Fig.~12 (top, 2\,MB)              & 2761 \\
+\texttt{table5}    & Table~5 (in-PTE payload sweep)    & 5271 \\
+\texttt{table6}    & Table~6 (side-car payload sweep)  & 6275 \\
+\texttt{pqsweep}   & Fig.~20 (PQ-size sensitivity)     & 3012 \\
+\texttt{multicore} & Fig.~22 (4-core, 100 mixes)       & 1000 \\
+\midrule
+\textbf{all}       &                                   & \textbf{21080} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Evaluation and expected results}
+
+Each claim writes a markdown table (\texttt{ae\_out/<claim>.md}) alongside the
+rendered figure/table. Exact numbers vary slightly with the machine, but every
+claim should closely match the paper, and in all cases \textbf{TRAIL should
+beat every prior prefetcher} and move toward the Perfect-L2TLB upper bound.
+Speedups are geometric means over the suite (multi-core is an equal-work
+harmonic mean across the four cores):
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+claim & expected (approx.) \\
+\midrule
+\texttt{head8mb} (Fig.~12, 8\,MB) & TRAIL $\approx +4.7\%$ over no-prefetch \\
+                                  & ($+2.4\%$ over ASP); Perfect $\approx +11\%$ \\
+\texttt{head2mb} (Fig.~12, 2\,MB) & TRAIL $\approx +5.1\%$ ($+2.8\%$ over ASP); \\
+                                  & Perfect $\approx +16.5\%$ \\
+\texttt{table5}  (Table~5)        & in-PTE TRAIL grows with the budget, \\
+                                  & up to $\approx +2.4\%$ over ASP \\
+\texttt{table6}  (Table~6)        & side-car TRAIL grows with the budget, \\
+                                  & up to $\approx +2.5\%$ over ASP \\
+\texttt{pqsweep} (Fig.~20)        & TRAIL $\approx +2.2$--$2.4\%$ over same- \\
+                                  & size ASP across every PQ size (64--1024) \\
+\texttt{multicore} (Fig.~22)      & TRAIL $\approx +11\%$ harmonic mean (best \\
+                                  & prior $\approx +5\%$); Perfect $\approx +23\%$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Motivation figures (Figures 4, 5, 6, 8, 9)}
+
+The temporal-locality motivation figures are produced from the page-table-walk
+dumps, without running any simulation. Download the dumps and run the analysis
+(SLURM or local, using up to \texttt{\$(nproc)} cores):
+\begin{quote}\small
+\texttt{hf download konkanello/trail\_ptw\_dumps \textbackslash}\\
+\texttt{\ \ -{}-repo-type dataset -{}-local-dir ./ptw\_bundle}\\[2pt]
+\texttt{bash experiments/ae/motivation/run\_motivation.sh \textbackslash}\\
+\texttt{\ \ -{}-dumps ./ptw\_bundle -{}-mode local -{}-jobs \$(nproc)}
+\end{quote}
+This writes \texttt{figure4}--\texttt{figure9} (PDF\,+\,PNG) under
+\texttt{experiments/ae/motivation/motivation\_out/}. The analysis is resumable:
+one JSON per workload, re-plotted on any re-run.
+
+\subsection{Notes}
+
+\begin{itemize}
+  \item Every phase is resumable. Re-running \texttt{reproduce.sh}, a launch, or
+        the motivation driver skips whatever is already complete.
+  \item Reviewers on a time budget should start with the setup sanity check
+        (Installation, Step~2) and the headline \texttt{head8mb} claim, which is
+        the cheapest full claim; \texttt{-{}-icount} makes any claim a
+        minutes-long end-to-end smoke test.
+  \item The full artifact README is at \texttt{experiments/ae/README.md}, and
+        the motivation README at \texttt{experiments/ae/motivation/README.md}.
+\end{itemize}

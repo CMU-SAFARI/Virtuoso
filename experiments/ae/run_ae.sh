@@ -5,7 +5,8 @@
 #   run_ae.sh --mode {slurm|local} --claim {head8mb,head2mb,table5,table6,
 #                                           pqsweep,multicore,all}
 #             [--jobs N] [--build] [--install-deps] [--out DIR]
-#             [--partitions cpu_part,bio_part] [--no-preflight]
+#             [--partitions p1,p2] [--no-preflight]   (partitions optional;
+#                    omit to use the cluster default — nothing is passed to sbatch)
 #             [--max-retries N] [--dry-run] [--artifact-root DIR]
 #
 # Per claim: generate jobfile -> PRE-FLIGHT traces -> launch+heal (resumable,
@@ -23,7 +24,7 @@ TOP200="$EXP/top200_trail_workloads.txt"
 source "$HERE/lib/jobtools.sh"
 
 MODE=""; CLAIMS=""; JOBS=$(( $(nproc) - 2 )); DO_BUILD=0; DO_INSTALL=0
-OUT="$EXP/ae/ae_out"; DRY=0; PARTS="cpu_part,bio_part"; NO_PREFLIGHT=0; MAX_RETRIES=3; EXCLUDE=""
+OUT="$EXP/ae/ae_out"; DRY=0; PARTS=""; NO_PREFLIGHT=0; MAX_RETRIES=3; EXCLUDE=""
 while [ $# -gt 0 ]; do case "$1" in
   --mode) MODE="$2"; shift 2;;
   --claim) CLAIMS="$2"; shift 2;;

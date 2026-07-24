@@ -55,13 +55,21 @@ count_active_slurm() {  # claim jobs still queued/running
      <(printf '%s\n' "${JOBNAMES[@]}") | wc -l); echo "$active"
 }
 
-exp="${expected:-${#RUNDIRS[@]}}"; prev_done=-1; plateau=0
+exp="${expected:-${#RUNDIRS[@]}}"; prev_done=-1; plateau=0; idle=0
 while :; do
   done=$(count_valid)
   if [ "$mode" = "slurm" ]; then active=$(count_active_slurm); else
-    # local: no queue — infer "active" from progress; give up after 10 idle polls
-    [ "$done" -eq "$prev_done" ] && plateau=$((plateau+1)) || plateau=0
-    active=$([ "$done" -lt "$exp" ] && [ "$plateau" -lt 10 ] && echo 1 || echo 0)
+    # local: no SLURM queue to poll, so infer activity from progress. Reset on
+    # any progress; otherwise count no-progress polls. Only treat a plateau as
+    # "finished" AFTER at least one job has completed (so a slow first sim is
+    # not mistaken for an empty run); an absolute idle cap still stops a run
+    # that is genuinely stuck. At the default 60s interval: plateau=15 (~15 min
+    # with no new result after the first), idle cap=120 (~2 h total).
+    if [ "$done" -ne "$prev_done" ]; then plateau=0; idle=0; else plateau=$((plateau+1)); idle=$((idle+1)); fi
+    stalled=0
+    { [ "$done" -gt 0 ] && [ "$plateau" -ge 15 ]; } && stalled=1
+    [ "$idle" -ge 120 ] && stalled=1
+    active=$([ "$done" -lt "$exp" ] && [ "$stalled" -eq 0 ] && echo 1 || echo 0)
   fi
   prev_done=$done
   pending=$(( exp - done )); [ "$pending" -lt 0 ] && pending=0

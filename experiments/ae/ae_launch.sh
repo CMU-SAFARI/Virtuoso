@@ -66,11 +66,13 @@ if [ "$MODE" = "slurm" ]; then
   echo "  submitted $cnt jobs."
 else
   echo "starting local run pool ($JOBS at a time), detached ..."
-  # strip sbatch wrapper -> bare run-sniper commands, run JOBS at a time in background
+  # strip sbatch wrapper -> bare run-sniper commands (NUL-separated), run JOBS at
+  # a time in a detached background pool. jobfile_to_cmds.py emits NUL-separated
+  # commands; the grep fallback is NUL-terminated to match, so `xargs -0` is safe.
   cmds=$(mktemp)
-  python3 "$HERE/lib/jobfile_to_cmds.py" "$JOBFILE" > "$cmds" 2>/dev/null \
-    || grep -oE '/[^ ]*run-sniper[^"]*' "$JOBFILE" > "$cmds"
-  setsid -f bash -c "xargs -a '$cmds' -d '\n' -P $JOBS -I{} bash -c '{}' >/dev/null 2>&1; rm -f '$cmds'"
+  python3 "$HERE/lib/jobfile_to_cmds.py" "$JOBFILE" > "$cmds" 2>/dev/null
+  [ -s "$cmds" ] || grep -oE '/[^ ]*run-sniper[^"]*' "$JOBFILE" | tr '\n' '\0' > "$cmds"
+  setsid -f bash -c "xargs -a '$cmds' -0 -n1 -P $JOBS bash -c >/dev/null 2>&1; rm -f '$cmds'"
   echo "  local pool started."
 fi
 
