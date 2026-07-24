@@ -1,16 +1,16 @@
 #!/bin/bash
 # ===========================================================================
-# ae_watch.sh — PHASE 3: watch a launched claim (runs in the BACKGROUND).
+# ae_watch.sh — PHASE 3: watch a launched suite (runs in the BACKGROUND).
 #
-#   experiments/ae/ae_watch.sh --claim <claim> [--interval 60]
+#   experiments/ae/ae_watch.sh --suite <suite> [--interval 60]
 #
 # Detaches itself and periodically writes a human-readable status file:
 #
-#   experiments/ae/ae_out/<claim>.status     <- `cat` this any time
+#   experiments/ae/ae_out/<suite>.status     <- `cat` this any time
 #
 # It reports how many jobs have finished, how many are still running, and (at
 # the end) how many PASSED vs FAILED, listing the failed run-dirs. When every
-# job is accounted for it writes experiments/ae/ae_out/<claim>.DONE (the green
+# job is accounted for it writes experiments/ae/ae_out/<suite>.DONE (the green
 # signal) and exits. Phase 4 (ae_results.sh) waits for that flag.
 # ===========================================================================
 set -uo pipefail
@@ -18,23 +18,23 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/lib/ae_common.sh"
 source "$HERE/lib/jobtools.sh"
 
-CLAIM=""; INTERVAL=60
+SUITE=""; INTERVAL=60
 while [ $# -gt 0 ]; do case "$1" in
-  --claim) CLAIM="$2"; shift 2;;
+  --suite) SUITE="$2"; shift 2;;
   --interval) INTERVAL="$2"; shift 2;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
-[ -n "$CLAIM" ] || { echo "ERROR: --claim required"; exit 2; }
-ae_claim_cfg "$CLAIM" || exit 1
-LAUNCH="$AE_OUT/$CLAIM.launch"
-[ -f "$LAUNCH" ] || { echo "ERROR: $CLAIM not launched (no $LAUNCH). Run ae_launch.sh first."; exit 1; }
-STATUS="$AE_OUT/$CLAIM.status"; DONEF="$AE_OUT/$CLAIM.DONE"; WLOG="$AE_OUT/$CLAIM.watch.log"
+[ -n "$SUITE" ] || { echo "ERROR: --suite required"; exit 2; }
+ae_suite_cfg "$SUITE" || exit 1
+LAUNCH="$AE_OUT/$SUITE.launch"
+[ -f "$LAUNCH" ] || { echo "ERROR: $SUITE not launched (no $LAUNCH). Run ae_launch.sh first."; exit 1; }
+STATUS="$AE_OUT/$SUITE.status"; DONEF="$AE_OUT/$SUITE.DONE"; WLOG="$AE_OUT/$SUITE.watch.log"
 
 # --- self-detach into the background on first invocation --------------------
 if [ "${AE_WATCH_DAEMON:-0}" != "1" ]; then
   rm -f "$DONEF"
-  AE_WATCH_DAEMON=1 setsid -f bash "$0" --claim "$CLAIM" --interval "$INTERVAL" >"$WLOG" 2>&1
-  echo "watcher started in background for '$CLAIM'."
+  AE_WATCH_DAEMON=1 setsid -f bash "$0" --suite "$SUITE" --interval "$INTERVAL" >"$WLOG" 2>&1
+  echo "watcher started in background for '$SUITE'."
   echo "  check progress any time:   cat $STATUS"
   echo "  when finished it writes:   $DONEF"
   exit 0
@@ -43,13 +43,13 @@ fi
 # --- daemon: read launch state ----------------------------------------------
 eval "$(grep -E '^(mode|expected|results|jobfile)=' "$LAUNCH")"
 mapfile -t RUNDIRS < <(ae_expected_rundirs "$jobfile")
-# claim's slurm job names (-J), to tell when the claim's jobs are gone
+# suite's slurm job names (-J), to tell when the suite's jobs are gone
 mapfile -t JOBNAMES < <(grep -oE -- '-J [^ ]+' "$jobfile" | awk '{print $2}' | sort -u)
 
 count_valid() {  # valid sim.stats among expected rundirs
   local d n=0; for d in "${RUNDIRS[@]}"; do ae_valid_result "$d" && n=$((n+1)); done; echo "$n"
 }
-count_active_slurm() {  # claim jobs still queued/running
+count_active_slurm() {  # suite jobs still queued/running
   local active; active=$(comm -12 \
      <(squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | sort -u) \
      <(printf '%s\n' "${JOBNAMES[@]}") | wc -l); echo "$active"
@@ -74,7 +74,7 @@ while :; do
   prev_done=$done
   pending=$(( exp - done )); [ "$pending" -lt 0 ] && pending=0
   {
-    echo "claim:   $CLAIM        mode: $mode"
+    echo "suite:   $SUITE        mode: $mode"
     echo "updated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "done:    $done / $exp   (jobs with a valid sim.stats)"
     echo "active:  $active   (running/pending)"
@@ -88,7 +88,7 @@ done
 # --- final pass/fail report -------------------------------------------------
 done=$(count_valid); failed=$(( exp - done )); [ "$failed" -lt 0 ] && failed=0
 {
-  echo "claim:   $CLAIM        mode: $mode"
+  echo "suite:   $SUITE        mode: $mode"
   echo "updated: $(date '+%Y-%m-%d %H:%M:%S')"
   echo "status:  DONE"
   echo "passed:  $done / $exp"
@@ -100,4 +100,4 @@ done=$(count_valid); failed=$(( exp - done )); [ "$failed" -lt 0 ] && failed=0
     done | head -50
   fi
 } | tee "$STATUS" > "$DONEF"
-echo "[watch] $CLAIM DONE: $done passed, $failed failed."
+echo "[watch] $SUITE DONE: $done passed, $failed failed."

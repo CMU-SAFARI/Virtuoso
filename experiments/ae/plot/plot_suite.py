@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""plot_claim.py — render a claim's parsed table as a camera-ready bar chart.
+"""plot_suite.py — render a suite's parsed table as a camera-ready bar chart.
 
-    plot_claim.py --md ae_out/<claim>.md --out ae_out/<claim>.pdf [--col 1]
+    plot_suite.py --md ae_out/<suite>.md --out ae_out/<suite>.pdf [--col 1]
 
 Reads the markdown table the parser produced, takes the first data column by
 default (the headline speedup), and draws one bar per row.  Style: black spines,

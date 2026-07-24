@@ -1,8 +1,8 @@
 #!/bin/bash
 # ===========================================================================
-# ae_launch.sh — PHASE 2: launch the experiments for a claim (non-blocking).
+# ae_launch.sh — PHASE 2: launch the experiments for a suite (non-blocking).
 #
-#   experiments/ae/ae_launch.sh --claim <claim> [--mode slurm|local]
+#   experiments/ae/ae_launch.sh --suite <suite> [--mode slurm|local]
 #         [--partitions p1,p2] [--exclude node01,...] [--jobs N] [--icount N]
 #
 # --partitions is optional: if omitted, no --partition is passed to sbatch (your
@@ -13,36 +13,36 @@
 # Generates the jobfile, checks the traces are present, submits ALL jobs, and
 # returns immediately. It does NOT wait — start the watcher next:
 #
-#   experiments/ae/ae_watch.sh --claim <claim>
+#   experiments/ae/ae_watch.sh --suite <suite>
 # ===========================================================================
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/lib/ae_common.sh"
 source "$HERE/lib/jobtools.sh"
 
-CLAIM=""; MODE="slurm"; PARTS=""; AE_EXCLUDE=""; JOBS=$(( $(nproc) - 2 )); NO_PREFLIGHT=0; ICOUNT=""; EMIT_CMDS=""
+SUITE=""; MODE="slurm"; PARTS=""; AE_EXCLUDE=""; JOBS=$(( $(nproc) - 2 )); NO_PREFLIGHT=0; ICOUNT=""; EMIT_CMDS=""
 while [ $# -gt 0 ]; do case "$1" in
-  --claim) CLAIM="$2"; shift 2;;
+  --suite) SUITE="$2"; shift 2;;
   --mode) MODE="$2"; shift 2;;
   --partitions) PARTS="$2"; shift 2;;
   --exclude) AE_EXCLUDE="$2"; shift 2;;
   --jobs) JOBS="$2"; shift 2;;
   --icount) ICOUNT="$2"; shift 2;;
   --no-preflight) NO_PREFLIGHT=1; shift;;
-  # local only: write this claim's NUL-separated commands to FILE and DON'T start
+  # local only: write this suite's NUL-separated commands to FILE and DON'T start
   # a pool. ae_run_all.sh uses this to feed one shared scheduler across suites.
   --emit-cmds) EMIT_CMDS="$2"; shift 2;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
-[ -n "$CLAIM" ] || { echo "ERROR: --claim required"; exit 2; }
-ae_claim_cfg "$CLAIM" || exit 1
+[ -n "$SUITE" ] || { echo "ERROR: --suite required"; exit 2; }
+ae_suite_cfg "$SUITE" || exit 1
 [ -x "$ROOT/simulator/sniper/lib/sniper" ] || { echo "ERROR: lib/sniper not built (run build_and_validate.sh first)."; exit 1; }
 [ "$JOBS" -lt 1 ] 2>/dev/null && JOBS=1
 mkdir -p "$AE_OUT"
 
-echo "==== [launch] claim=$CLAIM  mode=$MODE ===="
+echo "==== [launch] suite=$SUITE  mode=$MODE ===="
 echo "generating jobfile ..."
-ae_generate "$CLAIM" || { echo "generation failed"; exit 1; }
+ae_generate "$SUITE" || { echo "generation failed"; exit 1; }
 # --icount: override every job's instruction budget (quick testing; default 300M/100M)
 if [ -n "$ICOUNT" ]; then
   sed -i -E "s/stop-by-icount:[0-9]+/stop-by-icount:${ICOUNT}/g" "$JOBFILE"
@@ -56,7 +56,7 @@ if [ "$NO_PREFLIGHT" -eq 0 ]; then
 fi
 
 # --- submit -----------------------------------------------------------------
-LAUNCH="$AE_OUT/$CLAIM.launch"
+LAUNCH="$AE_OUT/$SUITE.launch"
 if [ "$MODE" = "slurm" ]; then
   desc="${PARTS:+partition=$PARTS}"; desc="${desc:-default partition}"
   [ -n "$AE_EXCLUDE" ] && desc="$desc, exclude=$AE_EXCLUDE"
@@ -87,7 +87,7 @@ fi
 
 # --- record launch state for the watcher ------------------------------------
 {
-  echo "claim=$CLAIM"
+  echo "suite=$SUITE"
   echo "mode=$MODE"
   echo "expected=$EXPECTED"
   echo "results=$RESULTS"
@@ -97,4 +97,4 @@ fi
 } > "$LAUNCH"
 echo
 echo "==== launched. Now start the watcher (backgrounds itself): ===="
-echo "  bash experiments/ae/ae_watch.sh --claim $CLAIM"
+echo "  bash experiments/ae/ae_watch.sh --suite $SUITE"

@@ -108,21 +108,21 @@ echo "${C_G} Setup is validated. You are ready to run the experiments.${C_0}"
 echo "${C_G}================================================================${C_0}"
 cat <<NEXT
 
-Run a claim in three steps (results + figures land in experiments/ae/ae_out/):
+Run a suite in three steps (results + figures land in experiments/ae/ae_out/):
 
-  # 2. launch all jobs for a claim (non-blocking)
-  bash experiments/ae/ae_launch.sh  --claim head8mb --mode slurm --partitions <partition>
+  # 2. launch all jobs for a suite (non-blocking)
+  bash experiments/ae/ae_launch.sh  --suite head8mb --mode slurm --partitions <partition>
   #    (single machine, no SLURM:  --mode local --jobs \$(nproc))
 
   # 3. start the background watcher, then check progress whenever you like
-  bash experiments/ae/ae_watch.sh   --claim head8mb
+  bash experiments/ae/ae_watch.sh   --suite head8mb
   cat  experiments/ae/ae_out/head8mb.status      # done/running/failed, any time
 
   # 4. once the watcher writes ae_out/head8mb.DONE, parse + plot
-  bash experiments/ae/ae_results.sh --claim head8mb            # (add --wait to block)
+  bash experiments/ae/ae_results.sh --suite head8mb            # (add --wait to block)
 
-  claims: head8mb head2mb table5 table6 pqsweep multicore
+  suites: head8mb head2mb table5 table6 pqsweep multicore
 
-Note: a full claim is thousands of 300M-instruction sims (cluster-scale). The
+Note: a full suite is thousands of 300M-instruction sims (cluster-scale). The
 random-trace check above already confirms the build, traces and simulator work.
 NEXT
