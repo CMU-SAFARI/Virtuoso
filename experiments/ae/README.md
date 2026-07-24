@@ -164,6 +164,18 @@ DP, Recency, ATP, Berti) and move toward the Perfect-L2TLB upper bound.
 
 ---
 
+## Motivation figures (Figures 4, 5, 6, 8, 9)
+
+The temporal-locality motivation figures are produced from page-table-walk dumps
+(a separate ~3 GB public dataset), not from simulations. See
+[`motivation/README.md`](motivation/) — download the dumps, then:
+
+```bash
+bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode local --jobs $(nproc)
+```
+
+---
+
 ## Notes
 
 - `run_ae.sh --mode {slurm|local} --claim <claim>` is an all-in-one alternative to
