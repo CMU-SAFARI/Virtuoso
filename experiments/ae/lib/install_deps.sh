@@ -50,4 +50,4 @@ echo "==> installing Python packages: ${PIP_PKGS[*]}"
 $SUDO python3 -m pip install --no-cache-dir -U "${PIP_PKGS[@]}" \
   || echo "WARNING: pip install failed — huggingface_hub (download) / matplotlib (plots) may be missing." >&2
 
-echo "==> done. Next:  bash experiments/ae/reproduce.sh --skip-deps"
+echo "==> done. Next:  bash experiments/ae/build_and_validate.sh --skip-deps"

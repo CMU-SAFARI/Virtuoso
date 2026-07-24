@@ -44,7 +44,7 @@ bash experiments/ae/lib/install_deps.sh        # uses sudo if you are not root
 ## Step 2 — Setup + sanity check (minimal check that the artifact works)
 
 ```bash
-bash experiments/ae/reproduce.sh --skip-deps
+bash experiments/ae/build_and_validate.sh --skip-deps
 ```
 
 This builds the simulator, downloads the trace dataset, and runs a few short
@@ -67,7 +67,7 @@ Useful flags: `--n N` (number of validation traces), `--skip-download` (reuse an
 existing download), `--bundle DIR` (where to download). Traces are the public
 dataset
 [`konkanello/trail_traces`](https://huggingface.co/datasets/konkanello/trail_traces)
-(`traces/` + `vm_tlist/`); `reproduce.sh` downloads it and wires the trace-lists
+(`traces/` + `vm_tlist/`); `build_and_validate.sh` downloads it and wires the trace-lists
 into `experiments/vm_tlist/` for you.
 
 ---
@@ -215,6 +215,6 @@ successors), so they carry no speedup number.
 
 - Re-running a claim only re-submits jobs that do not yet have a valid result, so
   an interrupted run resumes cleanly.
-- `reproduce.sh` downloads the public dataset by default (no token, no
+- `build_and_validate.sh` downloads the public dataset by default (no token, no
   `--hf-repo` needed). Override with `--hf-repo <owner/name>` only if you host a
   mirror.

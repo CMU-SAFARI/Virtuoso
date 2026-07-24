@@ -1,10 +1,11 @@
 #!/bin/bash
 # ===========================================================================
-# reproduce.sh — one-command Artifact-Evaluation entry point for TRAIL.
+# build_and_validate.sh — one-command Artifact-Evaluation entry point for TRAIL.
+# (installs deps, builds the trace-replay simulator, downloads traces, validates)
 #
 # A reviewer just clones the repo and runs:
 #
-#     bash experiments/ae/reproduce.sh
+#     bash experiments/ae/build_and_validate.sh
 #
 # It performs, with progress, everything up to and including a random-trace
 # sanity test, then STOPS and tells you how to launch the full experiments:
@@ -83,7 +84,7 @@ else
     python3 -m pip install -q -U "huggingface_hub[cli]" || die "could not install huggingface_hub (need python3-pip)."
   }
   echo "  downloading dataset '$HF_REPO' -> $BUNDLE"
-  echo "  ${C_Y}(this is large — the full trace set; the download is resumable, so you can re-run reproduce.sh if it is interrupted)${C_0}"
+  echo "  ${C_Y}(this is large — the full trace set; the download is resumable, so you can re-run build_and_validate.sh if it is interrupted)${C_0}"
   hf download "$HF_REPO" --repo-type dataset --local-dir "$BUNDLE" \
     || die "trace download failed. If the dataset is private, run 'hf auth login' first (paste a read token)."
 fi

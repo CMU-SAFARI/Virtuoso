@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do case "$1" in
 esac; done
 [ -n "$CLAIM" ] || { echo "ERROR: --claim required"; exit 2; }
 ae_claim_cfg "$CLAIM" || exit 1
-[ -x "$ROOT/simulator/sniper/lib/sniper" ] || { echo "ERROR: lib/sniper not built (run reproduce.sh first)."; exit 1; }
+[ -x "$ROOT/simulator/sniper/lib/sniper" ] || { echo "ERROR: lib/sniper not built (run build_and_validate.sh first)."; exit 1; }
 [ "$JOBS" -lt 1 ] 2>/dev/null && JOBS=1
 mkdir -p "$AE_OUT"
 
