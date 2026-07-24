@@ -131,6 +131,19 @@ trace_suite:
     tracelists:
       - prefetcher_top20_4core.tlist
 
+  # --- v4-substrate DIVERSE mixes (16): CVP-int/fp + SPEC + Google + graph,
+  #     anchored on strong single-core TRAIL gainers (3.3-6%+ band) ---
+  prefetcher_v4_diverse_4core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - prefetcher_v4_diverse_4core.tlist
+
+  # 60 additional mixes from the same 30-trace gainer pool (distinct from the original 40)
+  prefetcher_v4_diverse_4core_x60:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - prefetcher_v4_diverse_4core_x60.tlist
+
 # ============================================================
 # Topologies
 # ============================================================
@@ -550,6 +563,143 @@ configs:
       - "--perf_model/reserve_thp/target_fragmentation=0.0"
       - "--perf_model/mmu/perfect_l2_tlb=true"
     description: "Parametric 4-core, Perfect L2 TLB (upper bound), frag=0.0"
+
+# === v4-substrate 4-core configs (IP-Stride@L1D + Streamer@L2 + CHiRP@L2-TLB, 2MB NUCA) ===
+  mc-v4-nopf:
+    name: "mc-v4-nopf"
+    file: "trail_comparison_v4/v4_noprefetch.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-nopf"
+  mc-v4-asp:
+    name: "mc-v4-asp"
+    file: "trail_comparison_v4/v4_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp"
+  mc-v4-asp-dp:
+    name: "mc-v4-asp-dp"
+    file: "trail_comparison_v4/v4_asp_dp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp-dp"
+  mc-v4-asp-recency:
+    name: "mc-v4-asp-recency"
+    file: "trail_comparison_v4/v4_asp_recency.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp-recency"
+  mc-v4-asp-atp:
+    name: "mc-v4-asp-atp"
+    file: "trail_comparison_v4/v4_asp_atp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp-atp"
+  mc-v4-asp-berti:
+    name: "mc-v4-asp-berti"
+    file: "trail_comparison_v4/v4_asp_berti.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp-berti"
+  mc-v4-asp-l2tlb32k:
+    name: "mc-v4-asp-l2tlb32k"
+    file: "trail_comparison_v4/v4_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+      - "--perf_model/mmu/tlb_level_2/tlb1/size=32768"
+      - "--perf_model/mmu/tlb_level_2/tlb1/assoc=16"
+    description: "v4-substrate 4-core: mc-v4-asp-l2tlb32k"
+  mc-v4-asp-l2tlb64k:
+    name: "mc-v4-asp-l2tlb64k"
+    file: "trail_comparison_v4/v4_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+      - "--perf_model/mmu/tlb_level_2/tlb1/size=65536"
+      - "--perf_model/mmu/tlb_level_2/tlb1/assoc=16"
+    description: "v4-substrate 4-core: mc-v4-asp-l2tlb64k"
+  mc-v4-trail:
+    name: "mc-v4-trail"
+    file: "trail_comparison_v4/v4_trail.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4-substrate 4-core: mc-v4-trail"
+  mc-v4-perfect:
+    name: "mc-v4-perfect"
+    file: "trail_comparison_v4/v4_perfect_l2tlb.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-perfect"
 
   # --- Trail + ASAP orthogonality configs ---
 
@@ -1117,3 +1267,57 @@ experiment_suites:
     trace_suite: prefetcher_top20_4core
     instruction_count: 50000000
     sim_end: last
+
+  prefetcher_v4_diverse_4core:
+    description: "v4-substrate 4-core prefetcher comparison: 16 diverse mixes (CVP/SPEC/Google/graph), TRAIL gainers, 2MB NUCA"
+    topology: 4core
+    configs:
+      - mc-v4-nopf
+      - mc-v4-asp
+      - mc-v4-asp-dp
+      - mc-v4-asp-recency
+      - mc-v4-asp-atp
+      - mc-v4-asp-berti
+      - mc-v4-asp-l2tlb32k
+      - mc-v4-asp-l2tlb64k
+      - mc-v4-trail
+      - mc-v4-perfect
+    trace_suite: prefetcher_v4_diverse_4core
+    instruction_count: 50000000
+    sim_end: last
+
+  prefetcher_v4_diverse_4core_x60:
+    description: "60 ADDITIONAL v4-substrate 4-core mixes (same 30-trace gainer pool, distinct from original 40). 2MB NUCA, readwrite DRAM. Combine with prefetcher_v4_diverse_4core for the 100-mix MC study."
+    topology: 4core
+    configs:
+      - mc-v4-nopf
+      - mc-v4-asp
+      - mc-v4-asp-dp
+      - mc-v4-asp-recency
+      - mc-v4-asp-atp
+      - mc-v4-asp-berti
+      - mc-v4-asp-l2tlb32k
+      - mc-v4-asp-l2tlb64k
+      - mc-v4-trail
+      - mc-v4-perfect
+    trace_suite: prefetcher_v4_diverse_4core_x60
+    instruction_count: 50000000
+    sim_end: last
+
+  prefetcher_v4_diverse_4core_simfirst:
+    description: "Equal-work variant of prefetcher_v4_diverse_4core: sim_end=first so every core stops at exactly 50M instructions (no overshoot). Strict equal-work for the rebuttal MC numbers."
+    topology: 4core
+    configs:
+      - mc-v4-nopf
+      - mc-v4-asp
+      - mc-v4-asp-dp
+      - mc-v4-asp-recency
+      - mc-v4-asp-atp
+      - mc-v4-asp-berti
+      - mc-v4-asp-l2tlb32k
+      - mc-v4-asp-l2tlb64k
+      - mc-v4-trail
+      - mc-v4-perfect
+    trace_suite: prefetcher_v4_diverse_4core
+    instruction_count: 50000000
+    sim_end: first
