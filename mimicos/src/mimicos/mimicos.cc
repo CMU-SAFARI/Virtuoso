@@ -191,9 +191,13 @@ MimicOS::MimicOS(std::string configurationFile, std::string outputFile, std::str
             fp.drift_sigma_band      = reader->GetReal   ("fast_fault", "drift_sigma_band",       3.0);
             fp.drift_consecutive_out = reader->GetInteger("fast_fault", "drift_consecutive_out",   3);
 
-            /* Phase 9 hierarchical-splitting knob.  Off by default. */
+            /* Phase 9 hierarchical-splitting knobs.  Off by default. */
             fp.hierarchical_split_enabled =
                 reader->GetBoolean("fast_fault", "hierarchical_split_enabled", false);
+            fp.hierarchical_split_pgtable_enabled =
+                reader->GetBoolean("fast_fault", "hierarchical_split_pgtable_enabled", false);
+            fp.hierarchical_split_vma_freshness_enabled =
+                reader->GetBoolean("fast_fault", "hierarchical_split_vma_freshness_enabled", false);
 
             m_fast_fault_registry.configure(fp);
             m_fast_fault_registry.enable();
@@ -202,7 +206,10 @@ MimicOS::MimicOS(std::string configurationFile, std::string outputFile, std::str
                       << " stable_cv=" << fp.stable_cv
                       << " replay_mode=" << mode_s
                       << " replay_prefix_k=" << fp.replay_prefix_k
-                      << " dict_cache=" << fp.dict_cache << ")" << std::endl;
+                      << " dict_cache=" << fp.dict_cache
+                      << " split_pcp=" << fp.hierarchical_split_enabled
+                      << " split_pgtable=" << fp.hierarchical_split_pgtable_enabled
+                      << ")" << std::endl;
         }
     }
 
@@ -396,7 +403,7 @@ MimicOS::~MimicOS()
         std::string base = path_to_outputFile.empty() ? "/tmp/mimicos" : path_to_outputFile;
         std::ofstream f(base + "_fast_fault_profiles.csv");
         if (f.is_open()) {
-            f << "fp_id,mapping,access,page_size,pcp_class,state,samples,"
+            f << "fp_id,mapping,access,page_size,pcp_class,pgt_level,vma_fresh,state,samples,"
                  "mean_cycles,stddev,cv,replay_count,trace_len,"
                  "resamples,drift_in_band,drift_out_band,drift_resets,drift_last_sample,"
                  "p50,p90,p99,pcp_hit_samples,pcp_miss_samples,pcp_unknown_samples\n";
@@ -415,6 +422,8 @@ MimicOS::~MimicOS()
                   << static_cast<int>(k.access_type) << ','
                   << static_cast<int>(k.target_page_size) << ','
                   << static_cast<int>(k.pcp_hit_or_miss) << ','
+                  << static_cast<int>(k.pgtable_install_level) << ','
+                  << static_cast<int>(k.vma_freshness) << ','
                   << st << ','
                   << p.sample_count << ','
                   << p.mean_cycles << ','
@@ -912,6 +921,20 @@ void MimicOS::poll_for_signal(int core_id, bool has_initial_app)
        of Buddy/LinuxBuddyAnonAllocator.  Called inside the PHYS_ALLOC
        phase bracket before the real locked_allocate. */
     static LinuxPhase::PcpAllocState    linux_pcp_state;
+    /* Phase 9-B (May 2026): page-table-install cost model.  Fires
+       inside the PHYS_ALLOC bracket when the fault's
+       pgtable_install_level (Phase 9-revisit fingerprint dimension)
+       is non-zero.  Two pools so PMD and PUD chains don't share
+       cache lines.  Charges +3300 cyc at level 1, +6700 cyc total
+       at level 2 to match real-Linux fault_class_bench deltas. */
+    static LinuxPhase::PgtableInstallState linux_pgtable_state;
+    /* Phase 9-E (May 2026): PCP buddy-refill cost model.  Fires AFTER
+       locked_allocate inside the PHYS_ALLOC bracket when the
+       allocator reports a PCP miss (last_alloc_fastpath == 0).
+       Charges +7500 cyc to match the empirical eBPF measurement
+       (kratos20: PCP miss p50 11 642 cyc vs PCP hit 4 092 cyc, Δ
+       +185%).  Independent pool from PcpAllocState. */
+    static LinuxPhase::BuddyRefillState linux_buddy_refill_state;
 
     /* Toggle: do the structural Linux-mimicking work or skip it (for A/B). */
     bool mimic_linux = reader->GetBoolean("fault_calibration", "mimic_linux_phases", false);
@@ -1251,6 +1274,29 @@ void MimicOS::poll_for_signal(int core_id, bool has_initial_app)
            and the Welford sample lands in a DIFFERENT profile from
            the one we fast-replayed from. */
         uint8_t this_fault_pcp_class = m_last_pcp_class;
+        /* Phase 9 revisit: snapshot the pgtable install level at the TOP
+           of the fault (read-only — we don't insert into the tracker
+           until the fault retires).  Same snapshot pattern as
+           this_fault_pcp_class so pre/post fingerprints stay aligned. */
+        uint8_t this_fault_pgt_level =
+            m_fast_fault_registry.policy().hierarchical_split_pgtable_enabled
+                ? compute_pgtable_install_level(static_cast<uint64_t>(va))
+                : 0;
+        /* Phase 9-C: snapshot vma_freshness from the per-process
+           last-fault-VPN tracker.  Mutually exclusive with
+           pgtable_install_level > 0 — when the dispatcher detects an
+           install event, that wins and we force vma_freshness=aged
+           to keep the cells from double-classifying.  Default 1 (aged)
+           when the knob is off so the fingerprint is stable. */
+        uint8_t this_fault_vma_freshness = 1;
+        if (m_fast_fault_registry.policy().hierarchical_split_vma_freshness_enabled) {
+            if (this_fault_pgt_level > 0) {
+                this_fault_vma_freshness = 1;  // install events override
+            } else {
+                this_fault_vma_freshness =
+                    compute_vma_freshness(static_cast<uint64_t>(vpn));
+            }
+        }
         if (m_fast_fault_registry.is_enabled()) {
             FaultFingerprint fp_pre = m_fault_replay.build_fingerprint(
                 va, FaultMappingType::ANON, FaultAccessType::WRITE,
@@ -1263,6 +1309,12 @@ void MimicOS::poll_for_signal(int core_id, bool has_initial_app)
                subsequent faults route to the hit or miss child. */
             if (m_fast_fault_registry.policy().hierarchical_split_enabled) {
                 fp_pre.pcp_hit_or_miss = this_fault_pcp_class;
+            }
+            if (m_fast_fault_registry.policy().hierarchical_split_pgtable_enabled) {
+                fp_pre.pgtable_install_level = this_fault_pgt_level;
+            }
+            if (m_fast_fault_registry.policy().hierarchical_split_vma_freshness_enabled) {
+                fp_pre.vma_freshness = this_fault_vma_freshness;
             }
             FastFaultProfile& prof = m_fast_fault_registry.get_or_insert(fp_pre);
             switch (prof.state) {
@@ -1307,9 +1359,27 @@ void MimicOS::poll_for_signal(int core_id, bool has_initial_app)
                per-CPU perf_sw_event atomic RMW on a cache-cold slot).
                This is the chunk that fault_bench's rdtscp bracket charges
                but our phase CSV previously missed entirely.  ~150-300 cyc
-               on the warm path, depending on cache state. */
-            LinuxPhase::kernel_entry_hw_trap(linux_kentry_state, fake_err);
-            LinuxPhase::trap_entry(linux_trap_state, fake_err);
+               on the warm path, depending on cache state.
+               Phase 9-D: skip on fresh-VMA faults — same warmth-from-mmap
+               argument as pcp_alloc_cost: per-CPU perf_sw_event slots
+               and IDT-shadow lines are still hot from the just-completed
+               syscall, so the extra dep-chain cost doesn't apply. */
+            bool skip_kentry_for_fresh =
+                m_fast_fault_registry.policy().hierarchical_split_vma_freshness_enabled
+                && this_fault_vma_freshness == 0;
+            /* Phase 9-D: when fresh, skip BOTH kernel_entry_hw_trap and
+               trap_entry — same warmth-from-mmap argument as
+               pcp_alloc_cost: per-CPU perf_sw_event slots and IDT-shadow
+               lines are still hot from the just-completed syscall.
+               Lands fresh-fault ratio at ~0.53x (vs Linux target 0.59x),
+               within the ±10 % calibration target.  Skipping only one
+               of the two pair leaves a cold trap-entry chain that costs
+               MORE in isolation than the warm pair — so both-or-neither
+               is the right granularity. */
+            if (!skip_kentry_for_fresh) {
+                LinuxPhase::kernel_entry_hw_trap(linux_kentry_state, fake_err);
+                LinuxPhase::trap_entry(linux_trap_state, fake_err);
+            }
         }
         if (instrumented)
             timings.end_phase(FaultPhase::FAULT_TRAP_ENTRY, mimicos_now_ns());
@@ -1345,8 +1415,30 @@ void MimicOS::poll_for_signal(int core_id, bool has_initial_app)
         if (mimic_linux && !fast_replay_mode) {
             /* Compensate for GCC template-instantiation optimisation that
                strips the allocator's calibrated cost under -O2.  See
-               LinuxPhase::pcp_alloc_cost in linux_phase_work.h. */
-            LinuxPhase::pcp_alloc_cost(linux_pcp_state, va);
+               LinuxPhase::pcp_alloc_cost in linux_phase_work.h.
+               Phase 9-C: skip when the fault is classified as fresh
+               (vma_freshness=0) — empirically the immediately-prior
+               mmap leaves the per-CPU pageset metadata hot, so the
+               full pcp-walk cost doesn't apply.  Skipping this helper
+               removes ~1185 cyc, approximating the −1670 cyc empirical
+               Δ for fresh_vma faults. */
+            bool skip_pcp_for_fresh =
+                m_fast_fault_registry.policy().hierarchical_split_vma_freshness_enabled
+                && this_fault_vma_freshness == 0;
+            if (!skip_pcp_for_fresh) {
+                LinuxPhase::pcp_alloc_cost(linux_pcp_state, va);
+            }
+            /* Phase 9-B: charge the page-table install Δ for faults
+               on PMD/PUD boundaries.  No-op when level == 0 (steady).
+               Gated on the Phase-9-revisit knob so disabling the
+               splitter also disables the cost model — keeps pre-9B
+               behaviour reproducible. */
+            if (m_fast_fault_registry.policy().hierarchical_split_pgtable_enabled
+                && this_fault_pgt_level > 0) {
+                LinuxPhase::install_pgtable_cost(linux_pgtable_state,
+                                                 static_cast<uint64_t>(va),
+                                                 this_fault_pgt_level);
+            }
         }
         auto [pa, page_size] = locked_allocate(bytes, va, core_id);
         if (pa == static_cast<UInt64>(-1)) {
@@ -1363,6 +1455,35 @@ void MimicOS::poll_for_signal(int core_id, bool has_initial_app)
            is false because nothing reads it. */
         if (physical_memory_allocator) {
             m_last_pcp_class = physical_memory_allocator->last_alloc_fastpath;
+            /* Phase 9-E: charge the buddy-refill Δ when the allocator
+               reports a PCP miss.  Fires inside the PHYS_ALLOC bracket
+               so the cycles land in the right phase histogram.  Gated
+               on `mimic_linux && !fast_replay_mode` (same gate as
+               pcp_alloc_cost), AND on the pcp split knob so disabling
+               the splitter keeps pre-9E behaviour intact. */
+            if (mimic_linux && !fast_replay_mode
+                && m_fast_fault_registry.policy().hierarchical_split_enabled
+                && m_last_pcp_class == 0) {
+                LinuxPhase::buddy_refill_cost(linux_buddy_refill_state,
+                                              static_cast<uint64_t>(va));
+            }
+        }
+
+        /* Phase 9 revisit: now that the fault has allocated and we've
+           captured the level snapshot, mark this VA's PMD/PUD as
+           installed so subsequent faults in the same 2 MiB / 1 GiB
+           chunk see level 0.  Idempotent insert.  Cost-free when
+           hierarchical_split_pgtable_enabled is false because the
+           sets are read-only at the entry compute and we only insert
+           here. */
+        if (m_fast_fault_registry.policy().hierarchical_split_pgtable_enabled) {
+            mark_pgtable_installed(static_cast<uint64_t>(va));
+        }
+        /* Phase 9-C: commit the last-fault VPN so the next fault's
+           freshness check has a current reference.  Cost-free when
+           the knob is off because compute_vma_freshness isn't called. */
+        if (m_fast_fault_registry.policy().hierarchical_split_vma_freshness_enabled) {
+            mark_fault_vpn(static_cast<uint64_t>(vpn));
         }
 
         frame_buf[frame_count++] = pa;
@@ -1512,13 +1633,34 @@ void MimicOS::poll_for_signal(int core_id, bool has_initial_app)
                 va, FaultMappingType::ANON, FaultAccessType::WRITE,
                 (page_size == 21) ? FaultPageSize::PAGE_2M : FaultPageSize::PAGE_4K,
                 0, 0, 0.0, 0, 1, 0);
-            /* Phase 9: match the pre-fault fingerprint's pcp class so
-               the SAME profile receives the sample.  Using the
-               this_fault_pcp_class snapshot taken at the TOP of the
-               fault (before the allocator updated m_last_pcp_class)
-               keeps pre / post aligned. */
+            /* Phase 9 (revised 9-E): record the sample into the
+               profile keyed by the *actual* pcp class observed by the
+               allocator on this fault, not the predictor.  This breaks
+               pre/post fingerprint alignment when the predictor
+               mispredicts (which is most of the time for misses,
+               since they cluster — post-miss is usually hit).  The
+               sample lands in the correct truth-keyed profile, so
+               the hit and miss profile means cleanly reflect the
+               buddy_refill_cost helper's per-fault Δ.  Trade-off:
+               fast-replay is still gated by the predictor (pre-fault
+               profile lookup), so a TRAINED hit profile may
+               fast-replay a fault that turns out to be a miss; the
+               cost-anchor analytical replay charges the hit-mean for
+               that fault.  Acceptable for paper-grade per-class
+               accuracy, since miss rate is ~1.6% on real Linux. */
             if (m_fast_fault_registry.policy().hierarchical_split_enabled) {
-                fp.pcp_hit_or_miss = this_fault_pcp_class;
+                fp.pcp_hit_or_miss = m_last_pcp_class;
+            }
+            /* Phase 9 revisit: same pre/post snapshot trick for pgtable
+               install level.  this_fault_pgt_level was captured before
+               we inserted into the tracker; we COMMIT the install
+               record below so the NEXT fault in this chunk sees
+               level 0.  Same pattern as the pcp predictor. */
+            if (m_fast_fault_registry.policy().hierarchical_split_pgtable_enabled) {
+                fp.pgtable_install_level = this_fault_pgt_level;
+            }
+            if (m_fast_fault_registry.policy().hierarchical_split_vma_freshness_enabled) {
+                fp.vma_freshness = this_fault_vma_freshness;
             }
 
             if (replay_enabled) {
@@ -1750,7 +1892,7 @@ void MimicOS::poll_for_signal(int core_id, bool has_initial_app)
                    process before ~MimicOS runs). */
                 std::ofstream f(base + "_fast_fault_profiles.csv");
                 if (f.is_open()) {
-                    f << "fp_id,mapping,access,page_size,pcp_class,state,"
+                    f << "fp_id,mapping,access,page_size,pcp_class,pgt_level,vma_fresh,state,"
                          "samples,mean_cycles,stddev,cv,replay_count,"
                          "summary_len,captured_len,"
                          "resamples,drift_in_band,drift_out_band,drift_resets,drift_last_sample,"
@@ -1770,6 +1912,8 @@ void MimicOS::poll_for_signal(int core_id, bool has_initial_app)
                           << static_cast<int>(k.access_type) << ','
                           << static_cast<int>(k.target_page_size) << ','
                           << static_cast<int>(k.pcp_hit_or_miss) << ','
+                          << static_cast<int>(k.pgtable_install_level) << ','
+                          << static_cast<int>(k.vma_freshness) << ','
                           << st << ','
                           << p.sample_count << ','
                           << p.mean_cycles << ','
@@ -1789,6 +1933,48 @@ void MimicOS::poll_for_signal(int core_id, bool has_initial_app)
                           << p.pcp_hit_samples << ','
                           << p.pcp_miss_samples << ','
                           << p.pcp_unknown_samples << '\n';
+                    }
+                }
+
+                /* Welford time-series history (append-only).  One row
+                   per (dump tick × profile), recording the running
+                   Welford mean / stddev / cv plus state.  Lets us
+                   reconstruct the convergence trajectory of every
+                   profile across the run.  Dump rate is the same as
+                   the periodic snapshot above (every 256 faults). */
+                static bool welford_header_written = false;
+                std::ofstream wf(base + "_welford_history.csv",
+                                 welford_header_written
+                                     ? std::ios::app
+                                     : std::ios::trunc);
+                if (wf.is_open()) {
+                    if (!welford_header_written) {
+                        wf << "fault_count,fp_id,pgt_level,vma_fresh,"
+                              "pcp_class,state,samples,mean_cycles,"
+                              "stddev,cv,replay_count\n";
+                        welford_header_written = true;
+                    }
+                    for (const auto& kv : m_fast_fault_registry.table()) {
+                        const FaultFingerprint& k = kv.first;
+                        const FastFaultProfile& p = kv.second;
+                        const char* st = "unknown";
+                        switch (p.state) {
+                            case FastFaultState::UNKNOWN:   st = "unknown"; break;
+                            case FastFaultState::TRAINING:  st = "training"; break;
+                            case FastFaultState::TRAINED:   st = "trained"; break;
+                            case FastFaultState::ABANDONED: st = "abandoned"; break;
+                        }
+                        wf << fc << ','
+                           << p.fp_id << ','
+                           << static_cast<int>(k.pgtable_install_level) << ','
+                           << static_cast<int>(k.vma_freshness) << ','
+                           << static_cast<int>(k.pcp_hit_or_miss) << ','
+                           << st << ','
+                           << p.sample_count << ','
+                           << p.mean_cycles << ','
+                           << p.stddev() << ','
+                           << p.cv() << ','
+                           << p.replay_count << '\n';
                     }
                 }
             }

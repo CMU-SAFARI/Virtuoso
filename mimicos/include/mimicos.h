@@ -34,6 +34,7 @@
 #include "mm/scheduler/scheduler.h"
 #include "mm/kernel_arena.h"
 #include "mm/proc_vma.h"
+#include <unordered_set>
 
 // Forward declarations
 class INIReader;
@@ -134,6 +135,71 @@ class MimicOS {
            (unknown) so the very first fault on each profile lands in
            the "unknown" bucket until the second fault reclassifies. */
         uint8_t              m_last_pcp_class = 2;
+
+        /* Phase 9 revisit: per-process page-table-install tracker.
+           A PMD index is va >> 21 (one entry per 2 MiB chunk); a PUD
+           index is va >> 30 (one per 1 GiB chunk).  When a fault
+           arrives we look up both indices to determine
+           pgtable_install_level for the fingerprint:
+             0 = both PMD and PUD already installed (steady fault)
+             1 = PMD missing, PUD present (PMD install)
+             2 = PUD missing (PUD install — implies PMD also missing)
+           After the fault retires we insert both indices so subsequent
+           faults in the same chunk see level 0.
+           Sets are unbounded; for a 100-GiB process at most ~50k PMD
+           entries (~400 KiB) — negligible vs the per-fault scaffolding.
+           Reset on process teardown (not currently exposed; safe because
+           MimicOS is one-shot per simulation). */
+        std::unordered_set<uint64_t> m_installed_pmds;
+        std::unordered_set<uint64_t> m_installed_puds;
+
+        /* Compute the pgtable install level for a given fault VA from
+           the per-process tracker without mutating it.  Read at the
+           fault entry; the entry is committed via mark_pgtable_installed
+           once the fault has been retired. */
+        uint8_t compute_pgtable_install_level(uint64_t va) const {
+            uint64_t pud_idx = va >> 30;
+            if (m_installed_puds.find(pud_idx) == m_installed_puds.end()) {
+                return 2;  // PUD install (covers PMD install too)
+            }
+            uint64_t pmd_idx = va >> 21;
+            if (m_installed_pmds.find(pmd_idx) == m_installed_pmds.end()) {
+                return 1;  // PMD install
+            }
+            return 0;       // steady (both levels present)
+        }
+
+        /* Mark a VA as having retired its page-table install events.
+           Idempotent.  Called at the post-fault recording site so the
+           NEXT fault in the same PMD/PUD chunk sees level 0. */
+        void mark_pgtable_installed(uint64_t va) {
+            m_installed_pmds.insert(va >> 21);
+            m_installed_puds.insert(va >> 30);
+        }
+
+        /* Phase 9-C: per-process last-fault-VPN tracker for the
+           vma_freshness heuristic.  When the absolute VPN distance
+           between this fault and the prior one exceeds kFreshDistance,
+           treat the fault as "fresh" (just came from a mmap that
+           established a new region).  Initialised to UINT64_MAX so
+           the very first fault is classified by the explicit policy
+           (any VPN is "fresh" if no prior fault exists). */
+        static constexpr uint64_t kFreshDistance = 512;  // one PMD chunk
+        uint64_t m_last_fault_vpn = static_cast<uint64_t>(-1);
+
+        /* Compute the vma_freshness for a fault VPN.  Returns 0
+           (fresh) if this is the first fault OR the VPN distance
+           from the prior fault exceeds kFreshDistance, else 1
+           (aged).  Read at the fault entry; the prior-fault VPN is
+           updated via mark_fault_vpn after the fault retires. */
+        uint8_t compute_vma_freshness(uint64_t vpn) const {
+            if (m_last_fault_vpn == static_cast<uint64_t>(-1)) return 0;
+            uint64_t a = vpn, b = m_last_fault_vpn;
+            uint64_t dist = (a > b) ? (a - b) : (b - a);
+            return (dist > kFreshDistance) ? 0 : 1;
+        }
+
+        void mark_fault_vpn(uint64_t vpn) { m_last_fault_vpn = vpn; }
 
         // Shared memory region manager
         SharedRegionManager  m_shared_regions;

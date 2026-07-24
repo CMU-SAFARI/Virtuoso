@@ -10,7 +10,7 @@ namespace ParametricDramDirectoryMSI
 	ArbitraryStridePrefetcher::ArbitraryStridePrefetcher(
 		Core *_core, MemoryManagerBase *_memory_manager, ShmemPerfModel *_shmem_perf_model,
 		int table_bits, int _prefetch_threshold, bool _extra_prefetch,
-		int _lookahead, int _degree, String name)
+		int _lookahead, int _degree, String name, bool _install_pq)
 		: TLBPrefetcherBase(_core, _memory_manager, _shmem_perf_model, name),
 		  core(_core),
 		  memory_manager(_memory_manager),
@@ -18,7 +18,8 @@ namespace ParametricDramDirectoryMSI
 		  prefetch_threshold(_prefetch_threshold),
 		  extra_prefetch(_extra_prefetch),
 		  lookahead(_lookahead),
-		  degree(_degree)
+		  degree(_degree),
+		  install_pq(_install_pq)
 	{
 		int entries = 1 << table_bits;
 		table_size = entries;
@@ -186,6 +187,11 @@ namespace ParametricDramDirectoryMSI
 			table[index].stride = -1;
 			table[index].saturation_counter = 0;
 		}
+
+		// Cache-only mode: the PTWTransparent walks above already warmed the PTE
+		// cache lines; dropping the results means nothing is inserted into the PQ.
+		if (!install_pq)
+			result.clear();
 
 		return result;
 	}

@@ -23,6 +23,7 @@
 #include "ConfidencePolicy.h"
 
 #include <cstdint>
+#include <list>
 #include <memory>
 #include <random>
 #include <string>
@@ -109,7 +110,23 @@ namespace ParametricDramDirectoryMSI
                               const std::string& confidence_policy,
                               uint32_t conf_bump_amount,
                               uint32_t conf_decay_on_bump,
-                              uint32_t conf_decay_on_miss);
+                              uint32_t conf_decay_on_miss,
+                              // OS-managed side-table payload variant
+                              bool     payload_in_side_table = false,
+                              uint64_t side_table_base_pa = 0,
+                              uint32_t side_table_payload_bits = 0,   // 0 = auto (codec width)
+                              bool     side_table_radix = true,
+                              uint32_t side_table_levels = 3,
+                              uint32_t side_table_bits_per_level = 9,
+                              uint32_t side_table_pwc_entries = 32,
+                              // Model the DRAM writeback caused by dirtying the
+                              // PTE cacheline on an in-PTE payload (delta) update.
+                              bool     model_payload_writeback = false,
+                              // Cache-only ablation: issue prefetch PTWs (warm the
+                              // PTE lines in L2/LLC) but do NOT install the
+                              // translation into the PQ/TLB.  false => demand
+                              // accesses still walk, but hit warmed PTE lines.
+                              bool     prefetch_install_pq = true);
 
         ~TemporalPTEPrefetcher() override;
 
@@ -126,6 +143,11 @@ namespace ParametricDramDirectoryMSI
                                                  int page_size = 12) override;
 
         void notifyInstall(IntPtr address, int page_size) override;
+
+        // Called by the MMU after the demand PTW completes: dirty the PTE
+        // cacheline(s) whose in-PTE payload was updated this access, so the
+        // cache models the resulting DRAM writeback traffic.
+        void flushPendingPayloadWritebacks(PageTable *pt) override;
 
     private:
         // --- Codec ---
@@ -154,6 +176,57 @@ namespace ParametricDramDirectoryMSI
         bool     m_current_is_instruction; ///< Transient flag: true if current access is instruction translation
         bool     m_learn_on_hit;           ///< If true, learn transitions on TLB hits too (not just misses)
         bool     m_prefetch_on_hit;        ///< If true, issue prefetches on TLB hits too (not just misses)
+
+        // --- OS-managed side-table payload variant ---
+        // When enabled, the temporal payload is fetched from a separate
+        // OS-managed table in DRAM IN PARALLEL with the page-table walk, rather
+        // than riding along in spare PTE bits.  Translation timing is unchanged;
+        // the parallel access latency only delays when the prefetch is issued
+        // (the materialization timestamp of every generated prefetch).
+        bool     m_payload_in_side_table;  ///< Master enable for the side-table variant
+        uint64_t m_side_table_base_pa;     ///< Physical base address of the reserved OS payload table (set lazily)
+        uint64_t m_side_table_bytes;       ///< Reserved footprint of the OS payload table (set at reservation)
+        uint32_t m_side_table_payload_bits;///< Bits stored per region entry; a 64B line packs 512/payload_bits payloads (0 in ctor → auto = codec width)
+        bool     m_side_table_reserved;    ///< True once the region has been reserved from the OS allocator
+        static constexpr uint64_t SIDE_TABLE_RESERVE_BYTES = 1ULL << 30; ///< 1 GB OS-managed table (reserved via handle_page_table_allocations, like HT/Cuckoo/HDC)
+
+        // Radix "side-car" organization (Flavor A: independent multi-level radix
+        // walked in parallel with the page table, with its own page-walk cache).
+        bool     m_side_table_radix;          ///< true = radix walk; false = flat single-line lookup
+        uint32_t m_side_table_levels;         ///< radix depth: (levels-1) pointer levels + 1 leaf
+        uint32_t m_side_table_bits_per_level; ///< index bits consumed per level
+        uint32_t m_side_table_pwc_entries;    ///< side-car page-walk-cache capacity (upper-level nodes)
+        std::list<IntPtr> m_sidecar_pwc;              ///< LRU list of cached upper-level node PAs (MRU at front)
+        std::unordered_set<IntPtr> m_sidecar_pwc_set; ///< membership index for m_sidecar_pwc
+
+        // --- In-PTE payload-writeback modeling (model_payload_writeback) ---
+        // When a delta is learned into an in-PTE payload, the PTE's cacheline is
+        // dirtied so the cache's eviction path generates a realistic DRAM
+        // writeback. The dirty-mark is DEFERRED to after the demand PTW (so the
+        // line is resident): learnTransition() records the updated VPN here, and
+        // flushPendingPayloadWritebacks() (called by the MMU post-walk) dirties it.
+        bool m_model_payload_writeback;               ///< master enable (config knob)
+        std::vector<std::pair<uint64_t,bool>> m_pending_payload_wb;  ///< {src_vpn, is_2mb} updated this access
+
+        // Cache-only ablation: when false, prefetch PTWs still warm the PTE
+        // lines in the data cache but no translation is installed into the PQ.
+        bool m_prefetch_install_pq;
+
+        /// Reserve the 1 GB OS payload table from the physical allocator (same
+        /// mechanism the hash page tables use). Idempotent; runs on first use.
+        void reserveSideTable();
+
+        /// Walk the independent radix side-car for `line_no` (the leaf line that
+        /// packs this region's payload), modeling per-level dependent cache
+        /// accesses filtered by the side-car PWC.  Returns total walk latency.
+        SubsecondTime modelSideTableRadixWalk(uint64_t line_no, IntPtr eip,
+                                              Core::lock_signal_t lock, bool modeled, bool count);
+
+        /// Model one parallel cache-line read to the OS payload-table entry for
+        /// `region_id`, returning its access latency.  Does NOT advance the
+        /// caller's clock (translation timing is unaffected).
+        SubsecondTime modelSideTableAccess(uint64_t region_id, IntPtr eip,
+                                           Core::lock_signal_t lock, bool modeled, bool count);
 
         // --- Stride direct prefetch ---
         uint32_t m_stride_conf_threshold;   ///< Consecutive matching deltas needed to trust a stride
@@ -485,6 +558,26 @@ namespace ParametricDramDirectoryMSI
             UInt64 prefetch_successful_2mb;            ///< Successful 2MB prefetches
             UInt64 learning_transitions_2mb;           ///< Learning transitions where both src+dst are 2MB
             UInt64 learning_skipped_mixed_pagesize;   ///< Transitions skipped due to mixed 4KB/2MB
+
+            // --- 20. OS-managed side-table access (payload_in_side_table) ---
+            UInt64 side_table_accesses;               ///< Parallel side-table reads modeled
+            UInt64 side_table_total_latency_fs;       ///< Sum of side-table access latencies (femtoseconds)
+            UInt64 side_table_min_latency_fs;         ///< Min single side-table access latency (fs)
+            UInt64 side_table_max_latency_fs;         ///< Max single side-table access latency (fs)
+            UInt64 side_table_l1d;                    ///< Side-table reads that hit in L1D
+            UInt64 side_table_l2;                     ///< ... hit in L2
+            UInt64 side_table_nuca;                   ///< ... hit in NUCA/LLC
+            UInt64 side_table_dram;                   ///< ... went to DRAM
+            // radix side-car
+            UInt64 side_table_pwc_hits;               ///< Upper-level nodes absorbed by the side-car PWC
+            UInt64 side_table_pwc_misses;             ///< Upper-level nodes that missed the PWC (→ memory access)
+            UInt64 side_table_levels_accessed;        ///< Total radix levels that issued a memory access (sum over walks)
+
+            // --- 21. In-PTE payload writeback modeling (model_payload_writeback) ---
+            UInt64 payload_writes;                    ///< Payload (delta) updates that requested a PTE-line dirty
+            UInt64 payload_dirty_marks_hit;           ///< Updates where the PTE line was resident and newly dirtied
+            UInt64 payload_dirty_marks_miss;          ///< Updates where the PTE line was not resident (no writeback modeled)
+            UInt64 payload_dirty_marks_coalesced;     ///< Updates where the PTE line was already dirty (write absorbed)
         } m_stats;
 
         // --- Helpers ---

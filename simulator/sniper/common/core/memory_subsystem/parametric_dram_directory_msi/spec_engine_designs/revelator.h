@@ -32,6 +32,7 @@ namespace ParametricDramDirectoryMSI
     {
     protected:
         String name; ///< Name of the speculative engine instance.
+        bool m_disabled; ///< True when allocator is incompatible (no-op mode).
         bool oracle_revelator;
         bool oracle_revelator_filter;
         int number_of_hashes;

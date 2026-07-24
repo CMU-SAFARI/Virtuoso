@@ -1038,12 +1038,12 @@ namespace ParametricDramDirectoryMSI
 			// Step 1: Functional RSW lookup
 			// ================================================================
 			RSWLookupResult rsw_lookup = functionalRSWLookup(address);
-			
+
 			if (rsw_lookup.hit)
 			{
 				// RSW Hit (no fault) - charge RSW latency immediately
 				mmu_log->debug("Functional RSW hit - charging latency");
-				
+
 				total_walk_latency = chargeRSWLatency(rsw_lookup, instruction, eip, lock, modeled, count);
 				page_size = rsw_lookup.page_size_bits;
 				ppn_result = rsw_lookup.ppn;
@@ -1078,54 +1078,41 @@ namespace ParametricDramDirectoryMSI
 				// ============================================================
 				mmu_log->debug("Functional RSW miss, trying functional PTW");
 				
-				PTWResult ptw_result = page_table->initializeWalk(address, count, false /* is_prefetch */, 
-				                                                  false /* restart_walk_after_fault */);
-				
-				if (!ptw_result.fault_happened)
+				// Pre-walk hook: cold speculation peek using rsw_lookup candidates.
+				// Issued before walkFlexSeg so its prefetches overlap with the walk.
+				if (spec.enabled && !instruction && rsw_lookup.num_candidates > 0)
 				{
-					// PTW success (no fault) - filter and charge PTW latency immediately
+					SubsecondTime cold_spec_time = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+					if (count) translation_stats.cats_considered++;
+					SpecDecision cold_decision = decideSpeculation(rsw_lookup, instruction, cold_spec_time, count);
+					if (cold_decision.do_speculate)
+					{
+						mmu_log->debug("Cold speculation: issuing prefetches for ", rsw_lookup.num_candidates, " candidates");
+						executeSpeculation(cold_decision, eip, cold_spec_time, count);
+						if (count) translation_stats.cats_cold_spec_issued++;
+						updateCATSOutcome(rsw_lookup, cold_decision, false, -1, false, count);
+					}
+				}
+
+				bool walk_fault = false;
+				int walk_page_size = 0;
+				IntPtr walk_ppn = 0;
+				int walk_requested_frames = 0;
+				total_walk_latency = walkFlexSeg(address, count, modeled, eip, lock, page_table, instruction,
+				                                 walk_page_size, walk_ppn, walk_fault, walk_requested_frames);
+				PTWResult ptw_result; // kept for downstream code paths reading payload bits etc.
+				ptw_result.fault_happened = walk_fault;
+				ptw_result.page_size = walk_page_size;
+				ptw_result.ppn = walk_ppn;
+				ptw_result.requested_frames = walk_requested_frames;
+
+				if (!walk_fault)
+				{
 					mmu_log->debug("Functional PTW success - charging latency");
 					was_serviced_by_flexseg = true;
-					
-					// ========================================================
-					// Phase 1: Cold speculation - speculate after PTW success
-					// ========================================================
-					// RSW missed but PTW succeeded (no fault). This is a cold access
-					// to a valid page. We can speculate using fingerprint candidates
-					// computed during functionalRSWLookup (even though hit=false).
-					if (spec.enabled && !instruction && rsw_lookup.num_candidates > 0)
-					{
-						SubsecondTime cold_spec_time = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD);
-						
-						// Track cold speculation consideration
-						if (count)
-							translation_stats.cats_considered++;
-						
-						// Decide whether to speculate on cold access
-						SpecDecision cold_decision = decideSpeculation(rsw_lookup, instruction, cold_spec_time, count);
-						
-						if (cold_decision.do_speculate)
-						{
-							mmu_log->debug("Cold speculation: issuing prefetches for ", rsw_lookup.num_candidates, " candidates");
-							executeSpeculation(cold_decision, eip, cold_spec_time, count);
-							
-							// Track cold speculation issued
-							if (count)
-								translation_stats.cats_cold_spec_issued++;
-							
-							// Update CATS outcome - for cold access, hit=false, correct_way=-1
-							// This will decrement confidence (wasteful speculation on miss)
-							// but that's expected - cold speculation is speculative
-							updateCATSOutcome(rsw_lookup, cold_decision, false, -1, false, count);
-						}
-					}
-					
-					// Apply PTW filter (e.g., PWC filtering)
-					ptw_result = filterPTWResult(address, ptw_result, page_table, count);
-					
-					total_walk_latency = calculatePTWCycles(ptw_result, count, modeled, eip, lock, address);
-					page_size = ptw_result.page_size;
-					ppn_result = ptw_result.ppn;
+
+					page_size = walk_page_size;
+					ppn_result = walk_ppn;
 					
 					// PTW logging now happens via logPTWCacheAccess hook in calculatePTWCycles
 
@@ -1196,16 +1183,15 @@ namespace ParametricDramDirectoryMSI
 						mmu_log->debug("Page allocated in FlexSeg - performing PTW");
 						was_serviced_by_flexseg = true;
 						
-						PTWResult post_fault_ptw = page_table->initializeWalk(address, count, false /* is_prefetch */, 
-						                                                       false /* restart_walk_after_fault */);
-						assert(!post_fault_ptw.fault_happened && "PTW should succeed after fault handling");
-						
-						// Apply PTW filter (e.g., PWC filtering)
-						post_fault_ptw = filterPTWResult(address, post_fault_ptw, page_table, count);
-						
-						total_walk_latency = calculatePTWCycles(post_fault_ptw, count, modeled, eip, lock, address);
-						page_size = post_fault_ptw.page_size;
-						ppn_result = post_fault_ptw.ppn;
+						bool fault2 = false;
+						int ps2 = 0;
+						IntPtr ppn2 = 0;
+						int rf2 = 0;
+						total_walk_latency = walkFlexSeg(address, count, modeled, eip, lock, page_table, instruction,
+						                                 ps2, ppn2, fault2, rf2);
+						assert(!fault2 && "PTW should succeed after fault handling");
+						page_size = ps2;
+						ppn_result = ppn2;
 						
 						// PTW logging now happens via logPTWCacheAccess hook in calculatePTWCycles
 
@@ -1522,9 +1508,10 @@ namespace ParametricDramDirectoryMSI
 					if (alloc_result.evicted)
 					{
 						// Defensive assertion: evicted PPN should be valid
-						LOG_ASSERT_ERROR(alloc_result.ppn != 0, 
+						LOG_ASSERT_ERROR(alloc_result.ppn != 0,
 							"TLB eviction returned invalid PPN=0 for VA=0x%lx", alloc_result.address);
 						evicted_translations[i].push_back(make_tuple(alloc_result.address, alloc_result.page_size, alloc_result.ppn));
+						onTLBLevelEviction(i, alloc_result.address, alloc_result.page_size, alloc_result.ppn, eip, lock, instruction);
 					}
 				}
 			}
@@ -1633,6 +1620,24 @@ namespace ParametricDramDirectoryMSI
 // ============================================================================
 // RestSeg Walk
 // ============================================================================
+
+	SubsecondTime MemoryManagementUnitUtopia::walkFlexSeg(
+		IntPtr address, bool count, bool modeled,
+		IntPtr eip, Core::lock_signal_t lock,
+		PageTable* page_table, bool instruction,
+		int& out_page_size, IntPtr& out_ppn, bool& out_fault,
+		int& out_requested_frames)
+	{
+		PTWResult ptw_result = page_table->initializeWalk(address, count, /*is_prefetch=*/false, /*restart_walk=*/false);
+		out_fault = ptw_result.fault_happened;
+		out_page_size = ptw_result.page_size;
+		out_ppn = ptw_result.ppn;
+		out_requested_frames = ptw_result.requested_frames;
+		if (out_fault) return SubsecondTime::Zero();
+
+		ptw_result = filterPTWResult(address, ptw_result, page_table, count);
+		return calculatePTWCycles(ptw_result, count, modeled, eip, lock, address);
+	}
 
 	std::tuple<int, IntPtr, SubsecondTime> MemoryManagementUnitUtopia::RestSegWalk(IntPtr address, bool instruction, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count)
 	{

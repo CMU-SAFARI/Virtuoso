@@ -68,6 +68,8 @@
 #include "instruction.h"
 #include "core.h"
 #include "thread.h"
+#include "simulator.h"
+#include "hooks_manager.h"
 
 // === Standard Library ===
 #include <iostream>
@@ -123,6 +125,16 @@ namespace ParametricDramDirectoryMSI
         // Initialize CSV logs for detailed per-page analysis
 #if ENABLE_MMU_CSV_LOGS
         initializePerPageLogs();
+        // Sniper does not unwind C++ destructors on simulation end, so hook
+        // dumpPerPageLogs() to HOOK_SIM_END to ensure CSVs are written.
+        // (HOOK_PRE_STAT_WRITE fires multiple times — at ROI start, ROI end,
+        //  etc. — which would either dump empty maps or require deferring;
+        //  HOOK_SIM_END fires once at the very end.)
+        Sim()->getHooksManager()->registerHook(
+            HookType::HOOK_SIM_END,
+            hook_pre_stat_write,
+            (UInt64)this,
+            HooksManager::ORDER_NOTIFY_PRE);
 #endif
 
         // Initialize MMU components in order
@@ -456,11 +468,35 @@ namespace ParametricDramDirectoryMSI
                 translation_stats.total_tlb_latency += l1_dtlb_latency;
                 translation_stats.total_translation_latency += l1_dtlb_latency;
             }
-            
-            mmu_log->debug("Perfect translation: VA " + mmu_log->hex(address) + 
-                          " -> PA " + mmu_log->hex(physical_address) + 
+
+            // "Perfect prefetch" extension: when enabled, the perfect MMU
+            // issues an L2 prefetch for the translated PA via
+            // handleMMUPrefetch -- but only if the line isn't already in
+            // L2.  Without this guard, firing on every translation (~1 per
+            // data load) thrashes L2 catastrophically (>2x DRAM reads,
+            // massive eviction of useful data).  With the guard, Perfect
+            // gets the same data-side prefetch advantage P1b's WayCast has
+            // (prefetch enters at L2, bypassing L1 tag check) on lines that
+            // would otherwise miss L2, while leaving cache-resident lines
+            // untouched.
+            if (perfect_prefetch_enabled && !instruction) {
+                IntPtr offset       = address & ((IntPtr(1) << page_size) - 1);
+                IntPtr full_pa      = (physical_address << page_size) | offset;
+                IntPtr cache_line   = full_pa & ~((IntPtr)63);
+                MMUCacheInterface* l2 =
+                    memory_manager->getCacheCntlrAt(core->getId(),
+                                                     MemComponent::component_t::L2_CACHE);
+                if (l2 && !l2->isLinePresent(cache_line)) {
+                    SubsecondTime t_now = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+                    l2->handleMMUPrefetch(eip, cache_line, t_now,
+                                           CacheBlockInfo::block_type_t::DATA);
+                }
+            }
+
+            mmu_log->debug("Perfect translation: VA " + mmu_log->hex(address) +
+                          " -> PA " + mmu_log->hex(physical_address) +
                           " (L1 dTLB latency: " + std::to_string(l1_dtlb_latency.getNS()) + "ns)");
-            
+
             return physical_address;
         }
 
@@ -917,7 +953,30 @@ namespace ParametricDramDirectoryMSI
                 }
             } while (caused_page_fault && !userspace_mimicos_enabled);
 
-            
+            // ----------------------------------------------------------------
+            // In-PTE payload writeback modeling (TRAIL).
+            // The demand walk has now brought this access's PTE line(s) into the
+            // cache.  Let any L2-TLB prefetcher that updated an in-PTE payload
+            // (learned a delta) during this access dirty the corresponding PTE
+            // cacheline, so its eviction generates realistic DRAM writeback
+            // traffic.  No-op unless model_payload_writeback is enabled.
+            if (!caused_page_fault)
+            {
+                const TLBSubsystem& tlbs_wb = tlb_subsystem->getTLBSubsystem();
+                for (UInt32 wi = 0; wi < tlbs_wb.size(); wi++)
+                    for (UInt32 wj = 0; wj < tlbs_wb[wi].size(); wj++)
+                    {
+                        TLB *t = tlbs_wb[wi][wj];
+                        if (!t->getPrefetch())
+                            continue;
+                        TLBPrefetcherBase **pfs = t->getPrefetchers();
+                        int npf = t->getNumPrefetchers();
+                        for (int wk = 0; wk < npf; wk++)
+                            if (pfs[wk])
+                                pfs[wk]->flushPendingPayloadWritebacks(page_table);
+                    }
+            }
+
             // ----------------------------------------------------------------
             // Userspace MimicOS: Return to let kernel handle page fault
             // ----------------------------------------------------------------
@@ -1091,6 +1150,8 @@ namespace ParametricDramDirectoryMSI
                     if (result.evicted)
                     {
                         evicted_translations[i].emplace_back(result.address, result.page_size, result.ppn);
+                        // Notify subclasses (Victima fires a background leaf fetch).
+                        onTLBLevelEviction(i, result.address, result.page_size, result.ppn, eip, lock, instruction);
 #if ENABLE_MMU_CSV_LOGS
                         if (count && (i == tlb_levels - 1))
                         {
@@ -1463,6 +1524,9 @@ namespace ParametricDramDirectoryMSI
     void MemoryManagementUnit::dumpPerPageLogs()
     {
 #if ENABLE_MMU_CSV_LOGS
+        if (m_per_page_logs_dumped)
+            return;
+        m_per_page_logs_dumped = true;
         if (translation_latency_log.is_open())
         {
             // CSV Header

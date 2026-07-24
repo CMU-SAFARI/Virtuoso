@@ -73,6 +73,37 @@ struct FaultFingerprint {
        single profile on a bimodal distribution. */
     uint8_t  pcp_hit_or_miss = 2;
 
+    /* --- Page-table install level (Phase 9 revisit) ---
+       Set by the MimicOS dispatcher from the per-process installed-PMD
+       / installed-PUD sets at fault entry.  Discriminates the three
+       periodic anon-fault sub-populations identified in the
+       fault_class_bench zoom experiment:
+         0 = no install (PMD entry already present, just allocate page)
+         1 = PMD install (first 4 KB fault into a fresh 2 MiB chunk)
+         2 = PUD install (first 4 KB fault into a fresh 1 GiB chunk)
+       Empirical real-Linux deltas on kratos20 (n=1.5M):
+         0 → p50 1.39 µs  (steady)
+         1 → p50 2.54 µs  (PMD install, 1.83× steady)
+         2 → p50 3.72 µs  (PUD install, 2.67× steady)
+       Default 0 so workloads that don't track install state degenerate
+       to the legacy single-class behaviour. */
+    uint8_t  pgtable_install_level = 0;
+
+    /* --- VMA freshness (Phase 9-C) ---
+       Heuristic detection of "first fault in a fresh VMA, immediately
+       after the establishing mmap" — empirically 0.59× steady on
+       real Linux due to kernel-cache-warmth (per-mm structures, slab
+       freelists, the new VMA itself stay hot from mmap).  Computed
+       from per-process last-fault-VPN distance: a fault whose VPN is
+       > kFreshDistance pages from the prior fault's VPN is treated
+       as fresh.  Mutually exclusive with pgtable_install_level > 0
+       (the install dimension wins to avoid double classification).
+         0 = fresh (warm-cache fast path)
+         1 = aged  (default; long-running working set)
+       Default 1 so workloads that don't track freshness degenerate
+       to the legacy single-class behaviour. */
+    uint8_t  vma_freshness = 1;
+
     /* --- Epoch snapshot (invalidation) --- */
     FaultEpochs epochs;
 
@@ -88,6 +119,8 @@ struct FaultFingerprint {
                thread_count_bucket == o.thread_count_bucket &&
                contention_bucket == o.contention_bucket &&
                pcp_hit_or_miss == o.pcp_hit_or_miss &&
+               pgtable_install_level == o.pgtable_install_level &&
+               vma_freshness == o.vma_freshness &&
                epochs == o.epochs;
     }
 };
@@ -110,6 +143,8 @@ struct FaultFingerprintHash {
         mix(fp.thread_count_bucket);
         mix(fp.contention_bucket);
         mix(fp.pcp_hit_or_miss);
+        mix(fp.pgtable_install_level);
+        mix(fp.vma_freshness);
         mix(fp.epochs.fragmentation_epoch);
         mix(fp.epochs.page_table_epoch);
         mix(fp.epochs.numa_freelist_epoch);

@@ -204,6 +204,7 @@
 #include "debug_config.h"
 #include "log.h"
 #include "memory_manager.h"
+#include "mmu_base.h"
 #include "core_manager.h"
 #include "simulator.h"
 #include "subsecond_time.h"
@@ -404,6 +405,7 @@ namespace ParametricDramDirectoryMSI
 													   m_perfect(cache_params.perfect),
 													   m_passthrough(Sim()->getCfg()->getBoolArray("perf_model/" + cache_params.configName + "/passthrough", core_id)),
 													   m_coherent(cache_params.coherent),
+													   m_zero_miss_tag_lat(Sim()->getCfg()->getBoolDefault("perf_model/" + cache_params.configName + "/zero_miss_tag_lat", false)),
 													   m_prefetch_on_prefetch_hit(false),
 													   m_l1_mshr(cache_params.outstanding_misses > 0),
 													   m_l1_metadata_mshr(cache_params.outstanding_misses > 0),
@@ -472,7 +474,9 @@ namespace ParametricDramDirectoryMSI
 		}
 
 		if (m_master->m_prefetcher)
+		{
 			m_prefetch_on_prefetch_hit = Sim()->getCfg()->getBoolArray("perf_model/" + cache_params.configName + "/prefetcher/prefetch_on_prefetch_hit", core_id);
+		}
 
 		bzero(&stats, sizeof(stats));
 		registerStatsMetric(name, core_id, String("tloads"), &stats.tloads);
@@ -497,7 +501,25 @@ namespace ParametricDramDirectoryMSI
 			registerStatsMetric(name, core_id, String("stores-prefetch-") + BlockTypeString(type), &stats.stores_prefetch[type]);
 		}
 		registerStatsMetric(name, core_id, "hits-prefetch", &stats.hits_prefetch);
+		registerStatsMetric(name, core_id, "hits-prefetch-subline", &stats.hits_prefetch_subline);
 		registerStatsMetric(name, core_id, "evict-prefetch", &stats.evict_prefetch);
+		// Per-block-type eviction counters (verify replacement policy isn't starving DATA)
+		for (UInt32 bt = 0; bt < CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES; bt++)
+		{
+			stats.evict_by_block_type[bt] = 0;
+			const char* bt_name =
+				(bt == CacheBlockInfo::block_type_t::PAGE_TABLE_DATA)        ? "evict-PAGE_TABLE_DATA" :
+				(bt == CacheBlockInfo::block_type_t::PAGE_TABLE_INSTRUCTION) ? "evict-PAGE_TABLE_INSTRUCTION" :
+				(bt == CacheBlockInfo::block_type_t::UTOPIA_FP)              ? "evict-UTOPIA_FP" :
+				(bt == CacheBlockInfo::block_type_t::UTOPIA_TAR)             ? "evict-UTOPIA_TAR" :
+				(bt == CacheBlockInfo::block_type_t::UTOPIA_RADIX_INTERNAL)  ? "evict-UTOPIA_RADIX_INTERNAL" :
+				(bt == CacheBlockInfo::block_type_t::UTOPIA_RADIX_LEAF)      ? "evict-UTOPIA_RADIX_LEAF" :
+				(bt == CacheBlockInfo::block_type_t::VICTIMA_TLB_BLOCK)      ? "evict-VICTIMA_TLB_BLOCK" :
+				(bt == CacheBlockInfo::block_type_t::INSTRUCTION)            ? "evict-INSTRUCTION" :
+				(bt == CacheBlockInfo::block_type_t::DATA)                   ? "evict-DATA" :
+				                                                                "evict-UNKNOWN";
+			registerStatsMetric(name, core_id, bt_name, &stats.evict_by_block_type[bt]);
+		}
 		registerStatsMetric(name, core_id, "invalidate-prefetch", &stats.invalidate_prefetch);
 		registerStatsMetric(name, core_id, "hits-warmup", &stats.hits_warmup);
 		registerStatsMetric(name, core_id, "evict-warmup", &stats.evict_warmup);
@@ -626,6 +648,7 @@ namespace ParametricDramDirectoryMSI
 		Byte *data_buf, UInt32 data_length,
 		bool modeled,
 		bool count, CacheBlockInfo::block_type_t block_type, SubsecondTime TLB_latency, UtopiaCache *shadow_cache,
+		IntPtr prefetch_virtual_address,
 		Core::mem_origin_t mem_origin)
 	{
 
@@ -844,7 +867,7 @@ namespace ParametricDramDirectoryMSI
 		{
 			/* cache miss: either wrong coherency state or not present in the cache */
 			MYLOG("L1 miss");
-			if (!m_passthrough)
+			if (!m_passthrough && !m_zero_miss_tag_lat)
 				getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_TAGS, ShmemPerfModel::_USER_THREAD);
 
 			SubsecondTime t_miss_begin = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
@@ -1163,7 +1186,6 @@ namespace ParametricDramDirectoryMSI
 	CacheCntlr::Prefetch(IntPtr eip, SubsecondTime t_now)
 	{
 		IntPtr address_to_prefetch = INVALID_ADDRESS;
-		eip = 0xdeadbeef;
 
 		{
 			ScopedLock sl(getLock());
@@ -1201,35 +1223,39 @@ namespace ParametricDramDirectoryMSI
 	CacheCntlr::doPrefetch(IntPtr eip, IntPtr prefetch_address, SubsecondTime t_start, CacheBlockInfo::block_type_t block_type)
 	{
 		++stats.prefetches;
-		acquireStackLock(prefetch_address);
-		MYLOG("prefetching %lx", prefetch_address);
-
-#ifdef REVELATOR_CACHE_DEBUG
-	std::cout << "Prefetching for Revelator address: " << prefetch_address << std::endl;
-#endif
-
+		IntPtr cache_prefetch_address = prefetch_address;
 		SubsecondTime t_before = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
 		getShmemPerfModel()->setElapsedTime(ShmemPerfModel::_USER_THREAD, t_start); // Start the prefetch at the same time as the original miss
-		HitWhere::where_t hit_where = processShmemReqFromPrevCache(eip, this, Core::READ, prefetch_address, 0, getCacheBlockSize(), true, true, block_type, Prefetch::OWN, t_start, false, Core::mem_origin_t::NORMAL);
+
+		SubsecondTime t_cache_issue = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+
+		acquireStackLock(cache_prefetch_address);
+		MYLOG("prefetching %lx", cache_prefetch_address);
+
+#ifdef REVELATOR_CACHE_DEBUG
+	std::cout << "Prefetching for Revelator address: " << cache_prefetch_address << std::endl;
+#endif
+
+		HitWhere::where_t hit_where = processShmemReqFromPrevCache(eip, this, Core::READ, cache_prefetch_address, 0, getCacheBlockSize(), true, true, block_type, Prefetch::OWN, t_cache_issue, false, Core::mem_origin_t::NORMAL);
 
 		if (hit_where != HitWhere::MISS)
 		{
 #ifdef REVELATOR_CACHE_DEBUG
-			std::cout << "Prefetching for Revelator address: " << prefetch_address << " was a hit and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
+			std::cout << "Prefetching for Revelator address: " << cache_prefetch_address << " was a hit and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
 #endif
 		}
 		if (hit_where == HitWhere::MISS)
 		{
 			/* last level miss, a message has been sent. */
 
-			releaseStackLock(prefetch_address);
+			releaseStackLock(cache_prefetch_address);
 			waitForNetworkThread();
 			wakeUpNetworkThread();
 
-			hit_where = processShmemReqFromPrevCache(eip, this, Core::READ, prefetch_address, 0, getCacheBlockSize(), false, false, block_type, Prefetch::OWN, t_start, false, Core::mem_origin_t::NORMAL);
+			hit_where = processShmemReqFromPrevCache(eip, this, Core::READ, cache_prefetch_address, 0, getCacheBlockSize(), false, false, block_type, Prefetch::OWN, t_cache_issue, false, Core::mem_origin_t::NORMAL);
 
 #ifdef REVELATOR_CACHE_DEBUG  
-	std::cout << "Prefetching for Revelator address: " << prefetch_address << " was a miss and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
+	std::cout << "Prefetching for Revelator address: " << cache_prefetch_address << " was a miss and the request will be available at time: " << getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD) << std::endl;
 #endif
 			LOG_ASSERT_ERROR(hit_where != HitWhere::MISS, "Line was not there after prefetch");
 			stats.prefetches_fillup++;
@@ -1240,7 +1266,7 @@ namespace ParametricDramDirectoryMSI
 		m_last_prefetch_completion = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
 
 		getShmemPerfModel()->setElapsedTime(ShmemPerfModel::_USER_THREAD, t_before); // Ignore changes to time made by the prefetch call
-		releaseStackLock(prefetch_address);
+		releaseStackLock(cache_prefetch_address);
 	}
 
 
@@ -1329,6 +1355,12 @@ namespace ParametricDramDirectoryMSI
 				cache_block_info->clearOption(CacheBlockInfo::PREFETCH);
 				cache_block_info->clearOption(CacheBlockInfo::PREFETCH_FROM_DRAM);
 			}
+			// Per-PTE (sub-line) accounting: credit each distinct 8B sub-region
+			// (PTE) the first demand walk consumes from a prefetched line, so a
+			// region/temporal TLB prefetch serving several PTEs in one 64B line
+			// is credited per-PTE rather than once-per-line (cleared above).
+			if (isPrefetch == Prefetch::NONE && cache_block_info->consumePrefetch(offset, data_length))
+				stats.hits_prefetch_subline++;
 			if (cache_block_info->hasOption(CacheBlockInfo::WARMUP) && Sim()->getInstrumentationMode() != InstMode::CACHE_ONLY)
 			{
 				stats.hits_warmup++;
@@ -2022,6 +2054,12 @@ namespace ParametricDramDirectoryMSI
 					CacheState::INVALID);
 
 				++stats.evict[old_state];
+				// Per-block-type eviction count
+				{
+					CacheBlockInfo::block_type_t evicted_bt = evict_block_info.getBlockType();
+					if (evicted_bt < CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES)
+						++stats.evict_by_block_type[evicted_bt];
+				}
 				// Line was prefetched, but is evicted without ever being used
 				if (evict_block_info.hasOption(CacheBlockInfo::PREFETCH))
 				{

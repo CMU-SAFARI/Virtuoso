@@ -47,6 +47,12 @@ trace_suite:
     tracelists:
       - google_delta_single.tlist
 
+  sierra_single:
+    tracelist_base_path: "vm_tlist/"
+
+    tracelists:
+      - sierra_single.tlist
+
 # Available configurations
 # Each config has:
 #   - name: unique config name
@@ -63,6 +69,25 @@ configs:
     name: "no-translation"
     file: "no_translation.cfg"
     description: "No address translation (sanity baseline)"
+
+  # Revelator (speculative hash-based allocator)
+  revelator:
+    name: "revelator"
+    file: "revelator.cfg"
+    description: "Revelator speculative TLB engine with hash-based allocation"
+
+  # Revelator with 3 hashes, sweep memory utilization
+  revelator-3hash-utilization-sweep:
+    name: "revelator-3h"
+    file: "revelator.cfg"
+    extends:
+      - "--perf_model/revelator/number_of_hashes=3"
+      - "--perf_model/revelator/number_of_predictions=3"
+    sweeps:
+      - identifier: ["util"]
+        option: ["--perf_model/revelator/target_fragmentation="]
+        values: [[1.0, 0.8, 0.6, 0.4, 0.2]]
+    description: "Revelator 3 hashes, memory utilization sweep (0%/20%/40%/60%/80%)"
 
   # SpOT allocator
   spot:
@@ -109,6 +134,55 @@ configs:
     name: "ht-baseline"
     file: "ht_baseline_alloc.cfg"
     description: "Hash Table (chaining) page table with baseline allocator"
+
+  # ReserveTHP with OS daemons enabled (sniper-space)
+  reservethp-kcompactd:
+    name: "reservethp-kcompactd"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.5"
+      - "--perf_model/mimicos_host/kcompactd_enabled=true"
+      - "--perf_model/mimicos_host/kcompactd_scan_interval_us=1"
+    description: "ReserveTHP with kcompactd compaction daemon (50% fragmentation, 1us scan interval)"
+
+  reservethp-khugepaged:
+    name: "reservethp-khugepaged"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.5"
+      - "--perf_model/mimicos_host/khugepaged_enabled=true"
+      - "--perf_model/mimicos_host/khugepaged_scan_interval_us=1"
+      - "--perf_model/mimicos_host/khugepaged_promotion_threshold=0.5"
+    description: "ReserveTHP with khugepaged THP coalescing daemon"
+
+  reservethp-kswapd:
+    name: "reservethp-kswapd"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.5"
+      - "--perf_model/mimicos_host/kswapd_enabled=true"
+      - "--perf_model/mimicos_host/kswapd_scan_interval_us=1"
+      - "--perf_model/mimicos_host/kswapd_pages_low=100000"
+    description: "ReserveTHP with kswapd page reclamation daemon"
+
+  reservethp-all-daemons:
+    name: "reservethp-all-daemons"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.5"
+      - "--perf_model/mimicos_host/kcompactd_enabled=true"
+      - "--perf_model/mimicos_host/kcompactd_scan_interval_us=1"
+      - "--perf_model/mimicos_host/khugepaged_enabled=true"
+      - "--perf_model/mimicos_host/khugepaged_scan_interval_us=1"
+      - "--perf_model/mimicos_host/kswapd_enabled=true"
+      - "--perf_model/mimicos_host/kswapd_scan_interval_us=1"
+    description: "ReserveTHP with all OS daemons (kcompactd + khugepaged + kswapd)"
+
+  # Revelator smoke test
+  revelator-smoke:
+    name: "revelator-smoke"
+    file: "revelator.cfg"
+    description: "Revelator speculative TLB engine (smoke test)"
 
   # Userspace MimicOS (page faults handled by VirtuOS process)
   userspace-reservethp:
@@ -181,6 +255,13 @@ configs:
     extends:
       - "--perf_model/reserve_thp/target_fragmentation=1.0"
     description: "Reservation-based THP with no fragmentation"
+
+  reservethp-low-fragmentation:
+    name: "reservethp-frag0.05"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.05"
+    description: "Reservation-based THP with low fragmentation (5% of memory as free 2MB blocks)"
 
   reservethp:
     name: "reservethp"
@@ -503,6 +584,872 @@ configs:
   # AGILE TLB PREFETCHER (ATP + SBFP) CONFIGURATIONS
   # ============================================================================
 
+  # ============================================================================
+  # TLB-PREFETCH MATRIX (data-PF held constant + CHiRP L2-TLB)
+  # IP-Stride@L1D (no translate) + Streamer@L2 + CHiRP L2-TLB repl;
+  # only the L2-TLB translation prefetcher varies (none / ASP / TRAIL).
+  # ============================================================================
+
+  trail-pf-baseline:
+    name: "trail-pf-baseline"
+    file: "parametric_baseline_datapf.cfg"
+    description: "TLB-PF matrix: data-PF + CHiRP L2-TLB, NO TLB prefetch"
+
+  trail-pf-asp:
+    name: "trail-pf-asp"
+    file: "parametric_asp_datapf.cfg"
+    description: "TLB-PF matrix: data-PF + CHiRP L2-TLB, ASP TLB prefetcher"
+
+  trail-pf-trail:
+    name: "trail-pf-trail"
+    file: "parametric_temporal_pte_datapf.cfg"
+    description: "TLB-PF matrix: data-PF + CHiRP L2-TLB, TRAIL (temporal_pte) TLB prefetcher"
+
+  # ============================================================================
+  # TEMPORAL PTE PREFETCHER CONFIGURATIONS
+  # ============================================================================
+
+  temporal-pte:
+    name: "temporal-pte"
+    file: "baseline_temporal_pte.cfg"
+    description: "Temporal PTE prefetcher (32KB regions, 4 slots, offset_bits=18, conf_bits=2, 80-bit payload)"
+
+  temporal-pte-pte-only:
+    name: "temporal-pte-pte-only"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pte_only"
+    description: "Temporal PTE prefetcher with PTE-only mode (no transition learning)"
+
+  temporal-pte-pc-cond:
+    name: "temporal-pte-pc-cond"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=1024"
+    description: "Temporal PTE prefetcher with PC-conditioned learning (1024-entry PC table)"
+
+  temporal-pte-pc-cond-pc-table-sweep:
+    name: "temporal-pte-pc-cond-pc-table-sweep"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+    sweeps:
+      - identifier: ["pc_table_size"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size="]
+        values: [[1024, 2048, 4096, 8192]]
+    description: "Temporal PTE prefetcher with PC-conditioned learning (sweep PC table size)"
+
+  temporal-pte-pc-cond-depth-sweep:
+    name: "temporal-pte-pc-cond-depth-sweep"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+    sweeps:
+      - identifier: ["max_prefetch_depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4]]
+    description: "Temporal PTE prefetcher with PC-conditioned learning (sweep max prefetch depth)"
+
+  temporal-pte-pc-cond-global-slot-off:
+    name: "temporal-pte-pc-cond-global-slot-off"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=8192"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=2"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=4"
+    description: "Temporal PTE prefetcher with PC-conditioned learning (global slot disabled)"
+
+  temporal-pte-aggressive:
+    name: "temporal-pte-aggressive"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_threshold=1"
+    description: "Temporal PTE prefetcher aggressive (conf_threshold=1, fires even with low confidence)"
+
+  temporal-pte-pc-cond-gslot-off-depth-sweep:
+    name: "temporal-pte-gslot-off-depth"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=8192"
+    sweeps:
+      - identifier: ["max_prefetch_depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4]]
+    description: "Global slot off, 8K PC table, sweep depth 0-4"
+
+  temporal-pte-pc-cond-gslot-off-depth-ppd2:
+    name: "temporal-pte-gslot-off-depth-ppd2"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=8192"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=2"
+    sweeps:
+      - identifier: ["max_prefetch_depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4]]
+    description: "Global slot off, 8K PC table, prefetches_per_depth=2, sweep depth 0-4"
+
+  temporal-pte-pc-cond-gslot-off-depth-ppd4:
+    name: "temporal-pte-gslot-off-depth-ppd4"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=8192"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=4"
+    sweeps:
+      - identifier: ["pohit"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetch_on_hit="]
+        values: [[true, false]]
+      - identifier: ["max_prefetch_depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4]]
+    description: "Global slot off, 8K PC table, prefetches_per_depth=4, sweep prefetch_on_hit x depth 0-4"
+
+  temporal-pte-pc-cond-gslot-off-depth-ppd8:
+    name: "temporal-pte-gslot-off-depth-ppd8"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=8192"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=8"
+    sweeps:
+      - identifier: ["max_prefetch_depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4]]
+    description: "Global slot off, 8K PC table, prefetches_per_depth=8, sweep depth 0-4"
+
+  temporal-pte-pc-cond-gslot-off-depth-ppd4-conf-sweep:
+    name: "temporal-pte-gslot-off-ppd4"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=8192"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=4"
+    sweeps:
+      - identifier: ["conf_init"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init="]
+        values: [[0, 1, 2]]
+      - identifier: ["max_prefetch_depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4]]
+    description: "Global slot off, 8K PC table, ppd=4, sweep conf_init {0,1,2} x depth 0-4"
+
+  temporal-pte-pc-cond-gslot-off-depth-ppd4-conf-sweep-v2:
+    name: "temporal-pte-gslot-off-ppd4-v2"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=8192"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=4"
+    sweeps:
+      - identifier: ["conf_init"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init="]
+        values: [[0, 1, 2]]
+      - identifier: ["max_prefetch_depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4]]
+    description: "V2: PQ dedup + TLB residency + single-walk. Same sweep as v1."
+
+  temporal-pte-pc-cond-gslot-off-depth-ppd4-conf-sweep-v3:
+    name: "temporal-pte-gslot-off-ppd4-v3"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=8192"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=4"
+    sweeps:
+      - identifier: ["conf_init"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init="]
+        values: [[0, 1, 2]]
+      - identifier: ["max_prefetch_depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4]]
+    description: "V3: Fixed 4-channel DRAM + timeliness fix. PQ dedup + TLB residency + single-walk."
+
+  temporal-pte-pc-cond-gslot-off-depth-ppd4-conf-sweep-v4:
+    name: "temporal-pte-gslot-off-ppd4-v4"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=8192"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=4"
+    sweeps:
+      - identifier: ["conf_init"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init="]
+        values: [[0, 1, 2, 3]]
+      - identifier: ["max_prefetch_depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4]]
+    description: "V4: conf_init sweep extended to {0,1,2,3} x depth 0-4. Same base as v3."
+
+  temporal-pte-v5-pc-table-sweep:
+    name: "temporal-pte-v5-pctbl"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=4"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=false"
+    sweeps:
+      - identifier: ["sz"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size="]
+        values: [[16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]]
+    description: "V5(i): Best temporal config, HW PC table size sweep (no backing store)."
+
+  temporal-pte-v5-backing-store:
+    name: "temporal-pte-v5-backing"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=4"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+    description: "V5(ii): Best temporal config, 64-entry HW cache + radix backing store."
+
+  temporal-pte-v5-stride-backing-grid:
+    name: "temporal-pte-v5-stride"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/prefetches_per_depth=4"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+    sweeps:
+      - identifier: ["virt", "pcsz"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=",
+                  "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size="]
+        values: [[false, true], [8192, 64]]
+      - identifier: ["sdp"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch="]
+        values: [[false, true]]
+    description: "V5(iii): Best config, 2x2 grid: {no-backing 8K, backing 64} x stride direct prefetch {off, on}."
+
+  temporal-pte-best-backing-stride:
+    name: "temporal-best"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+    description: "Best temporal config: conf_init=3, depth=3, 64-entry HW cache + radix backing store, stride, path-score chaining (edge_decay=0.85, threshold=0.05)."
+
+  # ============================================================================
+  # CONFIDENCE POLICY SWEEP CONFIGURATIONS (V6)
+  # All build on the "best" base: pc_cond_learn, gslot=off, conf_init=3,
+  # depth=3, 64-entry HW cache + radix backing, stride, path-score chaining.
+  # ============================================================================
+
+  # --- V6(i): Sweep confidence policy type ---
+  # None / competitive / exponential / bump_only_strong (all with default params)
+  temporal-pte-v6-policy-sweep:
+    name: "temporal-v6-pol"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+    sweeps:
+      - identifier: ["pol"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy="]
+        values: [["none", "competitive", "exponential", "bump_only_strong"]]
+    description: "V6(i): Sweep confidence policy type with default parameters."
+
+  # --- V6(ii): Competitive decay strength grid ---
+  # Fix policy=competitive, sweep decay_on_bump x decay_on_miss
+  temporal-pte-v6-decay-strength:
+    name: "temporal-v6-decay"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=competitive"
+    sweeps:
+      - identifier: ["dob"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_decay_on_bump="]
+        values: [[0, 1, 2]]
+      - identifier: ["dom"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_decay_on_miss="]
+        values: [[0, 1, 2]]
+    description: "V6(ii): Competitive policy with decay strength grid: decay_on_bump={0,1,2} x decay_on_miss={0,1,2}."
+
+  # --- V6(iii): Bump amount sweep ---
+  # How fast should confirmed deltas reach max confidence?
+  temporal-pte-v6-bump-amount:
+    name: "temporal-v6-bump"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=competitive"
+    sweeps:
+      - identifier: ["ba"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_bump_amount="]
+        values: [[1, 2, 3]]
+    description: "V6(iii): Sweep bump amount {1,2,3} with competitive policy (default decay=1/1)."
+
+  # --- V6(iv): conf_init x policy interaction ---
+  # Does high init + aggressive decay outperform low init + no decay?
+  temporal-pte-v6-init-x-policy:
+    name: "temporal-v6-ixp"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+    sweeps:
+      - identifier: ["ci"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init="]
+        values: [[1, 2, 3]]
+      - identifier: ["pol"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy="]
+        values: [["none", "competitive", "exponential"]]
+    description: "V6(iv): conf_init={1,2,3} x policy={none,competitive,exponential} interaction grid."
+
+  # --- V6(v): Chain depth x policy ---
+  # Does aggressive decay help or hurt with deeper chaining?
+  temporal-pte-v6-depth-x-policy:
+    name: "temporal-v6-dxp"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+    sweeps:
+      - identifier: ["depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4]]
+      - identifier: ["pol"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy="]
+        values: [["none", "competitive", "exponential"]]
+    description: "V6(v): depth={0..4} x policy={none,competitive,exponential}."
+
+  # --- V7: Best temporal (no policy) + PC backing store + stride, sweep PC table size ---
+  temporal-pte-v7-pc-table-sweep:
+    name: "temporal-v7-pctbl"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+    sweeps:
+      - identifier: ["pcsz"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size="]
+        values: [[64, 128, 256, 512, 1024]]
+    description: "V7: Best temporal (conf_init=3, depth=3, no policy), PC backing store + stride, sweep PC table size 64-1024."
+
+  # --- V6(vi): Chain path-score tuning with competitive policy ---
+  # Sweep edge_decay and score_threshold to find the sweet spot for chaining.
+  temporal-pte-v6-chain-tuning:
+    name: "temporal-v6-chain"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=competitive"
+    sweeps:
+      - identifier: ["ed"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay="]
+        values: [[0.65, 0.75, 0.85, 0.95]]
+      - identifier: ["st"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold="]
+        values: [[0.01, 0.05, 0.10, 0.20]]
+    description: "V6(vi): edge_decay={0.65..0.95} x score_threshold={0.01..0.20} chain tuning grid."
+
+  # --- V6(vii): Full competitive parameter exploration ---
+  # Joint sweep of bump_amount, decay_on_bump, and conf_init for the competitive policy.
+  temporal-pte-v6-competitive-full:
+    name: "temporal-v6-comp"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=competitive"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_decay_on_miss=1"
+    sweeps:
+      - identifier: ["ci"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init="]
+        values: [[1, 2, 3]]
+      - identifier: ["ba"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_bump_amount="]
+        values: [[1, 2]]
+      - identifier: ["dob"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_decay_on_bump="]
+        values: [[0, 1, 2]]
+    description: "V6(vii): conf_init={1,2,3} x bump={1,2} x decay_on_bump={0,1,2} (decay_on_miss=1 fixed)."
+
+  # --- V6(viii): Exponential decay with varying conf_init and depth ---
+  # Exponential decay halves quickly — does higher conf_init compensate?
+  temporal-pte-v6-exponential-sweep:
+    name: "temporal-v6-exp"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=exponential"
+    sweeps:
+      - identifier: ["ci"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init="]
+        values: [[1, 2, 3]]
+      - identifier: ["depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[1, 2, 3, 4]]
+    description: "V6(viii): Exponential decay with conf_init={1,2,3} x depth={1..4}."
+
+  # ============================================================================
+  # V8: COVERAGE vs ACCURACY EXPLORATION
+  # ============================================================================
+  #
+  # All V8 configs build on the "best" base: pc_cond_learn, gslot=off,
+  # 64-entry HW cache + radix backing, stride on, path-score chaining.
+  # Each sweep isolates one dimension of the aggressiveness trade-off.
+  #
+  # Key stats to compare:
+  #   demand_hit_installed       → useful (coverage)
+  #   demand_hit_installed_evicted → accurate but too early (wasted bandwidth)
+  #   demand_miss_not_prefetched → true misses (coverage gap)
+  #   L2.hits-prefetch           → cache-level benefit
+  #   L2.evict-prefetch          → cache pollution
+  #   predictions_issued         → prefetch volume
+
+  # --- V8(i): Core aggressiveness grid ---
+  # conf_init controls first-observation behavior (fire immediately vs wait).
+  # conf_threshold controls the minimum confidence to issue a prediction.
+  # This grid sweeps the fundamental accuracy-vs-coverage knob.
+  #
+  #   conservative: conf_init=0, conf_threshold=2 → needs 3 observations
+  #   moderate:     conf_init=1, conf_threshold=2 → needs 2 observations
+  #   aggressive:   conf_init=3, conf_threshold=2 → fires on first insert
+  #   ultra-agg:    conf_init=3, conf_threshold=1 → fires on first insert, low bar
+  temporal-pte-v8-core-aggressiveness:
+    name: "temporal-v8-agg"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+    sweeps:
+      - identifier: ["ci"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init="]
+        values: [[0, 1, 2, 3]]
+      - identifier: ["ct"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_threshold="]
+        values: [[1, 2, 3]]
+    description: "V8(i): conf_init={0,1,2,3} x conf_threshold={1,2,3} — core aggressiveness grid."
+
+  # --- V8(ii): Chaining depth vs gating strictness ---
+  # Explores how deep to chain and how strictly to gate deeper levels.
+  # Three chain_conf_threshold values: 0 (path-score only), 1 (loose), 2 (strict=depth0).
+  # Crossed with chain_score_threshold to see their interaction.
+  temporal-pte-v8-chain-gating:
+    name: "temporal-v8-chain"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+    sweeps:
+      - identifier: ["cst"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold="]
+        values: [[0.0, 0.01, 0.05, 0.10, 0.20]]
+      - identifier: ["cct"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_conf_threshold="]
+        values: [[0, 1, 2]]
+    description: "V8(ii): chain_score_threshold={0..0.20} x chain_conf_threshold={0,1,2} — chaining gating grid."
+
+  # --- V8(iii): Chaining depth spectrum ---
+  # Isolate the effect of depth with two gating policies:
+  # loose (score_thresh=0.01) and strict (score_thresh=0.10).
+  temporal-pte-v8-chain-depth:
+    name: "temporal-v8-depth"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+    sweeps:
+      - identifier: ["depth"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth="]
+        values: [[0, 1, 2, 3, 4, 5]]
+      - identifier: ["cst"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold="]
+        values: [[0.01, 0.10]]
+    description: "V8(iii): depth={0..5} x chain_score_threshold={0.01,0.10} — depth vs gating strictness."
+
+  # --- V8(iv): Region granularity ---
+  # Wider regions = more pages per prediction, but higher cache pressure
+  # and higher walk cost.  Cross with conf_init to see if aggressive
+  # confidence compensates for wider region overhead.
+  temporal-pte-v8-region-shift:
+    name: "temporal-v8-region"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+    sweeps:
+      - identifier: ["rs"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift="]
+        values: [[2, 3, 4, 5]]
+      - identifier: ["ci"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init="]
+        values: [[1, 3]]
+    description: "V8(iv): region_shift={2,3,4,5} x conf_init={1,3} — region granularity vs aggressiveness."
+
+  # --- V8(v): Payload capacity —  slots × delta width ---
+  # More slots capture more successors (higher coverage) but each slot
+  # gets fewer bits.  Wider deltas reach farther but fewer slots fit.
+  # All configs stay within 128-bit payload (simulator limit).
+  # Hardware-realizable configs (≤80 bits) are marked.
+  #
+  #   4 × (18+2) =  80 bits  [HW: yes]  ← current default
+  #   4 × (14+2) =  64 bits  [HW: yes]  narrower deltas, same slots
+  #   6 × (12+2) =  84 bits  [HW: no ]  more slots, narrower deltas
+  #   3 × (24+2) =  78 bits  [HW: yes]  fewer slots, much wider deltas
+  #   8 × (8+2)  =  80 bits  [HW: yes]  many slots, narrow deltas
+  #   2 × (18+2) =  40 bits  [HW: yes]  minimal: 2 successors only
+  temporal-pte-v8-payload-capacity:
+    name: "temporal-v8-payload"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+    sweeps:
+      - identifier: ["noff", "obits"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/num_offsets=",
+                  "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/offset_bits="]
+        values: [[2, 3, 4, 4, 6, 8],
+                 [18, 24, 18, 14, 12, 8]]
+    description: "V8(v): Payload capacity sweep — {2x18, 3x24, 4x18, 4x14, 6x12, 8x8} (all 2-bit conf)."
+
+  # --- V8(vi): Full aggressiveness spectrum (discrete configs) ---
+  # Five fixed points from ultra-conservative to ultra-aggressive.
+  # Each point tunes conf_init, conf_threshold, depth, and chain gating
+  # together as a coherent design point.
+  temporal-pte-v8-spectrum-conservative:
+    name: "temporal-v8-conserv"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=competitive"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_threshold=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=0"
+    description: "V8(vi-a): Ultra-conservative — conf_init=0, conf_threshold=3, no chaining, no stride, competitive decay."
+
+  temporal-pte-v8-spectrum-moderate:
+    name: "temporal-v8-moder"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=1"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_threshold=2"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=1"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.75"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.20"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_conf_threshold=2"
+    description: "V8(vi-b): Moderate — conf_init=1, thresh=2, depth=1, strict chain gating, stride on."
+
+  temporal-pte-v8-spectrum-balanced:
+    name: "temporal-v8-bal"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_threshold=2"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_conf_threshold=0"
+    description: "V8(vi-c): Balanced — conf_init=3, thresh=2, depth=3, path-score chaining, stride on."
+
+  temporal-pte-v8-spectrum-aggressive:
+    name: "temporal-v8-aggr"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_threshold=1"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=4"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.95"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.01"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_conf_threshold=0"
+    description: "V8(vi-d): Aggressive — conf_init=3, thresh=1, depth=4, loose chaining, stride on."
+
+  temporal-pte-v8-spectrum-ultra-aggressive:
+    name: "temporal-v8-ultra"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_threshold=1"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=1.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_conf_threshold=0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=4"
+    description: "V8(vi-e): Ultra-aggressive — conf=1, depth=5, no gating, 64KB regions, no decay."
+
+  # --- V8(vii): Edge decay × region_shift interaction ---
+  # Wider regions have higher fanout penalty (1/sqrt(pages)).
+  # Does raising edge_decay compensate?
+  temporal-pte-v8-decay-x-region:
+    name: "temporal-v8-dxr"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+    sweeps:
+      - identifier: ["rs"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift="]
+        values: [[3, 4, 5]]
+      - identifier: ["ed"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay="]
+        values: [[0.75, 0.85, 0.95, 1.0]]
+    description: "V8(vii): region_shift={3,4,5} x edge_decay={0.75..1.0} — wider regions need higher decay?"
+
+  # --- V8(viii): Confidence policy × aggressiveness ---
+  # Does competitive decay help accuracy when the prefetcher is aggressive?
+  # Does no-decay hurt when conservative?
+  temporal-pte-v8-policy-x-agg:
+    name: "temporal-v8-pxa"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+    sweeps:
+      - identifier: ["ci", "ct"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=",
+                  "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_threshold="]
+        values: [[0, 1, 3, 3],
+                 [2, 2, 2, 1]]
+      - identifier: ["pol"]
+        option: ["--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy="]
+        values: [["none", "competitive", "exponential"]]
+    description: "V8(viii): {conservative,moderate,aggressive,ultra} x policy={none,competitive,exponential}."
+
+  # ============================================================================
+  # V9: TEMPORAL PTE PREFETCHER — 2MB HUGE-PAGE PLANE + FIXED ACCURACY STATS
+  # ============================================================================
+  # Re-run v8 configs with:
+  #   - Fixed tagMMUPrefetch (no re-tagging L2-hit lines → clean L2.hits-prefetch)
+  #   - Fixed spec-evict propagation to L2
+  #   - Per-fill-source useful/wasted (DRAM vs NUCA)
+  #   - Timeliness histogram + latency saved stats
+  #   - Bandwidth overhead stats
+  #   - Unmapped-page guard (no learning on page faults)
+  #   - 2MB huge-page plane (PMD-level payload, 2MB-region predictions)
+  #
+  # New config: temporal-v9-2mb — aggressive config with 2MB page support
+  # tested at frag=1.0 (all huge pages) with region_shift=3 (8×2MB = 16MB/pred)
+
+  # --- V9 aggressive with 2MB page support (frag=0.0, 4KB baseline) ---
+  temporal-pte-v9-2mb-frag0:
+    name: "temporal-v9-2mb-frag0.0"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_threshold=1"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.95"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.01"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_conf_threshold=0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=3"
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "V9: Aggressive temporal PTE with 2MB support, frag=0.0 (all 4KB — baseline comparison)"
+
+  # --- V9 aggressive with 2MB page support (frag=1.0, all huge pages) ---
+  temporal-pte-v9-2mb-frag1:
+    name: "temporal-v9-2mb-frag1.0"
+    file: "baseline_temporal_pte.cfg"
+    extends:
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_threshold=1"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.95"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.01"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_conf_threshold=0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=3"
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+    description: "V9: Aggressive temporal PTE with 2MB support, frag=1.0 (all 2MB huge pages — 16MB/pred)"
+
+  # --- ASAP eager THP allocator configs ---
+  asap-frag0:
+    name: "asap-frag0.0"
+    file: "asap.cfg"
+    extends:
+      - "--perf_model/asap_allocator/target_fragmentation=0.0"
+      - "--perf_model/asap_allocator/threshold_for_promotion=0.0"
+    description: "ASAP eager THP allocator: frag=0.0 (no free 2MB blocks), promote on first touch"
+
+  asap-frag1:
+    name: "asap-frag1.0"
+    file: "asap.cfg"
+    extends:
+      - "--perf_model/asap_allocator/target_fragmentation=1.0"
+      - "--perf_model/asap_allocator/threshold_for_promotion=0.0"
+    description: "ASAP eager THP allocator: frag=1.0 (free 2MB blocks), promote on first touch"
+
+  # ============================================================================
+  # AGILE TLB PREFETCHER (ATP) CONFIGURATIONS
+  # ============================================================================
+
   atp-baseline:
     name: "atp-baseline"
     file: "baseline_atp.cfg"
@@ -651,7 +1598,6 @@ configs:
 
 
 
-
 ## Experiment suites
 
 # Experiment directory is named after the suite
@@ -770,11 +1716,82 @@ experiment_suites:
     trace_suite: randacc
     instruction_count: 1000000  # 1M instructions
 
+  trail-pf-smoke:
+    description: "Smoke: TLB-PF matrix (no-PF / ASP / TRAIL), data-PF + CHiRP L2-TLB, 1M insns on a single Google trace"
+    configs: [trail-pf-baseline, trail-pf-asp, trail-pf-trail]
+    trace_suite: google_delta_single
+    instruction_count: 1000000  # 1M instructions
+
   atp-vs-baseline:
     description: "ATP vs baseline reservethp comparison on victima traces"
     configs: [atp-vs-baseline, reservethp-full-fragmentation]
     trace_suite: victima
     instruction_count: 10000000  # 10M instructions
+
+  # ==========================================================================
+  # V8: COVERAGE vs ACCURACY EXPERIMENT SUITE
+  # ==========================================================================
+
+  coverage-vs-accuracy-v8:
+    description: "V8: Comprehensive coverage vs accuracy exploration — 82 configs across aggressiveness, chaining, regions, payload, and policies"
+    configs:
+      - temporal-pte-v8-core-aggressiveness
+      - temporal-pte-v8-chain-gating
+      - temporal-pte-v8-chain-depth
+      - temporal-pte-v8-region-shift
+      - temporal-pte-v8-payload-capacity
+      - temporal-pte-v8-spectrum-conservative
+      - temporal-pte-v8-spectrum-moderate
+      - temporal-pte-v8-spectrum-balanced
+      - temporal-pte-v8-spectrum-aggressive
+      - temporal-pte-v8-spectrum-ultra-aggressive
+      - temporal-pte-v8-decay-x-region
+      - temporal-pte-v8-policy-x-agg
+      - reservethp-full-fragmentation
+    trace_suite: top250
+    instruction_count: 300000000
+    enable_icache_for: ["srv"]
+    slurm_partitions: ["cpu_part", "bio_part"]
+    instruction_count_overrides:
+      top250_virtuoso.tlist: 100000000
+
+  # ==========================================================================
+  # V9: COVERAGE vs ACCURACY with FIXED STATS + 2MB HUGE PAGE SUPPORT
+  # ==========================================================================
+  # Re-runs all v8 temporal configs with fixed simulator code:
+  #   - tagMMUPrefetch bug fix (L2 accuracy stats now correct)
+  #   - Per-fill-source stats, timeliness histogram, latency saved, bandwidth
+  #   - spec-evict propagation to L2
+  #   - Unmapped-page guard (no learning on faults)
+  #   - 2MB huge-page prefetch plane (PMD-level payload)
+  # New configs: aggressive temporal PTE at frag=0.0 and frag=1.0 (2MB test)
+  # Baselines: reservethp at frag=0.0 (4KB) and frag=1.0 (2MB)
+  coverage-vs-accuracy-v9:
+    description: "V9: All v8 temporal configs + 2MB huge-page plane + fixed accuracy stats"
+    configs:
+      - temporal-pte-v8-core-aggressiveness
+      - temporal-pte-v8-chain-gating
+      - temporal-pte-v8-chain-depth
+      - temporal-pte-v8-region-shift
+      - temporal-pte-v8-payload-capacity
+      - temporal-pte-v8-spectrum-conservative
+      - temporal-pte-v8-spectrum-moderate
+      - temporal-pte-v8-spectrum-balanced
+      - temporal-pte-v8-spectrum-aggressive
+      - temporal-pte-v8-spectrum-ultra-aggressive
+      - temporal-pte-v8-decay-x-region
+      - temporal-pte-v8-policy-x-agg
+      - temporal-pte-v9-2mb-frag0
+      - temporal-pte-v9-2mb-frag1
+      - reservethp-full-fragmentation
+      - reservethp-no-fragmentation
+      - reservethp-low-fragmentation
+    trace_suite: top250
+    instruction_count: 300000000
+    enable_icache_for: ["srv"]
+    slurm_partitions: ["cpu_part", "bio_part"]
+    instruction_count_overrides:
+      top250_virtuoso.tlist: 100000000
 
   # ==========================================================================
   # RECENCY TLB PREFETCHER EXPERIMENT SUITES
@@ -896,15 +1913,163 @@ experiment_suites:
     trace_suite: randacc
     instruction_count: 2000000
 
+  smoke-test-prefetchers-all:
+    description: "Smoke test: all TLB prefetchers including TemporalPTE (2M instr)"
+    configs: [atp-baseline, dp-baseline, recency-baseline, temporal-pte, temporal-pte-pc-cond]
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  temporal-pte-smoke-test:
+    description: "Smoke test for TemporalPTE: pte-only / default / pc-cond / v5-best / backing-store / stride — 2M instr on randacc"
+    configs:
+      - reservethp-full-fragmentation          # no-prefetch baseline
+      - temporal-pte-pte-only                  # PTE-only mode (no transition learning)
+      - temporal-pte                           # default learn_pte_on_transitions
+      - temporal-pte-pc-cond                   # pc_cond_learn, 1K PC table
+      - temporal-pte-v5-pc-table-sweep         # best non-backing config (sweeps pc_table_size)
+      - temporal-pte-v5-backing-store          # 64-entry HW + radix backing store
+      - temporal-pte-v5-stride-backing-grid    # stride x backing 2×2 grid
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  temporal-pte-smoke-test-sierra:
+    description: "Smoke test for TemporalPTE on sierra.a.6_0005 (Google workload) — 2M instr"
+    configs:
+      - reservethp-full-fragmentation          # no-prefetch baseline
+      - temporal-pte-pte-only                  # PTE-only mode (no transition learning)
+      - temporal-pte                           # default learn_pte_on_transitions
+      - temporal-pte-pc-cond                   # pc_cond_learn, 1K PC table
+      - temporal-pte-v5-pc-table-sweep         # best non-backing config (sweeps pc_table_size)
+      - temporal-pte-v5-backing-store          # 64-entry HW + radix backing store
+      - temporal-pte-v5-stride-backing-grid    # stride x backing 2×2 grid
+    trace_suite: sierra_single
+    instruction_count: 2000000
+
+  # ==========================================================================
+  # TEMPORAL PTE PREFETCHER EXPERIMENT SUITES
+  # ==========================================================================
+
+  temporal-pte-all-modes:
+    description: "Temporal PTE prefetcher: all modes vs reservethp baselines"
+    configs: [temporal-pte, temporal-pte-pte-only, temporal-pte-pc-cond, temporal-pte-aggressive]
+    trace_suite: top250
+    instruction_count: 300000000
+
+  temporal-pte-pc-cond-sweeps:
+    description: "Temporal PTE prefetcher with PC-conditioned learning vs baselines"
+    configs: [temporal-pte-pc-cond-pc-table-sweep, temporal-pte-pc-cond-depth-sweep, temporal-pte-pc-cond-global-slot-off]
+    trace_suite: top250
+    instruction_count: 300000000
+
+  temporal-pte-gslot-off-depth:
+    description: "Global slot off, 8K PC table, depth sweep with varying prefetches_per_depth"
+    configs: [temporal-pte-pc-cond-gslot-off-depth-sweep, temporal-pte-pc-cond-gslot-off-depth-ppd2, temporal-pte-pc-cond-gslot-off-depth-ppd4, temporal-pte-pc-cond-gslot-off-depth-ppd8]
+    trace_suite: top250
+    instruction_count: 300000000
+
+  temporal-pte-gslot-off-ppd4:
+    description: "Global slot off, 8K PC table, ppd=4, depth sweep (standalone)"
+    configs: [temporal-pte-pc-cond-gslot-off-depth-ppd4-conf-sweep]
+    trace_suite: top250
+    instruction_count: 300000000
+
+  temporal-pte-gslot-off-ppd4-v2:
+    description: "V2: PQ dedup + TLB residency + single-walk. Same sweep as v1."
+    configs: [temporal-pte-pc-cond-gslot-off-depth-ppd4-conf-sweep-v2]
+    trace_suite: top250
+    instruction_count: 300000000
+
+  temporal-pte-gslot-off-ppd4-v3:
+    description: "V3: Fixed 4-channel DRAM + timeliness fix."
+    configs: [temporal-pte-pc-cond-gslot-off-depth-ppd4-conf-sweep-v3]
+    trace_suite: top250
+    instruction_count: 300000000
+
+  temporal-pte-gslot-off-ppd4-v4:
+    description: "V4: conf_init {0,1,2,3} x depth 0-4."
+    configs: [temporal-pte-pc-cond-gslot-off-depth-ppd4-conf-sweep-v4]
+    trace_suite: top250
+    instruction_count: 300000000
+
+  temporal-pte-v5:
+    description: "V5: (i) PC table size sweep, (ii) small cache + radix backing, (iii) stride x backing grid."
+    configs: [temporal-pte-v5-pc-table-sweep, temporal-pte-v5-backing-store, temporal-pte-v5-stride-backing-grid]
+    trace_suite: top250
+    instruction_count: 300000000
+
+  # ==========================================================================
+  # REVELATOR EXPERIMENT SUITES
+  # ==========================================================================
+
+  revelator-ptw-vs-spec:
+    description: "Revelator PTW-vs-spec timing and late mispredict stats"
+    configs: [revelator]
+    trace_suite: victima
+    instruction_count: 10000000
+
+  revelator-3hash-utilization:
+    description: "Revelator 3 hashes, memory utilization sweep (0%/20%/40%/60%/80%)"
+    configs: [revelator-3hash-utilization-sweep]
+    trace_suite: victima
+    instruction_count: 10000000
+
+  revelator-3hash-utilization-top250:
+    description: "Revelator 3 hashes, utilization sweep across all top250 workloads"
+    configs: [revelator-3hash-utilization-sweep]
+    trace_suite: top250
+    instruction_count: 10000000
+
   smoke-test-userspace:
     description: "Smoke test: userspace MimicOS — baseline and reservethp (2M instr)"
     configs: [userspace-baseline, userspace-reservethp]
     trace_suite: randacc
     instruction_count: 2000000
 
-  smoke-test-all:
-    description: "Comprehensive smoke test: all major configs including userspace MimicOS (2M instr)"
-    configs: [no-translation, reservethp-full-fragmentation, reservethp-no-fragmentation, spot, utopia, asap, atp-baseline, dp-baseline, recency-baseline, spec-oracle, pomtlb, dmt, spectlb, rmm, ech-baseline, hdc-baseline, ht-baseline, reservethp-ech, reservethp-hdc, reservethp-ht, userspace-baseline, userspace-reservethp]
+  smoke-test-os-daemons:
+    description: "Smoke test: all OS daemons (kcompactd, khugepaged, kswapd, combined) (2M instr)"
+    configs: [reservethp-kcompactd, reservethp-khugepaged, reservethp-kswapd, reservethp-all-daemons]
     trace_suite: randacc
     instruction_count: 2000000
+
+  smoke-test-revelator:
+    description: "Smoke test: Revelator speculative TLB engine (2M instr)"
+    configs: [revelator-smoke]
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  smoke-test-all:
+    description: "Comprehensive smoke test: all major configs (2M instr)"
+    configs: [no-translation, reservethp-full-fragmentation, reservethp-no-fragmentation, spot, utopia, asap, atp-baseline, dp-baseline, recency-baseline, temporal-pte, spec-oracle, pomtlb, dmt, spectlb, rmm, ech-baseline, hdc-baseline, ht-baseline, reservethp-ech, reservethp-hdc, reservethp-ht, userspace-baseline, userspace-reservethp, reservethp-kcompactd, reservethp-khugepaged, reservethp-kswapd, reservethp-all-daemons, revelator-smoke]
+    trace_suite: randacc
+    instruction_count: 2000000
+
+  # --- v2: Baseline vs DP vs Best Temporal (backing store + stride) ---
+  prefetcher-comparison-v2:
+    description: "V2 comparison: no-prefetch baseline (frag0.0) vs distance prefetcher vs best temporal (conf_init=3, depth=3, backing store, stride)"
+    configs: [reservethp-full-fragmentation, dp-baseline, temporal-pte-best-backing-stride]
+    trace_suite: top250
+    instruction_count: 300000000
+    enable_icache_for: ["srv"]
+    slurm_partitions: ["cpu_part", "bio_part"]
+    instruction_count_overrides:
+      top250_virtuoso.tlist: 100000000
+
+  # --- V6: Confidence policy sweep experiment ---
+  confidence-policy-sweep-v6:
+    description: "V6: Sweep confidence policies + decay parameters (baseline/temporal-best/dp already in exp_prefetcher_comparison_v2)"
+    configs:
+      - temporal-pte-v6-policy-sweep
+      - temporal-pte-v6-decay-strength
+      - temporal-pte-v6-bump-amount
+      - temporal-pte-v6-init-x-policy
+      - temporal-pte-v6-depth-x-policy
+      - temporal-pte-v6-chain-tuning
+      - temporal-pte-v6-competitive-full
+      - temporal-pte-v6-exponential-sweep
+    trace_suite: top250
+    instruction_count: 300000000
+    enable_icache_for: ["srv"]
+    slurm_partitions: ["cpu_part", "bio_part"]
+    instruction_count_overrides:
+      top250_virtuoso.tlist: 100000000
 

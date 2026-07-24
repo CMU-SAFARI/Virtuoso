@@ -124,6 +124,141 @@ all_names = buildstack.get_names(all_items)
 def get_all_names():
   return all_names
 
+def compute_mmu_adjunct_energy(stats, cfg, ncores, seconds):
+  """Energy for MMU structures McPAT doesn't natively model:
+  L2 unified TLB, page-walk cache (PWC) levels, and Utopia metadata.
+
+  Per-access energies are read from cfg [power/mmu_adjunct] if present,
+  otherwise fall back to defaults at 22nm (CACTI-style estimates).
+  Override examples in a cfg file:
+    [power/mmu_adjunct]
+    l2_tlb_per_access_pj      = 30
+    pwc_per_access_pj         = 5
+    utopia_fpa_per_access_pj  = 3
+    utopia_tar_per_access_pj  = 5
+    utlb_per_access_pj        = 40
+    victima_probe_per_access_pj = 8
+
+  Returns dict {component: energy_J} with dynamic energy.  Static is
+  considered folded into the per-access numbers (small for these tiny
+  arrays).
+  """
+  def get(key):
+    v = stats.get(key, [0]*ncores)
+    return sum(v) if isinstance(v, list) else v
+
+  def cfg_pj(key, default):
+    if cfg is None: return default
+    try:
+      return float(sniper_config.get_config_default(cfg, 'power/mmu_adjunct/' + key, default)) * 1e-12
+    except Exception:
+      return default * 1e-12
+
+  # Per-access energies (J).  Defaults are 22nm CACTI-style estimates for
+  # small CAM/SRAM arrays, derived for our specific TLB/PWC sizes.
+  E = {
+    'l2_tlb_per_access':       cfg_pj('l2_tlb_per_access_pj',       30),
+    'pwc_per_access':          cfg_pj('pwc_per_access_pj',           5),
+    'utopia_fpa_per_access':   cfg_pj('utopia_fpa_per_access_pj',    3),
+    'utopia_tar_per_access':   cfg_pj('utopia_tar_per_access_pj',    5),
+    'utlb_per_access':         cfg_pj('utlb_per_access_pj',         40),
+    'victima_block_access':    cfg_pj('victima_probe_per_access_pj', 8),
+  }
+
+  out = {}
+
+  # L2 unified TLB: total accesses = sum L1 TLB misses (= L2 TLB lookups).
+  # Classic walker exposes mmu.tlb_misses_*; Utopia cells expose
+  # mmu.l2_tlb_misses (single counter).  Fall back as available.
+  l2_tlb_acc = (get('mmu.tlb_misses_data')
+                + get('mmu.tlb_misses_instruction')
+                + get('mmu.l2_tlb_misses'))
+  if l2_tlb_acc > 0:
+    out['l2_tlb'] = l2_tlb_acc * E['l2_tlb_per_access']
+
+  # PWC: each page table walk visits every PWC level once.
+  pwc_acc = 0
+  for lvl in range(2, 6):  # PWC levels are typically 2..4 (or 5)
+    pwc_acc += get('pwc_L%d.access' % lvl)
+  if pwc_acc > 0:
+    out['pwc'] = pwc_acc * E['pwc_per_access']
+
+  # Utopia metadata: FPA (fingerprint) + TAR (tag) per RestSeg lookup.
+  # These cells only exist when Utopia is the allocator.
+  fpa_acc = get('utopia.restseg0.fpa_accesses') + get('utopia.restseg1.fpa_accesses')
+  tar_acc = get('utopia.restseg0.tar_accesses') + get('utopia.restseg1.tar_accesses')
+  utlb_acc = get('utopia.utlb.accesses')
+  if fpa_acc:  out['utopia_fpa'] = fpa_acc * E['utopia_fpa_per_access']
+  if tar_acc:  out['utopia_tar'] = tar_acc * E['utopia_tar_per_access']
+  if utlb_acc: out['utlb']       = utlb_acc * E['utlb_per_access']
+
+  # Victima TLB blocks live as cache lines in L2 -- their access cost is
+  # already in McPAT's L2 cache energy, so we DON'T double-count here.
+  # We do track a small "tagging" overhead per probe.
+  vic_probes = get('mmu.victima_leaf_probes')
+  if vic_probes > 0:
+    out['victima_probe_tagging'] = vic_probes * E['victima_block_access']
+
+  return out if out else None
+
+
+def aggregate_subcategory_stats(stats, ncores):
+  """Sniper writes cache stats split by access subtype (e.g.
+  L1-D.loads-data, L1-D.loads-utopia_radix_leaf, ...) without an
+  unsuffixed aggregate.  McPAT's templates expect the unsuffixed form
+  (L1-D.loads, etc.).
+
+  IMPORTANT: in this MMU model the L1D is BYPASSED for page-table data,
+  Utopia metadata (FPA/TAR/radix internal/radix leaf), and Victima TLB
+  blocks.  Those subtypes are issued directly into L2 by the MMU.  So:
+    L1-D.loads     := L1-D.loads-data only
+    L1-I.loads     := L1-I.loads-instruction only
+    L2.loads       := L2.loads-data + L2.loads-page_table_data
+                       + L2.loads-utopia_* + L2.loads-page_table_instruction
+  And similarly for stores / load-misses / store-misses.
+  """
+  L1D_SUBTYPES = ['data']                # everything else bypasses L1D
+  L1I_SUBTYPES = ['instruction']
+  L2_SUBTYPES  = ['data', 'instruction',
+                  'page_table_data', 'page_table_instruction',
+                  'utopia_fp', 'utopia_radix_internal',
+                  'utopia_radix_leaf', 'utopia_tar', '??']
+
+  def _agg(prefix, subtypes):
+    agg = [0] * ncores
+    for suf in subtypes:
+      key = f'{prefix}-{suf}'
+      vals = stats.get(key)
+      if not vals: continue
+      for c in range(min(ncores, len(vals))):
+        agg[c] += vals[c]
+    stats[prefix] = agg
+
+  for op in ('loads', 'stores', 'load-misses', 'store-misses'):
+    if f'L1-D.{op}' not in stats: _agg(f'L1-D.{op}', L1D_SUBTYPES)
+    if f'L1-I.{op}' not in stats: _agg(f'L1-I.{op}', L1I_SUBTYPES)
+    if f'L2.{op}'   not in stats: _agg(f'L2.{op}',   L2_SUBTYPES)
+    if f'L3.{op}'   not in stats: _agg(f'L3.{op}',   L2_SUBTYPES)
+
+  # itlb.miss / dtlb.miss aliases for the new mmu.* split.  Different MMU
+  # backends expose different stats: classic walker uses mmu.tlb_misses_*,
+  # Utopia-style cells expose mmu.l2_tlb_misses (single counter, mostly data).
+  # Provide sensible fallbacks so McPAT's itlb.miss/dtlb.miss lookups work.
+  def first_present(*keys):
+    for k in keys:
+      if k in stats:
+        return stats[k]
+    return None
+
+  if 'itlb.miss' not in stats:
+    v = first_present('mmu.tlb_misses_instruction')
+    stats['itlb.miss'] = v if v is not None else [0] * ncores
+
+  if 'dtlb.miss' not in stats:
+    v = first_present('mmu.tlb_misses_data', 'mmu.l2_tlb_misses')
+    stats['dtlb.miss'] = v if v is not None else [0] * ncores
+
+
 def main(jobid, resultsdir, outputfile, powertype = 'dynamic', config = None, no_graph = False, partial = None, print_stack = True, return_data = False):
   tempfile = outputfile + '.xml'
 
@@ -131,6 +266,9 @@ def main(jobid, resultsdir, outputfile, powertype = 'dynamic', config = None, no
   if config:
     results['config'] = sniper_config.parse_config(open(config, "r").read(), results['config'])
   stats = sniper_stats.SniperStats(resultsdir = resultsdir, jobid = jobid)
+
+  ncores = int(results['config']['general/total_cores'])
+  aggregate_subcategory_stats(results['results'], ncores)
 
   power, nuca_at_level = edit_XML(stats, results['results'], results['config'])
   power = [v[0] for v in power]
@@ -212,6 +350,10 @@ def main(jobid, resultsdir, outputfile, powertype = 'dynamic', config = None, no
   time0_begin = results['results']['global.time_begin']
   time0_end = results['results']['global.time_end']
   seconds = (time0_end - time0_begin)/1e15
+  # Save stats + cfg reference before `results` is overwritten -- needed for
+  # the MMU adjunct (post-McPAT TLB/PWC/Utopia energy).
+  stats_for_breakdown = results['results']
+  cfg_for_breakdown = results['config']
   results = power_stack(power_dat, powertype)
   # Plot stack
   plot_labels = []
@@ -260,6 +402,22 @@ def main(jobid, resultsdir, outputfile, powertype = 'dynamic', config = None, no
         print('  %-12s    %6.2f W   %6.2f %sJ    %6.2f%%' % ('cache', float(total_cache), energy, energy_scale, 100 * float(total_cache) / total))
         energy, energy_scale = sniper_lib.scale_sci(float(total) * seconds)
         print('  %-12s    %6.2f W   %6.2f %sJ    %6.2f%%' % ('total', float(total), energy, energy_scale, 100 * float(total) / total))
+
+        # ---- MMU adjunct: L2 TLB + PWC + Utopia metadata energy ----
+        # McPAT's per-core schema only includes a single L1 TLB.  We model
+        # the deeper structures (L2 unified TLB, PWC levels, Utopia FPA/TAR)
+        # post-hoc with simple per-access energies, configurable via the
+        # [power/mmu_adjunct] cfg section.
+        mmu_breakdown = compute_mmu_adjunct_energy(
+            stats_for_breakdown, cfg_for_breakdown, ncores, seconds)
+        if mmu_breakdown is not None:
+          print()
+          print('  --- MMU adjunct (post-McPAT) ---')
+          tot_mmu = 0.0
+          for name, e in mmu_breakdown.items():
+            print('  %-18s    %6.3f W   %6.2f mJ' % (name, e/seconds, e*1000))
+            tot_mmu += e
+          print('  %-18s    %6.3f W   %6.2f mJ' % ('mmu_total', tot_mmu/seconds, tot_mmu*1000))
 
   if not no_graph:
     # Use Gnuplot to make a stacked bargraphs of these cpi-stacks
@@ -415,7 +573,17 @@ def edit_XML(statsobj, stats, cfg):
   DRAM_writes = int(stats['dram.writes'][0])
   #branch_misprediction = stats['branch_predictor.num-incorrect'][1]
 
-  template=readTemplate(ncores, num_l2s, private_l2s, num_l3s, technology_node)
+  # ---- TLB / PWC sizing (read from cfg, used by readTemplate / templates) ----
+  tlb_sizes = {
+    'l1_dtlb_entries':  int(sniper_config.get_config_default(cfg, 'perf_model/mmu/tlb_level_1/tlb1/size', 64)),
+    'l1_dtlb_2mb_entries': int(sniper_config.get_config_default(cfg, 'perf_model/mmu/tlb_level_1/tlb2/size', 64)),
+    'l1_itlb_entries':  int(sniper_config.get_config_default(cfg, 'perf_model/mmu/tlb_level_1/tlb3/size', 64)),
+    'l2_tlb_entries':   int(sniper_config.get_config_default(cfg, 'perf_model/mmu/tlb_level_2/tlb1/size', 2048)),
+    'pwc_entries_per_level': int(sniper_config.get_config_default(cfg, 'perf_model/mmu/pwc/entries', [32, 32, 32])[0]),
+    'pwc_levels':       int(sniper_config.get_config_default(cfg, 'perf_model/mmu/pwc/levels', 3)),
+  }
+
+  template=readTemplate(ncores, num_l2s, private_l2s, num_l3s, technology_node, tlb_sizes)
   #for j in range(ncores):
   for i in range(len(template)-1):
     #for j in range(ncores):
@@ -581,8 +749,12 @@ def edit_XML(statsobj, stats, cfg):
               template[i][0] = template[i][0] % int(stats['network.shmem-1.bus.num-requests'][0])  #assumption
             elif 'network.shmem-1.bus.num-packets' in stats:
               template[i][0] = template[i][0] % int(stats['network.shmem-1.bus.num-packets'][0])  #assumption
+            elif 'bus.num-requests' in stats:
+              template[i][0] = template[i][0] % int(stats['bus.num-requests'][0])
             else:
-              template[i][0] = template[i][0] % int(stats['bus.num-requests'][0])  #assumption
+              # Sniperspace + parametric_dram_directory_msi has no global bus
+              # stat -- use NUCA queue requests as a proxy.
+              template[i][0] = template[i][0] % int(stats.get('nuca-cache-queue.num-requests', [0])[0])
           elif template[i][1][0]=="NoC.duty_cycle":
             if 'network.shmem-1.mesh.link-left.total-time-used' in stats:
               DIRECTIONS = ('up', 'down', 'left', 'right')
@@ -598,8 +770,10 @@ def edit_XML(statsobj, stats, cfg):
               template[i][0] = template[i][0] % .5
             elif 'network.shmem-1.bus.time-used' in stats:
               template[i][0] = template[i][0] % min(1, cycles_scale[core]*float(stats['network.shmem-1.bus.time-used'][0])/max_system_cycles)
-            else:
+            elif 'bus.time-used' in stats:
               template[i][0] = template[i][0] % min(1, cycles_scale[core]*float(stats['bus.time-used'][0])/max_system_cycles)
+            else:
+              template[i][0] = template[i][0] % min(1, cycles_scale[core]*float(stats.get('nuca-cache-queue.total-time-used', [0])[0])/max_system_cycles)
           elif template[i][1][0]=="loads":
             template[i][0] = template[i][0] % int(stats['L1-D.loads'][core])
           elif template[i][1][0]=="stores":
@@ -786,7 +960,10 @@ def edit_XML(statsobj, stats, cfg):
             template[i][0] = template[i][0] % tuple(l3conf)
   return template, nuca_at_level
 #----------
-def readTemplate(ncores, num_l2s, private_l2s, num_l3s, technology_node):
+def readTemplate(ncores, num_l2s, private_l2s, num_l3s, technology_node, tlb_sizes=None):
+  if tlb_sizes is None:
+    tlb_sizes = {'l1_itlb_entries': 128, 'l1_dtlb_entries': 256,
+                 'l2_tlb_entries': 0, 'pwc_entries_per_level': 0, 'pwc_levels': 0}
   Count = 0
   template=[]
   template.append(["<?xml version=\"1.0\" ?>",""])
@@ -1017,7 +1194,7 @@ def readTemplate(ncores, num_l2s, private_l2s, num_l3s, technology_node):
 #-------------------------------------------------------------------------------------------------------------------------
     template.append(["\t\t\t</component>",""])
     template.append(["\t\t\t<component id=\"system.core%i.itlb\" name=\"itlb\">"%iCount,""])
-    template.append(["\t\t\t\t<param name=\"number_entries\" value=\"128\"/>",""])                #not in graphite (whether correct)
+    template.append(["\t\t\t\t<param name=\"number_entries\" value=\"%d\"/>" % tlb_sizes['l1_itlb_entries'],""])
     template.append(["\t\t\t\t<stat name=\"total_accesses\" value=\"%i\"/>",["itlb.total_accesses","stat",iCount]])
     template.append(["\t\t\t\t<stat name=\"total_misses\" value=\"%i\"/>",["itlb.total_misses","stat",iCount]])
     template.append(["\t\t\t\t<stat name=\"conflicts\" value=\"0\"/>",""])
@@ -1039,7 +1216,8 @@ def readTemplate(ncores, num_l2s, private_l2s, num_l3s, technology_node):
     template.append(["\t\t\t\t<stat name=\"conflicts\" value=\"0\"/>",""] )
     template.append(["\t\t\t</component>",""])
     template.append(["\t\t\t<component id=\"system.core%i.dtlb\" name=\"dtlb\">"%iCount,""])
-    template.append(["\t\t\t\t<param name=\"number_entries\" value=\"256\"/>",""])
+    # Sum 4KB-page L1 dTLB and 2MB-page L1 dTLB entries for total dTLB area.
+    template.append(["\t\t\t\t<param name=\"number_entries\" value=\"%d\"/>" % (tlb_sizes['l1_dtlb_entries'] + tlb_sizes['l1_dtlb_2mb_entries']),""])
     template.append(["\t\t\t\t<stat name=\"total_accesses\" value=\"%i\"/>",["dtlb.total_accesses","stat",iCount]])
     template.append(["\t\t\t\t<stat name=\"total_misses\" value=\"%i\"/>",["dtlb.total_misses","stat",iCount]])
     template.append(["\t\t\t\t<stat name=\"conflicts\" value=\"0\"/>",""])

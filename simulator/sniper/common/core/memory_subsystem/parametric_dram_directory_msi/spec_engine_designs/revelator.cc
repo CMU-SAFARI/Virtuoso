@@ -19,7 +19,7 @@
 
 namespace ParametricDramDirectoryMSI
 {
-    Revelator::Revelator(Core *core, MemoryManagerBase *_memory_manager, ShmemPerfModel *shmem_perf_model, String _name) : SpecEngineBase(core, _memory_manager, shmem_perf_model, _name), name(_name), memory_manager(_memory_manager)
+    Revelator::Revelator(Core *core, MemoryManagerBase *_memory_manager, ShmemPerfModel *shmem_perf_model, String _name) : SpecEngineBase(core, _memory_manager, shmem_perf_model, _name), name(_name), m_disabled(false), memory_manager(_memory_manager)
     {
 #ifdef DEBUG_REVELATOR
         std::cout << "[Revelator] Initializing Revelator" << std::endl;
@@ -44,8 +44,16 @@ namespace ParametricDramDirectoryMSI
         String allocator_name = Sim()->getMimicOS()->getMemoryAllocator()->getName();
         if (allocator_name != "revelator" && allocator_name != "revelator_simple")
         {
-            std::cout << "[Revelator] Memory allocator is not revelator or revelator_simple (got: " << allocator_name << ")" << std::endl;
-            exit(1);
+            // Phase 1a fullstack composition: Revelator engine constructed
+            // alongside an incompatible allocator (e.g., reserve_thp, utopia).
+            // Soft-disable: keep the engine object alive but make every
+            // method a no-op so the diamond cells can run.  Phase 1b's
+            // way-prediction integration replaces this stub with proper
+            // Revelator-on-Utopia behaviour.
+            std::cout << "[Revelator] Memory allocator is not revelator or revelator_simple (got: "
+                      << allocator_name << ") — engine soft-disabled." << std::endl;
+            m_disabled = true;
+            return;
         }
 
         log_file_name = std::string(name.c_str()) + ".revelator.log";
@@ -93,6 +101,9 @@ namespace ParametricDramDirectoryMSI
         // Reset per-invocation timing tracking
         m_last_spec_completion = SubsecondTime::Zero();
         m_last_prediction_correct = false;
+
+        // Soft-disabled mode (Phase 1a): incompatible allocator → no-op.
+        if (m_disabled) return;
 
 #ifdef DEBUG_REVELATOR
         log_file << "[Revelator] Invoking Revelator with address " << address << std::endl;

@@ -122,6 +122,148 @@ static inline uint64_t inject_drift_cycles(int n) {
     return _cold_chain_reads(s_drift_pool, kLines, 0xDEADBEEFCAFEBABEULL, n);
 }
 
+/* ---------- Phase 9-B page-table install cost model -----------------------
+ * Empirical real-Linux fault_class_bench (kratos20, kernel 5.15) shows
+ * that anon-write faults at PMD/PUD chunk boundaries cost more than
+ * steady faults because the kernel must allocate and zero a fresh
+ * page-table page (one for level 1 / two for level 2):
+ *   level 0 (steady)      p50 1.39 µs     baseline
+ *   level 1 (PMD install) p50 2.54 µs     +1.15 µs ≈ +3300 cyc @ 2.9 GHz
+ *   level 2 (PUD install) p50 3.72 µs     +2.33 µs ≈ +6700 cyc total
+ * MimicOS's normal phase chain has no separate accounting for this
+ * cost — the LinuxPhase helpers run identically regardless of whether
+ * a PMD/PUD allocation actually happened.  This helper fires from
+ * `poll_for_signal` inside the PHYS_ALLOC bracket whenever the fault
+ * fingerprint's `pgtable_install_level > 0`, charging the level-
+ * specific Δ over steady.
+ *
+ * Why two pools (pmd_install_pool, pud_install_pool):
+ *   The kernel allocates PMD and PUD page tables from independent
+ *   slabs / pcp pools, so their cache lines don't share state.
+ *   Using a single pool would let the PUD-install case re-hit cache
+ *   lines warmed by a recent PMD-install — collapsing the two-level
+ *   cost difference back into one.
+ *
+ * Calibration (kIters_pmd = 14, kIters_pud_extra = 14):
+ *   Each `_cold_chain_reads` iteration lands ~237 cyc on kratos20
+ *   (the same anchor as PcpAllocState::kIters).  14 iters → +3300
+ *   cyc, matching the empirical level-1 Δ; level 2 runs both the
+ *   PMD chain AND a second pud-pool chain → +6700 cyc total.
+ *   Tunable via PgtableInstallState::iters_pmd_override /
+ *   iters_pud_extra_override (-1 ⇒ use default).  No capture hooks
+ *   here: the install dimension is deterministic-from-VA, not
+ *   workload-dependent, so trace-capture for replay isn't needed —
+ *   the analytical replay path's barrier-advance handles it via
+ *   the per-profile mean. */
+struct PgtableInstallState {
+    static constexpr size_t POOL_BYTES = 64 * 1024;   /* 64 KiB each */
+    static constexpr size_t LINES      = POOL_BYTES / 64;
+    /* Tuned 2026-05-08 on kratos20 against the fault_class_bench
+       deltas (PMD +3335 cyc, PUD +6757 cyc total).  At kIters_pmd=14
+       the helper overshot PMD by 42 % (effective per-iter cost ~412
+       cyc, higher than the 237 cyc anchor because the per-process
+       install pools start cold).  Halving to 8 lands the PMD Δ at
+       ~3300 cyc; PUD-extra 13 lands the cumulative Δ at ~6700 cyc. */
+    static constexpr int    kIters_pmd        = 8;
+    static constexpr int    kIters_pud_extra  = 13;
+
+    alignas(64) uint8_t pmd_install_pool[POOL_BYTES];
+    alignas(64) uint8_t pud_install_pool[POOL_BYTES];
+    uint64_t cursor = 0;
+    int iters_pmd_override       = -1;
+    int iters_pud_extra_override = -1;
+};
+
+/* level: 0 = none (no-op), 1 = PMD install, 2 = PUD install (also
+   includes a PMD chain because every PUD install logically requires a
+   subordinate PMD install). */
+static inline void install_pgtable_cost(PgtableInstallState& s,
+                                        uint64_t va, uint8_t level) {
+    if (level == 0) return;
+    uint64_t seed = (s.cursor++) ^ va;
+    int n_pmd = (s.iters_pmd_override >= 0)
+        ? s.iters_pmd_override : PgtableInstallState::kIters_pmd;
+    int n_pud_extra = (s.iters_pud_extra_override >= 0)
+        ? s.iters_pud_extra_override : PgtableInstallState::kIters_pud_extra;
+
+    static volatile uint64_t sink;
+    /* Always pay the PMD-install chain at level >= 1. */
+    sink = _cold_chain_reads(s.pmd_install_pool,
+                             PgtableInstallState::LINES, seed, n_pmd);
+    /* Level 2 adds the PUD-install chain on top, against an
+       independent pool so its cache lines don't alias the PMD chain. */
+    if (level >= 2) {
+        sink = _cold_chain_reads(s.pud_install_pool,
+                                 PgtableInstallState::LINES,
+                                 seed ^ 0x9E3779B97F4A7C15ULL,
+                                 n_pud_extra);
+    }
+    (void)sink;
+}
+
+/* ---------- Phase 9-E PCP buddy-refill cost model -------------------------
+ * Empirical real-Linux per-fault eBPF measurement (kprobe:rmqueue_bulk +
+ * uprobe wrappers, see experiments/calibration/fault_bench/pcp_class.bt)
+ * on kratos20 anon_write, n=10 000:
+ *   PCP hit  (98.4%)  p50 4 092 cyc
+ *   PCP miss ( 1.6%)  p50 11 642 cyc        Δ = +7 550 cyc (+185%)
+ *
+ * The Phase-9 fingerprint already partitions the registry along
+ * pcp_hit_or_miss, but until this helper landed the simulator's hit
+ * and miss profiles converged to nearly identical means (~5 500 cyc
+ * each) because pcp_alloc_cost ran identically regardless of the
+ * allocator's actual fast-path outcome.  This helper fires AFTER
+ * locked_allocate returns, gated on
+ * `physical_memory_allocator->last_alloc_fastpath == 0` (= miss),
+ * charging the buddy-refill Δ on top of the regular pcp_alloc_cost.
+ *
+ * Mechanism imitated:
+ *   __rmqueue_pcplist returns NULL → __rmqueue_smallest walks the
+ *   buddy free-list, splits a higher-order page if needed, and
+ *   refills the per-CPU pageset with a batch (~32-128 pages).  The
+ *   cost is dominated by the dep-chained free-list walk and a
+ *   zone_lock acquire/release pair.
+ *
+ * Calibration (kIters = 11, tuned 2026-05-08 vs first miss profile
+ * with 4 samples):
+ *   At kIters=18 the helper overshot the target by +55 % (mean miss
+ *   17 133 cyc vs hit 5 412 cyc → Δ = +11 721 cyc, target Δ = +7 550
+ *   cyc).  Reason: misses are rare (~1 % rate on this workload), so
+ *   the buddy_refill_pool is *always* cold when the helper fires —
+ *   per-iter cost lands at ~660 cyc (cold-line latency), not the
+ *   ~412 cyc anchor seen on warmer pools.  kIters = 11 × 660 ≈
+ *   7 260 cyc, matching Linux Δ within 4 %.  Tunable via
+ *   iters_override (-1 ⇒ default). */
+struct BuddyRefillState {
+    static constexpr size_t POOL_BYTES = 64 * 1024;   /* 64 KiB */
+    static constexpr size_t LINES      = POOL_BYTES / 64;
+    static constexpr int    kIters     = 11;
+
+    alignas(64) uint8_t buddy_refill_pool[POOL_BYTES];
+    alignas(64) PaddedAtomic zone_lock[1024];
+    uint64_t cursor = 0;
+    int iters_override = -1;
+};
+
+static inline void buddy_refill_cost(BuddyRefillState& s, uint64_t va) {
+    uint64_t seed = (s.cursor++) ^ va;
+    int n = (s.iters_override >= 0) ? s.iters_override : BuddyRefillState::kIters;
+
+    static volatile uint64_t sink;
+    /* Dep-chained cold reads model __rmqueue_smallest's free-list walk
+       + the buddy-page-split chain.  Independent pool from
+       PcpAllocState::freelist_pool so the refill chain doesn't alias
+       lines warmed by the preceding pcp_alloc_cost call. */
+    sink = _cold_chain_reads(s.buddy_refill_pool,
+                             BuddyRefillState::LINES, seed, n);
+    (void)sink;
+
+    /* One atomic RMW models the zone_lock acquire/release pair around
+       the buddy refill (already-uncontended on a single-thread bench,
+       so cost is just the locked-cmpxchg latency). */
+    s.zone_lock[seed & 1023].val.fetch_add(1, std::memory_order_release);
+}
+
 /* ---------- Phase-2 trace capture hooks ----------------------------------
  * When set non-null by the fault-path driver, each LinuxPhase helper
  * appends one or more MemoryAccessTemplate entries describing what it

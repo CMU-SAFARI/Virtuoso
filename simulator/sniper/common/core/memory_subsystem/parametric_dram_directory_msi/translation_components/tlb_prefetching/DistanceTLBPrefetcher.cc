@@ -57,6 +57,14 @@ void DistanceTLBPrefetcher::registerAllStats(core_id_t core_id)
 	registerStatsMetric("dp_tlb", core_id, "prefetch_attempts",            &m_stats.prefetch_attempts);
 	registerStatsMetric("dp_tlb", core_id, "prefetch_successful",          &m_stats.prefetch_successful);
 	registerStatsMetric("dp_tlb", core_id, "prefetch_failed",              &m_stats.prefetch_failed);
+
+	// Chained-depth walk (max_depth > 1)
+	registerStatsMetric("dp_tlb", core_id, "chain_lookups",                &m_stats.chain_lookups);
+	registerStatsMetric("dp_tlb", core_id, "chain_row_hits",               &m_stats.chain_row_hits);
+	registerStatsMetric("dp_tlb", core_id, "chain_breaks_no_row",          &m_stats.chain_breaks_no_row);
+	registerStatsMetric("dp_tlb", core_id, "chain_breaks_no_slot",         &m_stats.chain_breaks_no_slot);
+	registerStatsMetric("dp_tlb", core_id, "chain_breaks_invalid_vpn",     &m_stats.chain_breaks_invalid_vpn);
+	registerStatsMetric("dp_tlb", core_id, "chain_predictions_issued",     &m_stats.chain_predictions_issued);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -68,7 +76,8 @@ DistanceTLBPrefetcher::DistanceTLBPrefetcher(
 	ShmemPerfModel *_shmem_perf_model, String name,
 	uint32_t page_shift, uint32_t num_rows,
 	uint32_t num_slots, uint32_t assoc,
-	bool model_prefetch_walks)
+	bool model_prefetch_walks,
+	uint32_t max_depth)
 	: TLBPrefetcherBase(_core, _memory_manager, _shmem_perf_model, name),
 	  m_page_shift(page_shift),
 	  m_num_rows(num_rows),
@@ -80,12 +89,14 @@ DistanceTLBPrefetcher::DistanceTLBPrefetcher(
 	  m_have_last_distance(false),
 	  m_last_distance(0),
 	  m_model_prefetch_walks(model_prefetch_walks),
+	  m_max_depth(max_depth),
 	  m_stats{}
 {
 	assert(m_assoc > 0 && "assoc must be > 0");
 	assert(m_num_rows > 0 && "num_rows must be > 0");
 	assert(m_num_slots > 0 && "num_slots must be > 0");
 	assert(m_num_rows % m_assoc == 0 && "num_rows must be divisible by assoc");
+	assert(m_max_depth >= 1 && "max_depth must be >= 1");
 
 	// Allocate table: m_num_sets * m_assoc rows, each with m_num_slots slots
 	m_table.resize(m_num_sets * m_assoc);
@@ -463,6 +474,56 @@ std::vector<query_entry> DistanceTLBPrefetcher::performPrefetch(
 		m_stats.table_hits++;
 		issuePredictionsFromRow(*hit_row, vpn, eip, lock,
 								modeled, count, pt, result);
+
+		// ── 1b) Chained Markov walk (max_depth > 1) ──────────────
+		// Follow the MRU successor distance: advance the base VPN by
+		// it, re-key the table with it, and issue that row's
+		// predictions from the advanced VPN.  Each level is one more
+		// speculative step ahead of the demand miss stream.
+		DPRow   *cur_row  = hit_row;
+		uint64_t base_vpn = vpn;
+		for (uint32_t depth = 2; depth <= m_max_depth; ++depth)
+		{
+			// MRU valid slot of the current row (lowest lru value).
+			const DPPredSlot *mru = nullptr;
+			for (uint32_t i = 0; i < m_num_slots; ++i)
+			{
+				const DPPredSlot &s = cur_row->slots[i];
+				if (s.valid && (!mru || s.lru < mru->lru))
+					mru = &s;
+			}
+			if (!mru)
+			{
+				m_stats.chain_breaks_no_slot++;
+				break;
+			}
+
+			int64_t next_dist = mru->predicted_distance;
+			int64_t next_vpn_signed = static_cast<int64_t>(base_vpn) + next_dist;
+			if (next_vpn_signed < 0)
+			{
+				m_stats.chain_breaks_invalid_vpn++;
+				break;
+			}
+			base_vpn = static_cast<uint64_t>(next_vpn_signed);
+
+			m_stats.chain_lookups++;
+			DPRow *next_row = nullptr;
+			if (!lookupRow(next_dist, next_row))
+			{
+				m_stats.chain_breaks_no_row++;
+				break;
+			}
+			m_stats.chain_row_hits++;
+
+			UInt64 issued_before = m_stats.predictions_issued;
+			issuePredictionsFromRow(*next_row, base_vpn, eip, lock,
+									modeled, count, pt, result);
+			m_stats.chain_predictions_issued +=
+				m_stats.predictions_issued - issued_before;
+
+			cur_row = next_row;
+		}
 	}
 	else
 	{

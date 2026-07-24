@@ -173,7 +173,8 @@ public:
 					   uint32_t enable_pref_bits, uint32_t select1_bits,
 					   uint32_t select2_bits,
 					   uint32_t masp_entries, uint32_t masp_assoc,
-					   uint32_t page_shift);
+					   uint32_t page_shift,
+					   uint32_t masp_lookahead = 1, uint32_t masp_degree = 1);
 	~AgileTLBPrefetcher() override;
 
 	// ── Main entry point ────────────────────────────────────────────
@@ -238,6 +239,8 @@ private:
 	uint32_t               m_masp_sets;
 	uint32_t               m_masp_assoc;
 	std::vector<uint32_t>  m_masp_rr_ptr;  // per-set round-robin pointer
+	uint32_t               m_masp_lookahead;  // first prefetch at VPN + lookahead*stride
+	uint32_t               m_masp_degree;     // number of stride steps prefetched
 
 	// ── Bookkeeping ─────────────────────────────────────────────────
 	bool m_current_instruction;

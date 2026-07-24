@@ -96,6 +96,7 @@ namespace ParametricDramDirectoryMSI
         bool count_page_fault_latency_enabled;
         bool perfect_translation_enabled;  // If true: translation happens (PA remapping) but with zero latency
         bool perfect_l2_tlb_enabled;       // If true: L1 TLBs work normally, but L2 TLB always hits (no PTW)
+        bool perfect_prefetch_enabled;     // If true (perfect_translation must also be on): MMU fires an L2 prefetch for the data line on every demand translation, giving the Perfect cell the same data-side prefetch advantage as a real prefetcher (so it becomes a true upper bound for the diamond, not just for translation cost).
 
 
 
@@ -145,6 +146,15 @@ namespace ParametricDramDirectoryMSI
 		}
 
 		virtual IntPtr performAddressTranslation(IntPtr eip, IntPtr address, bool instruction, Core::lock_signal_t lock, bool modeled, bool count) = 0; //Returns translation latency + translated address (physical address)
+
+		// Hook fired whenever a TLB at level `level` evicts an entry to make
+		// room for a new allocation.  Default no-op; subclasses (Victima,
+		// Fullstack) override to issue a background metadata fetch for the
+		// evicted VPN.
+		virtual void onTLBLevelEviction(int /*level*/, IntPtr /*evicted_address*/,
+		                                int /*evicted_page_size*/, IntPtr /*evicted_ppn*/,
+		                                IntPtr /*eip*/, Core::lock_signal_t /*lock*/,
+		                                bool /*instruction*/) {}
 		virtual IntPtr performAddressTranslationFrontend(IntPtr eip, IntPtr address, bool instruction, Core::lock_signal_t lock, bool modeled, bool count){ return IntPtr(0); };
 		virtual IntPtr performAddressTranslationBackend(IntPtr eip, IntPtr address, bool instruction, Core::lock_signal_t lock, bool modeled, bool count){ return IntPtr(0); };
         virtual SubsecondTime accessCache(translationPacket packet, SubsecondTime t_start, bool is_prefetch, HitWhere::where_t& out_hit_where);		

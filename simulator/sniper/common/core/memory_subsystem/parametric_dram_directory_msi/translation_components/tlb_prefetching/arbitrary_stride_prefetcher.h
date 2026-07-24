@@ -78,12 +78,13 @@ namespace ParametricDramDirectoryMSI
 		bool extra_prefetch;
 		int lookahead;
 		int degree;
+		bool install_pq;   // false = "cache-only": walk the PTE (warm cache) but don't insert into PQ
 		entry_prefetcher *table;
 
 		std::string log_file_name;
 		std::ofstream log_file;
 
-		ArbitraryStridePrefetcher(Core *_core, MemoryManagerBase *_memory_manager, ShmemPerfModel *_shmem_perf_model, int table_bits, int prefetch_threshold, bool extra_prefetch, int lookahead, int degree, String name);
+		ArbitraryStridePrefetcher(Core *_core, MemoryManagerBase *_memory_manager, ShmemPerfModel *_shmem_perf_model, int table_bits, int prefetch_threshold, bool extra_prefetch, int lookahead, int degree, String name, bool install_pq = true);
 		std::vector<query_entry> performPrefetch(IntPtr address, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count, PageTable *pt, bool instruction = false, bool tlb_hit = false, bool pq_hit = false, int page_size = 12) override;
 	};
 }

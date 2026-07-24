@@ -702,7 +702,8 @@ namespace ParametricDramDirectoryMSI
 			physical_address, offset,
 			data_buf, data_length,
 			modeled == Core::MEM_MODELED_NONE || modeled == Core::MEM_MODELED_COUNT ? false : true,
-			modeled == Core::MEM_MODELED_NONE ? false : true, CacheBlockInfo::block_type_t::DATA, SubsecondTime::Zero());
+			modeled == Core::MEM_MODELED_NONE ? false : true, CacheBlockInfo::block_type_t::DATA, SubsecondTime::Zero(), NULL,
+			!skip_translation ? address : INVALID_ADDRESS);
 
 		// Clear the MetadataContext after the data access
 		MetadataContext::clear(getCore()->getId());

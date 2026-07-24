@@ -76,6 +76,7 @@
 #include "mimicos.h"
 #include "shmem_perf_model.h"
 #include "../tlb.h"
+#include "mmu_base.h"
 
 #include <algorithm>
 #include <cassert>
@@ -299,6 +300,25 @@ void TemporalPTEPrefetcher::registerAllStats(core_id_t core_id)
     registerStatsMetric(cat, core_id, "prefetch_successful_2mb",                 &m_stats.prefetch_successful_2mb);
     registerStatsMetric(cat, core_id, "learning_transitions_2mb",                &m_stats.learning_transitions_2mb);
     registerStatsMetric(cat, core_id, "learning_skipped_mixed_pagesize",         &m_stats.learning_skipped_mixed_pagesize);
+
+    // OS-managed side-table access latency (payload_in_side_table)
+    registerStatsMetric(cat, core_id, "side_table_accesses",                     &m_stats.side_table_accesses);
+    registerStatsMetric(cat, core_id, "side_table_total_latency_fs",             &m_stats.side_table_total_latency_fs);
+    registerStatsMetric(cat, core_id, "side_table_min_latency_fs",               &m_stats.side_table_min_latency_fs);
+    registerStatsMetric(cat, core_id, "side_table_max_latency_fs",               &m_stats.side_table_max_latency_fs);
+    registerStatsMetric(cat, core_id, "side_table_l1d",                          &m_stats.side_table_l1d);
+    registerStatsMetric(cat, core_id, "side_table_l2",                           &m_stats.side_table_l2);
+    registerStatsMetric(cat, core_id, "side_table_nuca",                         &m_stats.side_table_nuca);
+    registerStatsMetric(cat, core_id, "side_table_dram",                         &m_stats.side_table_dram);
+    registerStatsMetric(cat, core_id, "side_table_pwc_hits",                     &m_stats.side_table_pwc_hits);
+    registerStatsMetric(cat, core_id, "side_table_pwc_misses",                   &m_stats.side_table_pwc_misses);
+    registerStatsMetric(cat, core_id, "side_table_levels_accessed",              &m_stats.side_table_levels_accessed);
+
+    // --- 21. In-PTE payload writeback modeling ---
+    registerStatsMetric(cat, core_id, "payload_writes",                          &m_stats.payload_writes);
+    registerStatsMetric(cat, core_id, "payload_dirty_marks_hit",                 &m_stats.payload_dirty_marks_hit);
+    registerStatsMetric(cat, core_id, "payload_dirty_marks_miss",                &m_stats.payload_dirty_marks_miss);
+    registerStatsMetric(cat, core_id, "payload_dirty_marks_coalesced",           &m_stats.payload_dirty_marks_coalesced);
 }
 
 // ============================================================================
@@ -365,7 +385,16 @@ TemporalPTEPrefetcher::TemporalPTEPrefetcher(
         const std::string& confidence_policy,
         uint32_t conf_bump_amount,
         uint32_t conf_decay_on_bump,
-        uint32_t conf_decay_on_miss)
+        uint32_t conf_decay_on_miss,
+        bool     payload_in_side_table,
+        uint64_t side_table_base_pa,
+        uint32_t side_table_payload_bits,
+        bool     side_table_radix,
+        uint32_t side_table_levels,
+        uint32_t side_table_bits_per_level,
+        uint32_t side_table_pwc_entries,
+        bool     model_payload_writeback,
+        bool     prefetch_install_pq)
     : TLBPrefetcherBase(_core, _memory_manager, _shmem_perf_model, name),
       m_codec(PTEOffsetConfig{num_offsets, offset_bits, conf_bits, base_bit, /*signed_offset=*/true}),
       m_sim_log("TemporalPTE", _core->getId(), DEBUG_TEMPORAL_PTE_PREFETCHER),
@@ -401,10 +430,29 @@ TemporalPTEPrefetcher::TemporalPTEPrefetcher(
       m_stride_value(0),
       m_stride_has_prev(false),
       m_pc_table_mask(0),
-      m_virtualize_pc_table(virtualize_pc_table)
+      m_virtualize_pc_table(virtualize_pc_table),
+      m_payload_in_side_table(payload_in_side_table),
+      m_side_table_base_pa(side_table_base_pa),
+      m_side_table_bytes(0),
+      m_side_table_payload_bits(side_table_payload_bits),
+      m_side_table_reserved(false),
+      m_side_table_radix(side_table_radix),
+      m_side_table_levels(side_table_levels < 1 ? 1 : side_table_levels),
+      m_side_table_bits_per_level(side_table_bits_per_level < 1 ? 1 : side_table_bits_per_level),
+      m_side_table_pwc_entries(side_table_pwc_entries),
+      m_model_payload_writeback(model_payload_writeback),
+      m_prefetch_install_pq(prefetch_install_pq)
 {
     // --- Validate codec layout ---
     assert(m_codec.config().fitsInPayload() && "PTE offset layout does not fit in 128-bit payload");
+
+    // OS side-table: default payload width to the codec's actual bit count so a
+    // 64B line packs 512/payload_bits payloads.  Config knob (side_table_payload_bits)
+    // overrides; clamp to [1, 512].
+    if (m_side_table_payload_bits == 0)
+        m_side_table_payload_bits = static_cast<uint32_t>(m_codec.config().totalBits());
+    if (m_side_table_payload_bits == 0)   m_side_table_payload_bits = 80;
+    if (m_side_table_payload_bits > 512)  m_side_table_payload_bits = 512;
 
     // --- PC table (only used in PC_COND_LEARN mode) ---
     if (mode == TemporalPTEMode::PC_COND_LEARN && pc_table_size > 0)
@@ -535,6 +583,181 @@ TemporalPTEPrefetcher::~TemporalPTEPrefetcher()
 //          to be inserted into the prefetch queue by the caller.
 // ============================================================================
 
+// ---------------------------------------------------------------------------
+// OS-managed side-table access model (alternative to PTE-embedded payload)
+// ---------------------------------------------------------------------------
+// Models a single cache-line read to the OS-managed payload-table entry for
+// `region_id`, issued in PARALLEL with the page-table walk (i.e. starting at
+// the current elapsed time).  accessCache() snapshots/restores the caller's
+// clock and returns ONLY the access latency, so the translation's own timing
+// is unaffected -- the returned latency is used purely to delay the prefetch
+// issue.  The access goes through the normal L1D->L2->LLC->DRAM hierarchy, so
+// hot table entries cache naturally, matching an OS-managed in-memory table.
+//
+// The table has a fixed SIDE_TABLE_BYTES footprint in DRAM and is hash-indexed
+// (wraparound) so the modelled physical address stays bounded and within the
+// table's own region.  The 2MB plane is mixed into a disjoint slot stream so
+// it does not systematically alias the 4KB plane.
+// Reserve the OS-managed payload table from the physical allocator, using the
+// SAME mechanism the hash page tables (HT/Cuckoo/HDC) use to reserve their
+// large contiguous regions: handle_page_table_allocations(bytes) carves the
+// bytes out of the kernel-reserved area and returns the base PPN.  Idempotent.
+void TemporalPTEPrefetcher::reserveSideTable()
+{
+    if (m_side_table_reserved)
+        return;
+    m_side_table_reserved = true;   // set first so we don't retry on failure
+
+    auto* os = Sim()->getMimicOS();
+    auto* alloc = os ? os->getMemoryAllocator() : nullptr;
+    if (alloc != nullptr)
+    {
+        UInt64 base_ppn = alloc->handle_page_table_allocations(SIDE_TABLE_RESERVE_BYTES);
+        m_side_table_base_pa = base_ppn * 4096ULL;
+        m_side_table_bytes   = SIDE_TABLE_RESERVE_BYTES;
+        std::ostringstream oss;
+        oss << "OS payload side-table reserved: " << (SIDE_TABLE_RESERVE_BYTES >> 20)
+            << " MB @ PA 0x" << std::hex << m_side_table_base_pa;
+        m_sim_log.info(oss.str());
+    }
+    else if (m_side_table_bytes == 0)
+    {
+        // Fallback: keep the configured base, bound to 1 GB.
+        m_side_table_bytes = SIDE_TABLE_RESERVE_BYTES;
+    }
+}
+
+// Independent radix side-car walk (Flavor A): L levels, upper (pointer) levels
+// filtered by the side-car PWC, leaf always fetched.  Each surviving level is a
+// dependent accessCache chained from the current time (so the whole walk runs
+// in parallel with the page-table walk).  Returns total walk latency; records
+// PWC hits/misses, levels actually accessed, and the leaf hit-where.
+SubsecondTime TemporalPTEPrefetcher::modelSideTableRadixWalk(
+        uint64_t line_no, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count)
+{
+    MemoryManagementUnitBase *mmu = memory_manager->getMMU();
+    if (mmu == nullptr) return SubsecondTime::Zero();
+
+    const uint32_t L = m_side_table_levels;
+    const uint32_t B = m_side_table_bits_per_level;
+    const uint64_t per_level_bytes = std::max<uint64_t>(64ULL, m_side_table_bytes / L);
+    const uint64_t per_level_lines = per_level_bytes / 64ULL;
+
+    SubsecondTime acc = SubsecondTime::Zero();
+    const SubsecondTime t0 = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+
+    for (uint32_t lvl = 0; lvl < L; ++lvl)
+    {
+        const bool is_leaf = (lvl + 1 == L);
+        // Leaf is addressed by the full line_no (unique per leaf line); a pointer
+        // level is addressed by the high-order prefix, so nearby line_nos share
+        // upper nodes (→ PWC/cache locality, as in a real radix walk).
+        const uint64_t shift = static_cast<uint64_t>(L - 1 - lvl) * B;
+        const uint64_t node_id = is_leaf ? line_no : (shift >= 64 ? 0ULL : (line_no >> shift));
+        const uint64_t line_in_level = per_level_lines ? (node_id % per_level_lines) : 0ULL;
+        const IntPtr node_pa = static_cast<IntPtr>(
+            m_side_table_base_pa + static_cast<uint64_t>(lvl) * per_level_bytes + line_in_level * 64ULL);
+
+        // Upper (pointer) levels are filtered by the side-car page-walk cache.
+        if (!is_leaf)
+        {
+            if (m_sidecar_pwc_set.count(node_pa))
+            {
+                m_stats.side_table_pwc_hits++;
+                m_sidecar_pwc.remove(node_pa);
+                m_sidecar_pwc.push_front(node_pa);   // MRU
+                continue;                            // PWC hit → no memory access
+            }
+            m_stats.side_table_pwc_misses++;
+            m_sidecar_pwc.push_front(node_pa);
+            m_sidecar_pwc_set.insert(node_pa);
+            while (m_side_table_pwc_entries > 0 && m_sidecar_pwc.size() > m_side_table_pwc_entries)
+            {
+                m_sidecar_pwc_set.erase(m_sidecar_pwc.back());
+                m_sidecar_pwc.pop_back();
+            }
+        }
+
+        // Dependent memory access for this level (starts after the prior ones).
+        MemoryManagementUnitBase::translationPacket pkt(
+            node_pa, eip, /*instruction=*/false, lock, modeled, count,
+            CacheBlockInfo::block_type_t::PAGE_TABLE_DATA);
+        HitWhere::where_t hw = HitWhere::UNKNOWN;
+        acc += mmu->accessCache(pkt, t0 + acc, /*is_prefetch=*/false, hw);
+        m_stats.side_table_levels_accessed++;
+
+        if (is_leaf) {
+            switch (hw) {
+                case HitWhere::L1_OWN:     m_stats.side_table_l1d++;  break;
+                case HitWhere::L2_OWN:     m_stats.side_table_l2++;   break;
+                case HitWhere::NUCA_CACHE: m_stats.side_table_nuca++; break;
+                case HitWhere::DRAM_LOCAL:
+                case HitWhere::DRAM_REMOTE:
+                case HitWhere::DRAM:       m_stats.side_table_dram++; break;
+                default: break;
+            }
+        }
+    }
+    return acc;
+}
+
+SubsecondTime TemporalPTEPrefetcher::modelSideTableAccess(
+        uint64_t region_id, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count)
+{
+    MemoryManagementUnitBase *mmu = memory_manager->getMMU();
+    if (mmu == nullptr || m_side_table_payload_bits == 0)
+        return SubsecondTime::Zero();
+
+    reserveSideTable();   // lazily reserve the 1 GB region on first use
+
+    const bool is_2mb = (region_id & REGION_2MB_TAG) != 0;
+    uint64_t idx = region_id & ~REGION_2MB_TAG;
+    if (is_2mb)
+        idx ^= 0x9E3779B97F4A7C15ULL;   // golden-ratio mix to separate planes
+
+    // A 64B (512-bit) line packs floor(512/payload_bits) payloads; `line_no` is
+    // the leaf line holding this region's payload (adjacent regions share it).
+    const uint32_t per_line = std::max(1u, 512u / m_side_table_payload_bits);
+    const uint64_t line_no = idx / per_line;
+
+    SubsecondTime lat;
+    if (m_side_table_radix)
+    {
+        lat = modelSideTableRadixWalk(line_no, eip, lock, modeled, count);
+    }
+    else
+    {
+        // Flat organization: single direct-mapped 64B line read.
+        const uint64_t line_off = (line_no * 64ULL) % m_side_table_bytes;
+        const IntPtr entry_pa = static_cast<IntPtr>(m_side_table_base_pa + line_off);
+        MemoryManagementUnitBase::translationPacket pkt(
+            entry_pa, eip, /*instruction=*/false, lock, modeled, count,
+            CacheBlockInfo::block_type_t::DATA);
+        HitWhere::where_t hw = HitWhere::UNKNOWN;
+        const SubsecondTime t_now = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+        lat = mmu->accessCache(pkt, t_now, /*is_prefetch=*/false, hw);
+        switch (hw) {
+            case HitWhere::L1_OWN:     m_stats.side_table_l1d++;  break;
+            case HitWhere::L2_OWN:     m_stats.side_table_l2++;   break;
+            case HitWhere::NUCA_CACHE: m_stats.side_table_nuca++; break;
+            case HitWhere::DRAM_LOCAL:
+            case HitWhere::DRAM_REMOTE:
+            case HitWhere::DRAM:       m_stats.side_table_dram++; break;
+            default: break;
+        }
+    }
+
+    // --- Common latency instrumentation (total walk latency per access) ---
+    const UInt64 lat_fs = lat.getFS();
+    m_stats.side_table_accesses++;
+    m_stats.side_table_total_latency_fs += lat_fs;
+    if (m_stats.side_table_accesses == 1 || lat_fs < m_stats.side_table_min_latency_fs)
+        m_stats.side_table_min_latency_fs = lat_fs;
+    if (lat_fs > m_stats.side_table_max_latency_fs)
+        m_stats.side_table_max_latency_fs = lat_fs;
+    return lat;
+}
+
 std::vector<query_entry> TemporalPTEPrefetcher::performPrefetch(
         IntPtr address, IntPtr eip, Core::lock_signal_t lock,
         bool modeled, bool count, PageTable *pt, bool instruction, bool tlb_hit, bool pq_hit, int page_size)
@@ -543,6 +766,11 @@ std::vector<query_entry> TemporalPTEPrefetcher::performPrefetch(
 
     if (pt == nullptr)
         return result;
+
+    // Safety: drop any payload-writeback entries not consumed by a prior flush
+    // (e.g. if the previous access's walk faulted), so we never dirty a stale PTE.
+    if (m_model_payload_writeback)
+        m_pending_payload_wb.clear();
 
     // Always discover the real page size via a lightweight PT lookup (no cache
     // modelling).  The TLB-reported page_size can be wrong — a 4KB-only L1 dTLB
@@ -710,7 +938,7 @@ std::vector<query_entry> TemporalPTEPrefetcher::performPrefetch(
     {
     // Read payload from the correct level (PTE for 4KB, PMD for 2MB)
     uint64_t region_base_vpn;
-    __uint128_t pte_payload;
+    PayloadWord pte_payload;
     if (is_2mb)
     {
         uint64_t region_id_raw = vpn_2mb >> m_region_shift;  // without tag
@@ -784,7 +1012,7 @@ std::vector<query_entry> TemporalPTEPrefetcher::performPrefetch(
     // that was already predicted at a shallower depth.
     struct ChainWorkItem {
         uint64_t region_id;
-        __uint128_t payload;
+        PayloadWord payload;
         uint32_t depth;
         SubsecondTime chain_start_time;  // Earliest time this chained walk can begin
         float path_score;                // Accumulated confidence along the chain (1.0 at root)
@@ -811,7 +1039,7 @@ std::vector<query_entry> TemporalPTEPrefetcher::performPrefetch(
         ChainWorkItem work = work_queue[work_idx++];
         
         uint64_t work_region_id = work.region_id;
-        __uint128_t work_payload = work.payload;
+        PayloadWord work_payload = work.payload;
         uint32_t current_depth = work.depth;
         
         // Skip if no payload to decode
@@ -967,7 +1195,7 @@ std::vector<query_entry> TemporalPTEPrefetcher::performPrefetch(
             uint64_t base_vpn_of_region = target_region_raw << m_region_shift;
             bool any_page_succeeded = false;
             uint32_t pages_succeeded_this_region = 0;
-            __uint128_t chained_payload = 0;  // Collect payload for chained prefetching
+            PayloadWord chained_payload = 0;  // Collect payload for chained prefetching
 
             // TLB residency check: if >50% of region pages already in any TLB, skip this region
             uint32_t fan_page_shift = target_is_2mb ? PAGE_SHIFT_2MB : m_page_shift;
@@ -1558,6 +1786,29 @@ std::vector<query_entry> TemporalPTEPrefetcher::performPrefetch(
         finalizeUniquePageStats();
 #endif
 
+    // --- OS-managed side-table variant ---
+    // The temporal payload lives in a separate OS-managed table in memory,
+    // fetched IN PARALLEL with the page-table walk rather than riding in spare
+    // PTE bits.  The walk (and thus translation latency) is unaffected; the
+    // prefetch may only be *issued* once the parallel table access completes.
+    // Model that single access here and push every generated prefetch's
+    // materialization timestamp out by the access latency.
+    if (m_payload_in_side_table && !result.empty())
+    {
+        const SubsecondTime side_lat =
+            modelSideTableAccess(region_id, eip, lock, modeled, count);
+        if (side_lat > SubsecondTime::Zero())
+            for (auto& q : result)
+                q.timestamp += side_lat;
+    }
+
+    // Cache-only ablation: the prefetch PTWs issued above have already warmed
+    // the predicted PTE lines in the data cache; suppress PQ/TLB installation
+    // so a later demand access still walks but hits the warmed lines (cheaper
+    // walk rather than an eliminated one).  Isolates the cache-warming benefit.
+    if (!m_prefetch_install_pq)
+        result.clear();
+
     return result;
 }
 
@@ -1714,7 +1965,7 @@ void TemporalPTEPrefetcher::learnTransition(uint64_t src_region, uint64_t curr_r
     // For 4KB plane: use PTE payload keyed by 4KB VPN.
     uint64_t src_vpn = src_raw << m_region_shift;
 
-    __uint128_t old_payload = learn_2mb
+    PayloadWord old_payload = learn_2mb
         ? pt->readPMDPayloadBits(src_vpn)
         : pt->readPayloadBits(src_vpn);
     auto entries = m_codec.decode(old_payload);
@@ -1859,12 +2110,19 @@ void TemporalPTEPrefetcher::learnTransition(uint64_t src_region, uint64_t curr_r
     }
 
     // Write back to the first page of the source region
-    __uint128_t new_payload = m_codec.encodeAll(old_payload, entries);
+    PayloadWord new_payload = m_codec.encodeAll(old_payload, entries);
     if (learn_2mb)
         pt->writePMDPayloadBits(src_vpn, new_payload);
     else
         pt->writePayloadBits(src_vpn, new_payload);
     m_stats.learning_updates++;
+
+    // Record this in-PTE payload update so the MMU can dirty the source PTE's
+    // cacheline after the demand walk completes (-> models writeback traffic).
+    // Only for the PTE-embedded variant; the side-table variant stores payloads
+    // out of line (handled separately).
+    if (m_model_payload_writeback && !m_payload_in_side_table)
+        m_pending_payload_wb.emplace_back(src_vpn, learn_2mb);
     if (m_current_is_instruction)
         m_stats.learning_updates_instruction++;
     else
@@ -1895,7 +2153,7 @@ void TemporalPTEPrefetcher::learnTransition(uint64_t src_region, uint64_t curr_r
         {
             m_update_counter = 0;
             // Decay the source page payload we just wrote
-            __uint128_t decayed = m_codec.decayAllConf(new_payload);
+            PayloadWord decayed = m_codec.decayAllConf(new_payload);
             if (learn_2mb)
                 pt->writePMDPayloadBits(src_vpn, decayed);
             else
@@ -2426,6 +2684,64 @@ void TemporalPTEPrefetcher::notifyInstall(IntPtr address, int page_size)
     }
     // If not in inflight: either this region was already moved to m_installed
     // by a sibling page, or it belongs to a different prefetcher — nothing to do.
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  In-PTE payload writeback modeling
+//
+//  Called by the MMU AFTER the demand PTW completes (so PTE lines just
+//  walked are resident).  For each in-PTE payload (delta) updated during
+//  this access's learning, locate the source PTE's physical cacheline via
+//  a functional walk and mark it dirty (dirty-if-present).  The cache's
+//  existing eviction path then generates the DRAM writeback, so the extra
+//  traffic the reviewer asked about is modeled end-to-end.
+// ═══════════════════════════════════════════════════════════════════
+void TemporalPTEPrefetcher::flushPendingPayloadWritebacks(PageTable *pt)
+{
+    if (!m_model_payload_writeback || m_pending_payload_wb.empty() || pt == nullptr)
+    {
+        m_pending_payload_wb.clear();
+        return;
+    }
+
+    // PTW (PAGE_TABLE_DATA) lines bypass L1D and reside in L2; that is where
+    // the just-walked PTE line lives.
+    MMUCacheInterface *l2 = memory_manager->getCacheCntlrAt(core->getId(), MemComponent::L2_CACHE);
+    if (l2 == nullptr)
+    {
+        m_pending_payload_wb.clear();
+        return;
+    }
+
+    for (const auto &upd : m_pending_payload_wb)
+    {
+        const uint64_t vpn    = upd.first;
+        const bool     is_2mb = upd.second;
+        const IntPtr   addr   = is_2mb ? (static_cast<IntPtr>(vpn) << PAGE_SHIFT_2MB)
+                                       : (static_cast<IntPtr>(vpn) << m_page_shift);
+
+        // Functional walk (no timing/count) to find the leaf/PMD PTE's PA.
+        PTWResult r = pt->initializeWalk(addr, /*count*/ false, /*is_prefetch*/ true, /*restart_walk*/ true);
+        if (r.fault_happened)
+            continue;
+
+        IntPtr pte_pa = 0;
+        for (const auto &a : r.accesses)
+            if (a.is_pte) { pte_pa = a.physical_addr; break; }
+        if (pte_pa == 0 && !r.accesses.empty())
+            pte_pa = r.accesses.back().physical_addr;   // fallback: deepest level
+        if (pte_pa == 0)
+            continue;
+
+        m_stats.payload_writes++;
+        switch (l2->markMMUPayloadDirty(pte_pa))
+        {
+        case 1:  m_stats.payload_dirty_marks_hit++;        break;  // clean -> dirty (new writeback)
+        case 2:  m_stats.payload_dirty_marks_coalesced++;  break;  // already dirty (coalesced)
+        default: m_stats.payload_dirty_marks_miss++;       break;  // not resident
+        }
+    }
+    m_pending_payload_wb.clear();
 }
 
 } // namespace ParametricDramDirectoryMSI

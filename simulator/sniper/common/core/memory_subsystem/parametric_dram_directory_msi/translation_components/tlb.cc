@@ -6,6 +6,8 @@
 #include "cache_cntlr.h"
 #include <iostream>
 #include <utility>
+#include <cstdio>
+#include <cstdlib>
 #include "memory_manager.h"
 #include "core_manager.h"
 #include "cache_set.h"
@@ -37,7 +39,11 @@ namespace ParametricDramDirectoryMSI
                   associativity, entry_size,
                   Sim()->getCfg()->hasKey(cfgname + "/replacement_policy")
                      ? Sim()->getCfg()->getString(cfgname + "/replacement_policy") : "lru",
-                  CacheBase::PR_L1_CACHE, CacheBase::HASH_MASK,
+                  CacheBase::PR_L1_CACHE, CacheBase::HASH_MOD,
+                  // HASH_MOD lets TLBs accept non-power-of-2 num_sets
+                  // (real-silicon TLB sizes are often odd: 10/48/96/1280/3072).
+                  // For pow-2 num_sets the compiler optimises % to & mask,
+                  // so there's no extra cost vs HASH_MASK.
                   NULL,
                   NULL, true, page_size_list, page_sizes),
           m_type(tlb_type),
@@ -152,6 +158,7 @@ namespace ParametricDramDirectoryMSI
                 tlb_log->debug("Materializing prefetch for address: ", entry.address, " at time: ", now.getNS(), " ns");
                 allocate(entry.address, entry.timestamp, false, lock_signal, entry.page_size, entry.ppn, true);
                 tlb_stats.m_pq_materialized++;
+                if (getenv("RECENCY_DEBUG")) { static long mz=0; if(mz++<400) fprintf(stderr,"[PQMAT] addr=0x%lx now_ns=%lu avail_ns=%lu lag_ns=%ld\n",(unsigned long)entry.address,(unsigned long)now.getNS(),(unsigned long)entry.timestamp.getNS(),(long)((long)now.getNS()-(long)entry.timestamp.getNS())); }
                 // Notify prefetchers that this translation has been installed in the TLB
                 if (prefetchers != NULL)
                 {
@@ -186,6 +193,7 @@ namespace ParametricDramDirectoryMSI
             pq_hit = true;
             hit->clearOption(CacheBlockInfo::PREFETCH);
             tlb_stats.m_pq_hits++;
+            if (getenv("RECENCY_DEBUG")) { static long ph=0; if(ph++<400) fprintf(stderr,"[PQHIT] addr=0x%lx now_ns=%lu\n",(unsigned long)address,(unsigned long)now.getNS()); }
         }
 
         if (hit)

@@ -23,7 +23,8 @@ namespace ParametricDramDirectoryMSI
 			bool extra_prefetch = Sim()->getCfg()->getBool("perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/extra_prefetch");
 			int lookahead = Sim()->getCfg()->getInt("perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/lookahead");
 			int degree = Sim()->getCfg()->getInt("perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/degree");
-			return new ArbitraryStridePrefetcher(core, memory_manager, shmem_perf_model, table_size, prefetch_threshold, extra_prefetch, lookahead, degree, prefetcher_name);
+			bool install_pq = Sim()->getCfg()->getBoolDefault("perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/install_pq", true);
+			return new ArbitraryStridePrefetcher(core, memory_manager, shmem_perf_model, table_size, prefetch_threshold, extra_prefetch, lookahead, degree, prefetcher_name, install_pq);
 		}
 		static TLBPrefetcherBase *createTLBPrefetcherStride(String mmu_name, String prefetcher_name, String pq_index, Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model)
 		{
@@ -49,11 +50,16 @@ namespace ParametricDramDirectoryMSI
 			uint32_t masp_entries     = static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "masp_entries"));
 			uint32_t masp_assoc       = static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "masp_assoc"));
 			uint32_t page_shift       = static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "page_shift"));
+			uint32_t masp_lookahead   = Sim()->getCfg()->hasKey(cfg_base + "masp_lookahead")
+				? static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "masp_lookahead")) : 1;
+			uint32_t masp_degree      = Sim()->getCfg()->hasKey(cfg_base + "masp_degree")
+				? static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "masp_degree")) : 1;
 
 			return new AgileTLBPrefetcher(core, memory_manager, shmem_perf_model, prefetcher_name,
 				pq_size, sampler_size, fpq_size, fdt_counter_bits, fdt_threshold,
 				enable_pref_bits, select1_bits, select2_bits,
-				masp_entries, masp_assoc, page_shift);
+				masp_entries, masp_assoc, page_shift,
+				masp_lookahead, masp_degree);
 		}
 		static TLBPrefetcherBase *createRecencyTLBPrefetcher(String mmu_name, String prefetcher_name, String pq_index, Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model)
 		{
@@ -82,9 +88,10 @@ namespace ParametricDramDirectoryMSI
 			uint32_t num_slots           = static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "num_slots"));
 			uint32_t assoc               = static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "assoc"));
 			bool     model_prefetch_walks = Sim()->getCfg()->getBool(cfg_base + "model_prefetch_walks");
+			uint32_t max_depth           = static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "max_depth"));
 
 			return new DistanceTLBPrefetcher(core, memory_manager, shmem_perf_model, prefetcher_name,
-				page_shift, num_rows, num_slots, assoc, model_prefetch_walks);
+				page_shift, num_rows, num_slots, assoc, model_prefetch_walks, max_depth);
 		}
 		static TLBPrefetcherBase *createTemporalPTEPrefetcher(String mmu_name, String prefetcher_name, String pq_index, Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model)
 		{
@@ -127,6 +134,22 @@ namespace ParametricDramDirectoryMSI
 			uint32_t conf_decay_on_miss = Sim()->getCfg()->hasKey(cfg_base + "conf_decay_on_miss")
 				? static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "conf_decay_on_miss")) : 1;
 
+			// OS-managed side-table payload variant (alternative to PTE-embedded)
+			bool payload_in_side_table = Sim()->getCfg()->getBoolDefault(cfg_base + "payload_in_side_table", false);
+			uint64_t side_table_base_pa = Sim()->getCfg()->hasKey(cfg_base + "side_table_base_pa")
+				? static_cast<uint64_t>(Sim()->getCfg()->getInt(cfg_base + "side_table_base_pa")) : (120ULL << 30);
+			uint32_t side_table_payload_bits = Sim()->getCfg()->hasKey(cfg_base + "side_table_payload_bits")
+				? static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "side_table_payload_bits")) : 0;  // 0 = auto (codec width)
+			bool model_payload_writeback = Sim()->getCfg()->getBoolDefault(cfg_base + "model_payload_writeback", false);
+			bool prefetch_install_pq = Sim()->getCfg()->getBoolDefault(cfg_base + "prefetch_install_pq", true);
+			bool side_table_radix = Sim()->getCfg()->getBoolDefault(cfg_base + "side_table_radix", true);
+			uint32_t side_table_levels = Sim()->getCfg()->hasKey(cfg_base + "side_table_levels")
+				? static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "side_table_levels")) : 3;
+			uint32_t side_table_bits_per_level = Sim()->getCfg()->hasKey(cfg_base + "side_table_bits_per_level")
+				? static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "side_table_bits_per_level")) : 9;
+			uint32_t side_table_pwc_entries = Sim()->getCfg()->hasKey(cfg_base + "side_table_pwc_entries")
+				? static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "side_table_pwc_entries")) : 32;
+
 			String mode_str = Sim()->getCfg()->getString(cfg_base + "mode");
 			TemporalPTEMode mode = TemporalPTEMode::PTE_ONLY;
 			if (mode_str == "learn_pte_on_transitions")
@@ -153,7 +176,10 @@ namespace ParametricDramDirectoryMSI
 				stride_direct_prefetch, stride_direct_degree,
 				virtualize_pc_table,
 				confidence_policy, conf_bump_amount,
-				conf_decay_on_bump, conf_decay_on_miss);
+				conf_decay_on_bump, conf_decay_on_miss,
+				payload_in_side_table, side_table_base_pa, side_table_payload_bits,
+				side_table_radix, side_table_levels, side_table_bits_per_level, side_table_pwc_entries,
+				model_payload_writeback, prefetch_install_pq);
 		}
 		static TLBPrefetcherBase *createBertiTLBPrefetcher(String mmu_name, String prefetcher_name, String pq_index, Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model)
 		{

@@ -3,6 +3,8 @@
 #include "mmu_base.h"
 #include "../memory_manager.h"
 #include <tuple>
+#include <cstdio>
+#include <cstdlib>
 
 
 namespace ParametricDramDirectoryMSI
@@ -50,6 +52,15 @@ namespace ParametricDramDirectoryMSI
 		q.ppn = ppn_result;
 		q.page_size = page_size;
 		q.payload_bits = payload_bits;
+
+		if (getenv("RECENCY_DEBUG")) {
+			static long ptwt_n = 0;
+			if (ptwt_n++ < 400)
+				fprintf(stderr, "[PTWT] pf=%s addr=0x%lx walk_lat_ns=%lu ppn=0x%lx pgfault=%d start_ns=%lu avail_ns=%lu\n",
+					m_name.c_str(), (unsigned long)address, (unsigned long)walk_latency.getNS(),
+					(unsigned long)ppn_result, (int)ptw_result.page_fault,
+					(unsigned long)start_time.getNS(), (unsigned long)q.timestamp.getNS());
+		}
 		return q;
 	}
 

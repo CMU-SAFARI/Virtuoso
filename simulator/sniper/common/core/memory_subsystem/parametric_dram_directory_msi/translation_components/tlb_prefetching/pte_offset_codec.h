@@ -5,6 +5,7 @@
 #include <cassert>
 #include <string>
 #include <sstream>
+#include "payload_word.h"
 
 namespace ParametricDramDirectoryMSI
 {
@@ -46,8 +47,8 @@ namespace ParametricDramDirectoryMSI
         /** Maximum representable confidence value. */
         uint32_t maxConf() const { return conf_bits > 0 ? ((1u << conf_bits) - 1) : 0; }
 
-        /** Validate that the layout fits in the 128-bit payload word. */
-        bool fitsInPayload() const { return (base_bit + totalBits()) <= 128; }
+        /** Validate that the layout fits in the 256-bit payload word. */
+        bool fitsInPayload() const { return (base_bit + totalBits()) <= PayloadWord::BITS; }
     };
 
     /**
@@ -64,7 +65,7 @@ namespace ParametricDramDirectoryMSI
         explicit PTEOffsetCodec(PTEOffsetConfig cfg)
             : m_cfg(cfg)
         {
-            assert(cfg.fitsInPayload() && "PTE offset slots exceed 128-bit payload");
+            assert(cfg.fitsInPayload() && "PTE offset slots exceed 256-bit payload");
             assert(cfg.offset_bits > 0 && "offset_bits must be > 0");
             assert(cfg.num_entries > 0 && "num_entries must be > 0");
         }
@@ -74,7 +75,7 @@ namespace ParametricDramDirectoryMSI
         // -----------------------------------------------------------------
         // Decode: extract all k entries from a raw payload
         // -----------------------------------------------------------------
-        std::vector<PTEOffsetEntry> decode(__uint128_t pte_value) const
+        std::vector<PTEOffsetEntry> decode(const PayloadWord& pte_value) const
         {
             std::vector<PTEOffsetEntry> entries;
             entries.reserve(m_cfg.num_entries);
@@ -84,7 +85,7 @@ namespace ParametricDramDirectoryMSI
                 uint32_t slot_base = m_cfg.base_bit + i * slotWidth();
 
                 // Extract offset field
-                uint64_t raw_offset = extractBits(pte_value, slot_base, m_cfg.offset_bits);
+                uint64_t raw_offset = PayloadWord::getField(pte_value, slot_base, m_cfg.offset_bits);
                 int32_t delta = m_cfg.signed_offset
                                     ? signExtend(raw_offset, m_cfg.offset_bits)
                                     : static_cast<int32_t>(raw_offset);
@@ -94,7 +95,7 @@ namespace ParametricDramDirectoryMSI
                 if (m_cfg.conf_bits > 0)
                 {
                     conf = static_cast<uint32_t>(
-                        extractBits(pte_value, slot_base + m_cfg.offset_bits, m_cfg.conf_bits));
+                        PayloadWord::getField(pte_value, slot_base + m_cfg.offset_bits, m_cfg.conf_bits));
                 }
 
                 entries.push_back({delta, conf});
@@ -112,7 +113,7 @@ namespace ParametricDramDirectoryMSI
         //
         // Returns the new payload value.
         // -----------------------------------------------------------------
-        __uint128_t encode_update(__uint128_t old_pte_value,
+        PayloadWord encode_update(const PayloadWord& old_pte_value,
                                int32_t  new_delta,
                                uint32_t init_conf = 1) const
         {
@@ -162,31 +163,27 @@ namespace ParametricDramDirectoryMSI
         // Encode from scratch: write all entries into a (possibly zero)
         // payload, preserving bits outside the slot region.
         // -----------------------------------------------------------------
-        __uint128_t encodeAll(__uint128_t base_value,
+        PayloadWord encodeAll(const PayloadWord& base_value,
                            const std::vector<PTEOffsetEntry>& entries) const
         {
             assert(entries.size() == m_cfg.num_entries);
-            __uint128_t result = base_value;
+            PayloadWord result = base_value;
 
-            // Clear the slot region first
-            __uint128_t region_mask = (((__uint128_t)1 << m_cfg.totalBits()) - 1) << m_cfg.base_bit;
-            result &= ~region_mask;
-
+            // The slots tile the region [base_bit, base_bit+totalBits) contiguously,
+            // so writing every offset+conf field fully overwrites the slot region;
+            // bits outside the region are preserved from base_value.
             for (uint32_t i = 0; i < m_cfg.num_entries; i++)
             {
                 uint32_t slot_base = m_cfg.base_bit + i * slotWidth();
 
-                // Encode offset (masked to offset_bits)
-                __uint128_t off_val = static_cast<uint64_t>(entries[i].delta_vpn)
-                                   & (((__uint128_t)1 << m_cfg.offset_bits) - 1);
-                result |= (off_val << slot_base);
+                // Encode offset (setField masks to offset_bits)
+                PayloadWord::setField(result, slot_base, m_cfg.offset_bits,
+                                      static_cast<uint64_t>(entries[i].delta_vpn));
 
                 // Encode confidence
                 if (m_cfg.conf_bits > 0)
-                {
-                    __uint128_t conf_val = entries[i].conf & (((__uint128_t)1 << m_cfg.conf_bits) - 1);
-                    result |= (conf_val << (slot_base + m_cfg.offset_bits));
-                }
+                    PayloadWord::setField(result, slot_base + m_cfg.offset_bits,
+                                          m_cfg.conf_bits, entries[i].conf);
             }
             return result;
         }
@@ -194,7 +191,7 @@ namespace ParametricDramDirectoryMSI
         // -----------------------------------------------------------------
         // Confidence decay: decrement all slot confidences by 1 (floor 0)
         // -----------------------------------------------------------------
-        __uint128_t decayAllConf(__uint128_t pte_value) const
+        PayloadWord decayAllConf(const PayloadWord& pte_value) const
         {
             if (m_cfg.conf_bits == 0) return pte_value;
 
@@ -209,7 +206,7 @@ namespace ParametricDramDirectoryMSI
         // -----------------------------------------------------------------
         // Debug: human-readable dump
         // -----------------------------------------------------------------
-        std::string dumpPayload(__uint128_t pte_value) const
+        std::string dumpPayload(const PayloadWord& pte_value) const
         {
             auto entries = decode(pte_value);
             std::ostringstream ss;
@@ -228,11 +225,6 @@ namespace ParametricDramDirectoryMSI
         PTEOffsetConfig m_cfg;
 
         uint32_t slotWidth() const { return m_cfg.offset_bits + m_cfg.conf_bits; }
-
-        static uint64_t extractBits(__uint128_t val, uint32_t start, uint32_t width)
-        {
-            return static_cast<uint64_t>((val >> start) & (((__uint128_t)1 << width) - 1));
-        }
 
         static int32_t signExtend(uint64_t val, uint32_t width)
         {

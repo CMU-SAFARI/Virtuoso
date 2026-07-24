@@ -29,6 +29,7 @@ CacheBlockInfo::CacheBlockInfo(IntPtr tag, CacheState::cstate_t cstate, UInt64 o
                                                                                           m_cstate(cstate),
                                                                                           m_owner(0),
                                                                                           m_used(0),
+                                                                                          m_prefetch_pending(0),
                                                                                           m_options(options),
                                                                                           m_block_type(DATA),
                                                                                           m_reuse(0),
@@ -66,6 +67,7 @@ void CacheBlockInfo::invalidate()
 {
    m_tag = ~0;
    m_cstate = CacheState::INVALID;
+   m_prefetch_pending = 0;
 }
 
 void CacheBlockInfo::clone(CacheBlockInfo *cache_block_info)
@@ -74,6 +76,7 @@ void CacheBlockInfo::clone(CacheBlockInfo *cache_block_info)
    m_cstate = cache_block_info->getCState();
    m_owner = cache_block_info->m_owner;
    m_used = cache_block_info->m_used;
+   m_prefetch_pending = cache_block_info->m_prefetch_pending;
    m_options = cache_block_info->m_options;
    m_block_type = cache_block_info->getBlockType();
    m_reuse = cache_block_info->getReuse();
@@ -98,4 +101,17 @@ bool CacheBlockInfo::updateUsage(BitsUsedType used)
    bool new_bits_set = used & ~m_used; // Are we setting any bits that were previously unset?
    m_used |= used;                     // Update usage mask
    return new_bits_set;
+}
+
+bool CacheBlockInfo::consumePrefetch(UInt32 offset, UInt32 size)
+{
+   UInt64 first = offset >> BitsUsedOffset,
+          last = (offset + size - 1) >> BitsUsedOffset,
+          first_mask = (1ull << first) - 1,
+          last_mask = (1ull << (last + 1)) - 1,
+          usage_mask = last_mask & ~first_mask;
+
+   BitsUsedType hit = m_prefetch_pending & (BitsUsedType)usage_mask;
+   m_prefetch_pending &= ~(BitsUsedType)usage_mask;   // consume these sub-regions
+   return hit != 0;
 }

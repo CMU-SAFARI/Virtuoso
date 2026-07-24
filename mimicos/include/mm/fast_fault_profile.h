@@ -303,6 +303,27 @@ struct FastFaultPolicy {
 
        Disabled by default to preserve pre-Phase-9 behaviour. */
     bool hierarchical_split_enabled = false;
+
+    /* Phase 9 revisit: also split along pgtable_install_level
+       (none / pmd_install / pud_install).  Independent of
+       hierarchical_split_enabled so the dimensions can be enabled
+       individually.  When this is true, the dispatcher writes the
+       per-fault install-level into FaultFingerprint.pgtable_install_level
+       at both pre-fault lookup and post-fault recording sites; lookups
+       partition into 3 child profiles.  Predictor is deterministic
+       (computed from the fault VA + per-process installed_pmds /
+       installed_puds sets) — no statistical predictor lag. */
+    bool hierarchical_split_pgtable_enabled = false;
+
+    /* Phase 9-C: split along vma_freshness (fresh / aged).  Detection
+       is a per-process distance heuristic: a fault whose VPN is
+       further than 512 pages (one PMD chunk) from the prior fault's
+       VPN is classified as "fresh" — approximates "this fault came
+       right after a mmap that established a new region".  Mutually
+       exclusive with pgtable_install_level > 0 in the dispatcher
+       (install wins to avoid double-classification).  Independent of
+       the other split knobs. */
+    bool hierarchical_split_vma_freshness_enabled = false;
 };
 
 class FastFaultRegistry {
