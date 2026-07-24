@@ -1,44 +1,32 @@
 # TRAIL — Artifact Evaluation
 
-This guide reproduces the TRAIL TLB-prefetcher results inside a Docker container.
-Everything runs from a few scripts; the traces are a public Hugging Face dataset.
+This guide reproduces the TRAIL TLB-prefetcher results. Everything runs from a
+few scripts; the traces are a public Hugging Face dataset. Target: a
+Debian/Ubuntu machine (or cluster login node).
 
 ---
 
-## 0. Enter a clean-room container
-
-The Docker image is a bare, pinned Ubuntu base — nothing is pre-installed, so you
-run (and see) every setup step yourself.
+## 0. Get the code + dependencies
 
 ```bash
-docker build -t trail-ae \
-  "https://github.com/CMU-SAFARI/Virtuoso.git#trail-artifact-release:experiments/ae"
-
-# mount a host dir so the (~250 GB) trace download survives container restarts
-mkdir -p ae_bundle
-docker run -it -v "$PWD/ae_bundle":/work/ae_bundle trail-ae
-```
-
-Inside the container, clone the repo and install the dependencies:
-
-```bash
-apt-get update && apt-get install -y git
 git clone --branch trail-artifact-release https://github.com/CMU-SAFARI/Virtuoso.git
 cd Virtuoso
 bash experiments/ae/lib/install_deps.sh      # apt toolchain + huggingface_hub + matplotlib
 ```
+
+`install_deps.sh` uses `sudo` if you are not root. On a non-Debian system,
+install the equivalents of the packages it lists.
 
 ---
 
 ## 1. Setup + sanity check — one command
 
 ```bash
-bash experiments/ae/reproduce.sh --skip-deps --bundle /work/ae_bundle
+bash experiments/ae/reproduce.sh --skip-deps
 ```
 
-`--skip-deps` because you just ran `install_deps.sh`; `--bundle /work/ae_bundle`
-puts the trace download on the mounted host dir. This runs, with progress, and
-then **stops**:
+`--skip-deps` because you just ran `install_deps.sh`. This runs, with progress,
+and then **stops**:
 
 ```
 [1/4] system build dependencies       (skipped)
@@ -130,7 +118,5 @@ uses the equal-work heartbeat-crossing method (not `sim.stats` global cycles).
   and built automatically.
 - All experiments run on the **corrected cost model** (a prefetch that faults
   allocates the page *and* pays its page-table-walk latency).
-- Without Docker: on any Debian/Ubuntu machine run
-  `sudo experiments/ae/lib/install_deps.sh` then `bash experiments/ae/reproduce.sh`.
 - `run_ae.sh --mode {slurm|local} --claim <c>` is the all-in-one alternative to
   the launch/watch/results trio (it launches, blocks until done, and parses).

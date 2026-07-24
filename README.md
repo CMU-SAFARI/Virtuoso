@@ -15,7 +15,7 @@ Virtuoso integrates with diverse architectural simulators, each specializing in 
 
 ## 🔬 Artifact Evaluation — TRAIL (TLB Prefetcher)
 
-**Reproducing the TRAIL paper?** Everything is in **[`experiments/ae/`](experiments/ae/README.md)** — start there. The short version, from a clean machine or container:
+**Reproducing the TRAIL paper?** Everything is in **[`experiments/ae/`](experiments/ae/README.md)** — start there. The short version, on a Debian/Ubuntu machine:
 
 ```bash
 git clone --branch trail-artifact-release https://github.com/CMU-SAFARI/Virtuoso.git
@@ -30,7 +30,7 @@ bash experiments/ae/ae_run_all.sh --results    # tables + paper figures
 Traces are the public HF dataset [`konkanello/trail_traces`](https://huggingface.co/datasets/konkanello/trail_traces).
 Claims map to the paper as: `head8mb`/`head2mb` → **Figure 12**, `pqsweep` → **Figure 20**,
 `multicore` → **Figure 22**, `table5`/`table6` → **Tables 5/6**. See the
-**[TRAIL AE guide](experiments/ae/README.md)** for the Docker recipe and the full flow.
+**[TRAIL AE guide](experiments/ae/README.md)** for the full flow.
 
 ---
 
