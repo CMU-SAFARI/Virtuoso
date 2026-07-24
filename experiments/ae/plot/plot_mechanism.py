@@ -46,7 +46,7 @@ def load(results_dir):
     schemes = sorted(LAB8, key=len, reverse=True)
     data = defaultdict(dict)
     for p in glob.glob(os.path.join(results_dir, "*", "simulation", "sim.stats")):
-        d = p.split("results/", 1)[1].split("/simulation")[0]
+        d = os.path.relpath(p, results_dir).split(os.sep)[0]   # rundir basename (robust to 'results' in parent paths)
         for s in schemes:
             if d.startswith(s + "_"):
                 data[d[len(s)+1:]][LAB8[s]] = readstats(p); break

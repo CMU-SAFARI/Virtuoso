@@ -26,6 +26,8 @@ def main():
     for pq in PQS:
         asp=load(a.results_dir, f"asp-pq-pq{pq}")
         trail=load(a.results_dir, f"trail-pq-pq{pq}")
+        if not (asp and trail):        # PQ size not run yet — skip rather than print nan%
+            continue
         tsp,_=speedup_vs(trail, asp, top)
         out(f"| {pq} | {tsp:+.2f}% |")
     if a.md: open(a.md,"w").write("\n".join(lines)+"\n"); print(f"[wrote {a.md}]")

@@ -32,7 +32,7 @@ def load(results_dir, labmap):
     schemes = sorted(labmap, key=len, reverse=True)
     data = defaultdict(dict)
     for p in glob.glob(os.path.join(results_dir, "*", "simulation", "sim.stats")):
-        d = p.split("results/", 1)[1].split("/simulation")[0]
+        d = os.path.relpath(p, results_dir).split(os.sep)[0]   # rundir basename (robust to 'results' in parent paths)
         for s in schemes:
             if d.startswith(s + "_") and d == s + "_" + d[len(s)+1:]:
                 v = ipc(p)
@@ -66,6 +66,8 @@ def analyze(data):
     elig = [t for t in data if not t.startswith("srv") and all(c in data[t] for c in CONFIG_ORDER+[B])]
     elig.sort(key=lambda t: max(data[t]["Trail (best)"], data[t]["Trail (sidecar)"])/data[t][B], reverse=True)
     top = elig[:200]
+    if not top:                       # no workload has every config yet — nothing to plot for this row
+        return None
     fams = defaultdict(lambda: defaultdict(list))
     for t in top:
         f = fam(t)
@@ -79,9 +81,15 @@ def main():
     ap.add_argument("--head8mb"); ap.add_argument("--head2mb"); ap.add_argument("--out", required=True)
     a = ap.parse_args()
     rows = []  # (tag, pivot, gmean, n)
-    if a.head2mb: d = load(a.head2mb, LAB2); p,g,n = analyze(d); rows.append(("2 MB NUCA", p,g,n))
-    if a.head8mb: d = load(a.head8mb, LAB8); p,g,n = analyze(d); rows.append(("8 MB NUCA", p,g,n))
-    if not rows: print("give --head8mb and/or --head2mb", file=sys.stderr); sys.exit(2)
+    if a.head2mb:
+        res = analyze(load(a.head2mb, LAB2))
+        if res: rows.append(("2 MB NUCA", *res))
+        else: print("  [warn] 2 MB: no workload has all configs yet — skipping row", file=sys.stderr)
+    if a.head8mb:
+        res = analyze(load(a.head8mb, LAB8))
+        if res: rows.append(("8 MB NUCA", *res))
+        else: print("  [warn] 8 MB: no workload has all configs yet — skipping row", file=sys.stderr)
+    if not rows: print("no plottable data — need --head8mb/--head2mb with all configs present", file=sys.stderr); sys.exit(2)
 
     import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
