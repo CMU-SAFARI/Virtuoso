@@ -122,14 +122,36 @@ table and figure.
 | `multicore` | 4-core, 100-mix head-to-head        |  1000 | **Figure 22** |
 | **all**     | everything above                    | **21080** | |
 
-Figures are written to `ae_out/` named after the paper: `figure12.pdf` (the 2×2
-single-core plot, produced once **both** `head8mb` and `head2mb` have run),
-`figure20.pdf`, `figure22.pdf`; `table5`/`table6` produce markdown tables.
+Every claim produces both a table (`ae_out/<claim>.md`) and a rendered image in
+`ae_out/`: `figure12.pdf` (the 2×2 single-core plot, produced once **both**
+`head8mb` and `head2mb` have run), `figure20.pdf`, `figure22.pdf`, and
+`table5.pdf`/`table6.pdf` (the tables rendered as images).
 
-**Scale:** a single-core job simulates 300 M instructions (a few minutes to under
-an hour each); `all` is 21,080 jobs, i.e. cluster-scale. On a single machine, run
-one claim at a time — start with **`head8mb`**, the headline result and the
-cheapest full claim.
+**Scale & runtime:** a single-core job simulates 300 M instructions (a few
+minutes to under an hour each); `all` is 21,080 jobs. On a **~1300-core cluster
+the entire set finishes within ~1 day**, and the longest single claim (`table6`)
+takes **~10 hours**. On a single machine, run one claim at a time — start with
+**`head8mb`**, the headline result and the cheapest full claim.
+
+---
+
+## Expected results
+
+Exact numbers vary slightly with the machine, but each claim should closely match
+the paper. Speedups are geometric-mean over the workload suite (multicore is
+equal-work harmonic-mean across the 4 cores):
+
+| claim | expected (approx.) |
+|-------|--------------------|
+| `head8mb` (Figure 12, 8 MB) | **TRAIL ≈ +4.7%** over no-prefetch (**+2.4%** over ASP); Perfect-L2TLB ≈ +11% (upper bound) |
+| `head2mb` (Figure 12, 2 MB) | **TRAIL ≈ +5.1%** over no-prefetch (**+2.8%** over ASP); Perfect-L2TLB ≈ +16.5% |
+| `table5`  (Table 5)         | TRAIL (in-PTE) grows with the payload budget, up to **≈ +2.4%** over ASP |
+| `table6`  (Table 6)         | TRAIL (side-car) grows with the payload budget, up to **≈ +2.5%** over ASP |
+| `pqsweep` (Figure 20)       | **TRAIL ≈ +2.2–2.4%** over the same-size ASP across every PQ size (64→1024) |
+| `multicore` (Figure 22)     | **TRAIL ≈ +11%** harmonic-mean (best prior prefetcher ≈ +5%); Perfect-L2TLB ≈ +23% |
+
+In every claim **TRAIL should beat all prior prefetchers** (ASP, Stride/NextPage,
+DP, Recency, ATP, Berti) and move toward the Perfect-L2TLB upper bound.
 
 ---
 

@@ -62,6 +62,16 @@ case "$CLAIM" in
     python3 "$HERE/plot/plot_multicore.py" --results-dir "$RESULTS" --out "$PDF" && echo "  figure: $PDF" \
       || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
     ;;
+  pqsweep)
+    # Figure 20: TRAIL-vs-ASP speedup across PQ sizes (line plot)
+    python3 "$HERE/plot/plot_pqsweep.py" --results-dir "$RESULTS" --top200 "$TOP200" --out "$PDF" && echo "  figure: $PDF" \
+      || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
+    ;;
+  table5|table6)
+    # render the parsed table as an image
+    python3 "$HERE/plot/plot_table.py" --md "$MD" --out "$PDF" && echo "  table image: $PDF" \
+      || echo "  (render skipped — need matplotlib: pip install matplotlib)"
+    ;;
   *)
     python3 "$HERE/plot/plot_claim.py" --md "$MD" --out "$PDF" && echo "  figure: $PDF" \
       || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
