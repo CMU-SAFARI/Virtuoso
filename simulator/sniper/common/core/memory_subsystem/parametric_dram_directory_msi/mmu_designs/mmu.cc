@@ -475,7 +475,7 @@ namespace ParametricDramDirectoryMSI
             // L2.  Without this guard, firing on every translation (~1 per
             // data load) thrashes L2 catastrophically (>2x DRAM reads,
             // massive eviction of useful data).  With the guard, Perfect
-            // gets the same data-side prefetch advantage P1b's WayCast has
+            // gets the same data-side prefetch advantage aggressive data-side prefetchers have
             // (prefetch enters at L2, bypassing L1 tag check) on lines that
             // would otherwise miss L2, while leaving cache-resident lines
             // untouched.

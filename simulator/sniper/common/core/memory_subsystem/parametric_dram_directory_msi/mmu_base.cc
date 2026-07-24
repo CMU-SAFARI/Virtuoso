@@ -56,7 +56,7 @@ namespace ParametricDramDirectoryMSI
             std::cout << "[MMU_BASE] PERFECT L2 TLB MODE ENABLED - L1 misses always hit L2" << std::endl;
         }
 
-        // Perfect prefetch: MMU fires an L2 prefetch for the data line on every demand translation when perfect_translation is enabled.  This compensates for the structural advantage that other cells get from data-side prefetchers (e.g., P1b's WayCast), making Perfect a true diamond upper bound.
+        // Perfect prefetch: MMU fires an L2 prefetch for the data line on every demand translation when perfect_translation is enabled.  This compensates for the structural advantage that other cells get from aggressive data-side prefetchers, making Perfect a true diamond upper bound.
         perfect_prefetch_enabled = Sim()->getCfg()->getBoolDefault("perf_model/"+_name+"/perfect_prefetch", false);
         if (perfect_prefetch_enabled) {
             std::cout << "[MMU_BASE] PERFECT PREFETCH MODE ENABLED - MMU prefetches data into L2 on every translation" << std::endl;
