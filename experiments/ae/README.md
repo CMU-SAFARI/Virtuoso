@@ -232,4 +232,4 @@ successors), so they carry no speedup number.
   [`docs/trail_walkthrough.html`](../../docs/trail_walkthrough.html) — open it in a
   browser.
 - **Archived snapshot:** Zenodo DOI
-  [`10.5281/zenodo.21540462`](https://doi.org/10.5281/zenodo.21540462).
+  [`10.5281/zenodo.21541804`](https://doi.org/10.5281/zenodo.21541804).
