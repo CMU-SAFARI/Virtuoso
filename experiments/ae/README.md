@@ -5,10 +5,10 @@ Everything runs from a few scripts; the traces are a public Hugging Face dataset
 
 ---
 
-## 0. Build & enter the container
+## 0. Enter a clean-room container
 
-You only need Docker on the host. The image pulls the artifact branch itself, so
-**no host clone is needed**:
+The Docker image is a bare, pinned Ubuntu base — nothing is pre-installed, so you
+run (and see) every setup step yourself.
 
 ```bash
 docker build -t trail-ae \
@@ -16,21 +16,29 @@ docker build -t trail-ae \
 
 # mount a host dir so the (~250 GB) trace download survives container restarts
 mkdir -p ae_bundle
-docker run -it -v "$PWD/ae_bundle":/work/Virtuoso/ae_bundle trail-ae
+docker run -it -v "$PWD/ae_bundle":/work/ae_bundle trail-ae
 ```
 
-You are now in `/work/Virtuoso` inside the container.
+Inside the container, clone the repo and install the dependencies:
+
+```bash
+apt-get update && apt-get install -y git
+git clone --branch trail-artifact-release https://github.com/CMU-SAFARI/Virtuoso.git
+cd Virtuoso
+bash experiments/ae/lib/install_deps.sh      # apt toolchain + huggingface_hub + matplotlib
+```
 
 ---
 
 ## 1. Setup + sanity check — one command
 
 ```bash
-bash experiments/ae/reproduce.sh --skip-deps
+bash experiments/ae/reproduce.sh --skip-deps --bundle /work/ae_bundle
 ```
 
-`--skip-deps` because the image already has the build dependencies. This runs,
-with progress, and then **stops**:
+`--skip-deps` because you just ran `install_deps.sh`; `--bundle /work/ae_bundle`
+puts the trace download on the mounted host dir. This runs, with progress, and
+then **stops**:
 
 ```
 [1/4] system build dependencies       (skipped)
