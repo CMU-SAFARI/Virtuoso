@@ -6,7 +6,7 @@ CSV per workload of `(PTW_Address, EIP, …)` — not from full simulations.
 
 | figure | what it shows |
 |--------|---------------|
-| **Figure 4** | Unique `(PC, Δ)` pairs per workload vs. resident footprint |
+| **Figure 4** | CDF of unique `(PC, Δ)` pairs per workload |
 | **Figure 5** | Top-k successor coverage (global vs. PC-conditioned) |
 | **Figure 6** | Fraction of transitions per source region, for 4 example workloads |
 | **Figure 8** | Successor-region granularity sweep (top-4 / top-8) |
