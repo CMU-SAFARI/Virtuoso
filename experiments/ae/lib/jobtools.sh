@@ -3,7 +3,7 @@
 #   - validity-based completion (a job is "done" only if sim.stats has a cycle_count)
 #   - pre-flight trace check (fail fast before submitting)
 #   - resumable / self-healing submit (only submit jobs with no valid result)
-# Sourced by run_ae.sh. All functions are pure bash + coreutils + slurm.
+# Sourced by ae_launch.sh / ae_watch.sh. All functions are pure bash + coreutils + slurm.
 
 # --- a result is VALID only if sim.stats exists and carries the IPC counters ---
 ae_valid_result() {  # $1 = rundir (the -d dir)
