@@ -1,8 +1,8 @@
 # TRAIL — Artifact Evaluation
 
 This artifact reproduces the main results of the TRAIL paper. TRAIL is a temporal
-TLB prefetcher that makes address translation *self-prefetching*: each page-table
-entry carries the translations that most often follow it, so one prefetch both
+TLB prefetcher that makes each page-table
+entry carry the translations that most often follow it, so one prefetch both
 installs a translation and delivers the next prediction. The experiments compare
 TRAIL against a no-prefetch baseline, prior TLB prefetchers (ASP, Stride/NextPage,
 DP, Recency, ATP, Berti), and a Perfect-L2TLB upper bound on the Sniper
@@ -206,7 +206,7 @@ closely match the paper. Speedups are geometric-mean over the workload suite
 
 | suite | expected (approx.) |
 |-------|--------------------|
-| `head8mb` (Figure 12, 8 MB) | **TRAIL ≈ +4.7%** over no-prefetch (**+2.4%** over ASP); Perfect-L2TLB ≈ +11% (upper bound) |
+| `head8mb` (Figure 12,13, 8 MB) | **TRAIL ≈ +4.7%** over no-prefetch (**+2.4%** over ASP); Perfect-L2TLB ≈ +11% (upper bound) |
 | `head2mb` (Figure 12, 2 MB) | **TRAIL ≈ +5.1%** over no-prefetch (**+2.8%** over ASP); Perfect-L2TLB ≈ +16.5% |
 | `table5`  (Table 5)         | TRAIL (in-PTE) grows with the payload budget, up to **≈ +2.4%** over ASP |
 | `table6`  (Table 6)         | TRAIL (side-car) grows with the payload budget, up to **≈ +2.5%** over ASP |
