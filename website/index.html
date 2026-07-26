@@ -265,9 +265,8 @@
                 <h2>Supported Components</h2>
                 <div class="comp-grid">
                     <div class="comp-card">
-                        <h3>Physical Memory Allocators <span class="comp-count">8</span></h3>
+                        <h3>Physical Memory Allocators <span class="comp-count">7</span></h3>
                         <ul>
-                            <li><strong>Revelator</strong> : Page-fault-driven physical-memory allocator with NUMA-aware placement policies (Kanellopoulos et al., ISCA '26)</li>
                             <li><strong>Baseline</strong> : Simple 4KB buddy allocator</li>
                             <li><strong>ReserveTHP</strong> : Reservation-based transparent huge pages with 2MB promotion</li>
                             <li><strong>SpOT</strong> : Contiguity-aware allocator exploiting OS allocation patterns (<a href="https://chloe-alverti.github.io/publications/isca2020-contiguity/" target="_blank" rel="noopener">Alverti et al., ISCA '20</a>)</li>
@@ -313,8 +312,9 @@
                         </ul>
                     </div>
                     <div class="comp-card">
-                        <h3>Speculative Translation Engines <span class="comp-count">4</span></h3>
+                        <h3>Speculative Translation Engines <span class="comp-count">5</span></h3>
                         <ul>
+                            <li><strong>Revelator</strong> : Hash-based speculative address translation (Kanellopoulos et al., ISCA '26)</li>
                             <li><strong>SpOT</strong> : Offset-based speculation exploiting physical contiguity (<a href="https://chloe-alverti.github.io/publications/isca2020-contiguity/" target="_blank" rel="noopener">Alverti et al., ISCA '20</a>)</li>
                             <li><strong>Oracle</strong> : Perfect speculation engine for upper-bound analysis</li>
                             <li><strong>SpecTLB</strong> : Speculative address translation mechanism (<a href="https://dl.acm.org/doi/10.1145/2024723.2000101" target="_blank" rel="noopener">Barr et al., ISCA '11</a>)</li>
