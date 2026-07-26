@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TRAIL — a self-prefetching page table | Virtuoso</title>
+  <meta name="description" content="How TRAIL works: a temporal TLB prefetcher that makes the page table prefetch itself. A code walkthrough of the TemporalPTEPrefetcher in the Virtuoso / Sniper + MimicOS simulator.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" href="img/favicon.ico">
+  <style>
+    :root{
+      --primary-color:#475569; --secondary-color:#f1f5f9; --text-color:#333;
+      --heading-color:#1a1a1a; --border-color:#e0e0e0; --white-color:#fff;
+      --badge-bg:#e2e8f0; --accent-color:#64748b;
+      --shadow:0 4px 12px rgba(0,0,0,0.08);
+      /* code (dark block) syntax tones */
+      --c-com:#8592a3; --c-kw:#9ec1e6; --c-typ:#b8cbe0; --c-lit:#a6cf9f;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth;font-size:16px}
+    body{font-family:'Poppins',sans-serif;margin:0;padding:0;background:var(--secondary-color);color:var(--text-color);line-height:1.7}
+    .container{max-width:960px;margin:0 auto;padding:0 1rem}
+    h1,h2,h3,h4{font-weight:700;color:var(--heading-color);line-height:1.2;margin-top:0}
+    h2{font-size:2rem;border-bottom:2px solid var(--primary-color);padding-bottom:.5rem;margin-bottom:2rem}
+    h3{font-size:1.25rem;color:var(--primary-color)}
+    p{margin:0 0 1rem}
+    a{color:var(--primary-color);text-decoration:none;transition:color .2s}
+    a:hover{text-decoration:underline}
+    code{font-family:'Courier New',Courier,monospace}
+    p code,li code,td code{background:var(--badge-bg);color:var(--primary-color);padding:.08em .4em;border-radius:5px;font-size:.86em;white-space:nowrap}
+
+    /* header / nav — matches the landing */
+    .site-header{background:var(--white-color);padding:1rem 0;position:sticky;top:0;z-index:1000;box-shadow:0 2px 8px rgba(0,0,0,.05);border-bottom:1px solid var(--border-color)}
+    .nav-container{display:flex;justify-content:space-between;align-items:center;max-width:960px;margin:0 auto;padding:0 1rem}
+    .nav-logo{font-weight:700;font-size:1.2rem;color:var(--heading-color)}
+    .nav-logo:hover{text-decoration:none}
+    .main-nav ul{margin:0;padding:0;list-style:none;display:flex;gap:1.5rem}
+    .main-nav a{font-weight:600;font-size:.95rem;position:relative}
+    .main-nav a::after{content:'';position:absolute;bottom:-3px;left:0;width:0;height:2px;background:var(--primary-color);border-radius:1px;transition:width .3s ease}
+    .main-nav a:hover::after{width:100%}
+    .main-nav a:hover{text-decoration:none}
+    .main-nav a.active{color:var(--primary-color)}
+    .main-nav a.active::after{width:100%}
+
+    /* hero */
+    .hero{background:#fff;padding:4rem 1rem 3rem;text-align:center;position:relative;overflow:hidden;border-bottom:1px solid var(--border-color)}
+    .hero::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle at 30% 40%,rgba(71,85,105,.03) 0%,transparent 50%),radial-gradient(circle at 70% 60%,rgba(100,116,139,.04) 0%,transparent 50%);pointer-events:none}
+    .hero .eyebrow{font-size:.78rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-color);font-weight:700;margin-bottom:.6rem}
+    .hero h1{font-size:2.9rem;margin-bottom:.4rem}
+    .hero .subtitle{font-size:1.3rem;font-weight:600;color:var(--primary-color);margin-bottom:.9rem}
+    .hero .desc{font-size:.98rem;color:#555;max-width:640px;margin:0 auto 1.5rem;line-height:1.65}
+    .hero .desc b{color:var(--heading-color)}
+    .cta-row{display:flex;gap:.8rem;justify-content:center;flex-wrap:wrap}
+    .btn{display:inline-block;padding:.7rem 1.4rem;border-radius:10px;border:1px solid var(--primary-color);background:var(--primary-color);color:#fff;font-weight:700;font-family:inherit;font-size:.95rem;transition:filter .2s,transform .2s}
+    .btn:hover{filter:brightness(.92);text-decoration:none;transform:translateY(-1px)}
+    .btn-outline{background:#fff;color:var(--primary-color)}
+    .tags{margin-top:1.4rem;display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap;font-family:'Courier New',monospace;font-size:.75rem}
+    .tag{border:1px solid var(--border-color);border-radius:999px;padding:.28rem .7rem;color:#555;background:var(--white-color)}
+    .tag b{color:var(--primary-color)}
+
+    section.block{padding:3rem 0}
+    .lead{color:#444;max-width:760px}
+    .kicker{font-family:'Courier New',monospace;font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-color);margin:0 0 .8rem;font-weight:700}
+
+    /* schematic */
+    figure.diagram{margin:2rem 0 0;padding:1.4rem 1.1rem;background:var(--white-color);border:1px solid var(--border-color);border-radius:12px;box-shadow:var(--shadow);overflow-x:auto}
+    figure.diagram svg{display:block;width:100%;min-width:560px;height:auto}
+    figure.diagram svg text{font-family:'Courier New',monospace}
+    figure.diagram figcaption{font-size:.8rem;color:#667085;margin-top:.9rem;text-align:center}
+    .dg-box{fill:var(--secondary-color);stroke:var(--border-color)}
+    .dg-pte{fill:var(--white-color);stroke:var(--primary-color)}
+    .dg-slot{fill:var(--badge-bg);stroke:var(--border-color)}
+    .dg-pred{fill:var(--white-color);stroke:var(--primary-color);stroke-dasharray:4 3}
+    .dg-arw{stroke:#94a3b8;stroke-width:1.6;fill:none}
+    .dg-carw{stroke:var(--primary-color);stroke-width:1.8;fill:none}
+    .dg-mk{fill:var(--primary-color)}
+    .t-mut{fill:#64748b}.t-txt{fill:var(--heading-color)}.t-pri{fill:var(--primary-color)}.t-faint{fill:#94a3b8}
+
+    /* code map + tables */
+    .tblwrap{overflow-x:auto}
+    table.tbl{width:100%;border-collapse:collapse;font-size:.9rem;margin-top:.4rem;background:var(--white-color);border:1px solid var(--border-color);border-radius:10px;overflow:hidden}
+    table.tbl th,table.tbl td{text-align:left;padding:.7rem .85rem;border-bottom:1px solid var(--border-color);vertical-align:top}
+    table.tbl tr:last-child td{border-bottom:none}
+    table.tbl th{background:var(--secondary-color);font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--primary-color);font-weight:700}
+    table.tbl td.f,table.tbl td.k{font-family:'Courier New',monospace;color:var(--primary-color);white-space:nowrap;font-size:.84rem}
+    table.tbl td.v{font-family:'Courier New',monospace;color:var(--heading-color);white-space:nowrap;font-size:.84rem}
+    table.tbl td.d{color:#555}
+
+    /* stages / trail line */
+    .stages{position:relative;margin-top:1rem}
+    .stages::before{content:'';position:absolute;left:16px;top:8px;bottom:8px;width:2px;background:linear-gradient(var(--primary-color),var(--accent-color));opacity:.35}
+    .stage{position:relative;padding:0 0 2.5rem 54px}
+    .stage:last-child{padding-bottom:.3rem}
+    .stage .node{position:absolute;left:0;top:-2px;width:34px;height:34px;border-radius:50%;background:var(--white-color);border:2px solid var(--primary-color);color:var(--primary-color);display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;font-weight:700;box-shadow:var(--shadow)}
+    .stage h3{font-size:1.2rem;margin:.2rem 0 .5rem;color:var(--heading-color)}
+    .stage p.sub{color:#667085;font-size:.94rem}
+
+    /* code figure — dark block in the site's .code-block style */
+    figure.code{margin:1rem 0;border-radius:8px;overflow:hidden;border:1px solid var(--border-color);box-shadow:var(--shadow)}
+    figure.code .cap{display:flex;align-items:center;gap:.5rem;padding:.5rem .9rem;background:var(--secondary-color);border-bottom:1px solid var(--border-color);font-family:'Courier New',monospace;font-size:.74rem;color:#667085}
+    figure.code .cap .dot{width:8px;height:8px;border-radius:50%;background:var(--primary-color);flex:none}
+    figure.code .cap .path{color:var(--heading-color);font-weight:600}
+    figure.code .cap .ln{margin-left:auto;color:#94a3b8}
+    figure.code pre{margin:0;background:var(--heading-color);color:#e2e8f0;padding:1rem 1.2rem;overflow-x:auto;font-family:'Courier New',Courier,monospace;font-size:.82rem;line-height:1.65}
+    figure.code code{font-family:inherit;white-space:pre;background:none;color:inherit;padding:0}
+    .c-com{color:var(--c-com);font-style:italic}.c-kw{color:var(--c-kw)}.c-typ{color:var(--c-typ)}.c-lit{color:var(--c-lit)}
+
+    .note{border-left:4px solid var(--primary-color);background:var(--white-color);padding:.9rem 1.1rem;border-radius:0 8px 8px 0;margin:1.1rem 0;font-size:.94rem;box-shadow:var(--shadow)}
+    .note b{color:var(--primary-color)}
+
+    .compare{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem}
+    .cc{background:var(--white-color);border:1px solid var(--border-color);border-radius:10px;padding:1.1rem;box-shadow:var(--shadow)}
+    .cc .h{font-family:'Courier New',monospace;font-size:.72rem;letter-spacing:.04em;color:var(--primary-color);text-transform:uppercase;font-weight:700}
+    .cc h3{font-size:1.05rem;margin:.35rem 0 .5rem;color:var(--heading-color)}
+    .cc p{margin:0;color:#555;font-size:.92rem}
+    @media (max-width:640px){.compare{grid-template-columns:1fr}}
+
+    .site-footer{background:var(--heading-color);color:var(--secondary-color);text-align:center;padding:2rem 1rem;font-size:.9rem;margin-top:2rem}
+    .site-footer p{margin:.3rem 0}
+    .site-footer a{color:var(--white-color)}
+    .footer-links{display:flex;gap:1.5rem;justify-content:center;margin-bottom:.5rem}
+    .back-to-top{position:fixed;bottom:2rem;right:2rem;width:44px;height:44px;border-radius:50%;background:var(--primary-color);color:#fff;border:none;font-size:1.2rem;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2);opacity:0;visibility:hidden;transition:opacity .3s,visibility .3s,transform .3s;z-index:999;display:flex;align-items:center;justify-content:center}
+    .back-to-top.show{opacity:1;visibility:visible}
+    .fade-in{opacity:0;transform:translateY(14px);transition:opacity .6s ease,transform .6s ease}
+    .fade-in.visible{opacity:1;transform:none}
+    @media (max-width:600px){.nav-container{flex-direction:column;gap:.5rem}.main-nav ul{gap:.75rem;flex-wrap:wrap;justify-content:center;font-size:.85rem}.hero h1{font-size:2.1rem}}
+    @media (prefers-reduced-motion:reduce){.fade-in{opacity:1;transform:none;transition:none}*{scroll-behavior:auto}}
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="nav-container">
+      <a class="nav-logo" href="index.html">Virtuoso</a>
+      <nav class="main-nav">
+        <ul>
+          <li><a href="index.html#features">Features</a></li>
+          <li><a href="index.html#components">Components</a></li>
+          <li><a href="index.html#workshop">Workshop</a></li>
+          <li><a href="trail.html" class="active">TRAIL</a></li>
+          <li><a href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container">
+        <p class="eyebrow">Temporal TLB Prefetcher · code walkthrough</p>
+        <h1>A self-prefetching page table.</h1>
+        <p class="subtitle">TRAIL</p>
+        <p class="desc">TRAIL augments each translation with the ones that most often follow it — so
+          fetching a translation during a page-table walk <b>also delivers the next prediction</b>, and
+          the walker can run ahead down the successor chain. These notes walk the implementation in
+          Virtuoso; the class is <b>TemporalPTEPrefetcher</b> (&ldquo;TRAIL&rdquo; is the paper name).</p>
+        <div class="cta-row">
+          <a class="btn" href="https://github.com/CMU-SAFARI/Virtuoso/tree/trail-artifact-release/experiments/ae" target="_blank" rel="noopener">Artifact &amp; reproduce</a>
+          <a class="btn btn-outline" href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener">Source on GitHub</a>
+        </div>
+        <div class="tags">
+          <span class="tag">class <b>TemporalPTEPrefetcher</b></span>
+          <span class="tag">key <b>temporal_pte</b></span>
+          <span class="tag">Sniper + MimicOS</span>
+          <span class="tag">baseline <b>asp</b></span>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 600 168" role="img" aria-label="A page-table entry carries successor deltas that predict the next regions, followed as a chain.">
+            <defs>
+              <marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path class="dg-mk" d="M0 0 L10 5 L0 10 z"/>
+              </marker>
+            </defs>
+            <rect class="dg-box" x="6" y="60" width="92" height="48" rx="8"/>
+            <text class="t-mut" x="52" y="80" text-anchor="middle" font-size="12">demand</text>
+            <text class="t-txt" x="52" y="96" text-anchor="middle" font-size="12">VPNn</text>
+            <line class="dg-arw" x1="102" y1="84" x2="144" y2="84" marker-end="url(#arw)"/>
+            <text class="t-faint" x="123" y="76" text-anchor="middle" font-size="9.5">walk</text>
+            <rect class="dg-pte" x="150" y="50" width="150" height="68" rx="9"/>
+            <text class="t-pri" x="225" y="43" text-anchor="middle" font-size="10">PTE payload &middot; 4 slots</text>
+            <g class="t-txt" font-size="11" text-anchor="middle">
+              <rect class="dg-slot" x="160" y="72" width="30" height="30" rx="5"/><text x="175" y="91">&#916;1</text>
+              <rect class="dg-slot" x="194" y="72" width="30" height="30" rx="5"/><text x="209" y="91">&#916;2</text>
+              <rect class="dg-slot" x="228" y="72" width="30" height="30" rx="5"/><text x="243" y="91">&#916;3</text>
+              <rect class="dg-slot" x="262" y="72" width="30" height="30" rx="5"/><text x="277" y="91">&#916;4</text>
+            </g>
+            <line class="dg-carw" x1="304" y1="84" x2="344" y2="84" marker-end="url(#arw)"/>
+            <text class="t-pri" x="324" y="76" text-anchor="middle" font-size="9.5">+&#916;</text>
+            <rect class="dg-pred" x="348" y="62" width="72" height="44" rx="8"/>
+            <text class="t-txt" x="384" y="88" text-anchor="middle" font-size="12">VPN+&#916;</text>
+            <line class="dg-carw" x1="424" y1="84" x2="452" y2="84" marker-end="url(#arw)" opacity=".8"/>
+            <rect class="dg-pred" x="456" y="66" width="60" height="36" rx="7" opacity=".8"/>
+            <text class="t-mut" x="486" y="88" text-anchor="middle" font-size="11">+&#916;&#39;</text>
+            <line class="dg-carw" x1="520" y1="84" x2="546" y2="84" marker-end="url(#arw)" opacity=".55"/>
+            <rect class="dg-pred" x="550" y="70" width="44" height="28" rx="6" opacity=".55"/>
+            <text class="t-faint" x="572" y="88" text-anchor="middle" font-size="10">&#8230;</text>
+            <text class="t-pri" x="300" y="150" text-anchor="middle" font-size="10">run-ahead along the successor chain</text>
+          </svg>
+          <figcaption>Spare page-table bits hold deltas to a region's usual successors; each prediction can be followed one step further.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="container fade-in">
+        <p class="kicker">Orientation</p>
+        <h2>Where the code lives</h2>
+        <p class="lead">The mechanism is one prefetcher class plus a bit-packing codec; the TLB and page
+          table provide the storage and the install path. All paths are under
+          <code>simulator/sniper/&hellip;/parametric_dram_directory_msi/</code>.</p>
+        <div class="tblwrap">
+          <table class="tbl">
+            <thead><tr><th>File</th><th>Role</th></tr></thead>
+            <tbody>
+              <tr><td class="f">TemporalPTEPrefetcher.{h,cc}</td><td class="d">the prefetcher — learning (<code>learnTransition</code>) and issue (<code>performPrefetch</code>)</td></tr>
+              <tr><td class="f">tlb_prefetching/pte_offset_codec.h</td><td class="d">packs/unpacks the delta+confidence slots inside a payload word</td></tr>
+              <tr><td class="f">page_tables/payload_word.h</td><td class="d">the 256-bit <code>PayloadWord</code> that rides with a translation</td></tr>
+              <tr><td class="f">page_tables/pagetable.h</td><td class="d"><code>read/writePayloadBits</code> — where the payload is stored</td></tr>
+              <tr><td class="f">tlb_prefetching/tlb_prefetcher_base.{h,cc}</td><td class="d">prefetcher interface + <code>PTWTransparent</code> (a walk that doesn't move the clock)</td></tr>
+              <tr><td class="f">tlb.cc</td><td class="d">the prefetch queue — enqueue, dedup, and materialize into the L2 TLB</td></tr>
+              <tr><td class="f">tlb_prefetching/tlb_prefetcher_factory.h</td><td class="d">config &rarr; object; dispatch on <code>"temporal_pte"</code></td></tr>
+              <tr><td class="f">mmu_configs/mmu_temporal_pte.cfg</td><td class="d">the knobs (slots, widths, region size, depth, PQ size)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" style="background:var(--white-color);border-top:1px solid var(--border-color);border-bottom:1px solid var(--border-color)">
+      <div class="container fade-in">
+        <p class="kicker">The mechanism &middot; miss &rarr; learn &rarr; predict &rarr; install &rarr; hit</p>
+        <h2>The implementation, stage by stage</h2>
+        <div class="stages">
+
+          <article class="stage">
+            <div class="node">1</div>
+            <h3>The payload: successors packed into spare bits</h3>
+            <p>A region's payload is a set of <em>k</em> slots, each a signed <b>delta-VPN</b> (in region
+              units) plus a small confidence counter. The production layout is 4 slots of an 18-bit delta
+              and a 2-bit counter — 80 bits, sized to the spare bits across one page-table cache line.</p>
+            <script type="text/plain" class="snip" data-path="pte_offset_codec.h" data-ln="PTEOffsetEntry / PTEOffsetConfig">
+struct PTEOffsetEntry
+{
+    int32_t  delta_vpn;   // Signed decoded offset (two's complement)
+    uint32_t conf;        // Decoded confidence (0 when conf_bits == 0)
+};
+
+// k offset+confidence slots packed inside one PTE payload word.
+struct PTEOffsetConfig
+{
+    uint32_t num_entries;   // k - number of delta+conf slots
+    uint32_t offset_bits;   // b_off - bits per signed offset
+    uint32_t conf_bits;     // b_conf - bits per confidence
+    uint32_t base_bit;      // start bit within the payload
+    bool     signed_offset; // true -> two's complement sign extension
+
+    uint32_t totalBits() const { return num_entries * (offset_bits + conf_bits); }
+    // The whole layout must fit in the 256-bit payload word.
+    bool fitsInPayload() const { return (base_bit + totalBits()) <= PayloadWord::BITS; }
+};
+</script>
+            <p class="sub">The payload is a <code>PayloadWord</code> (256 bits) that travels with a
+              translation and is read/written through the page table via
+              <code>readPayloadBits</code> / <code>writePayloadBits</code>.</p>
+          </article>
+
+          <article class="stage">
+            <div class="node">2</div>
+            <h3>Learning: the table writes successors into the predecessor</h3>
+            <p>On a transition <code>src &rarr; curr</code>, TRAIL computes the signed delta and updates the
+              <em>source</em> region's payload — bumping a matching slot or evicting the lowest-confidence
+              one — then writes it back into the page table. Next time that predecessor is walked, the
+              successor is already there.</p>
+            <script type="text/plain" class="snip" data-path="TemporalPTEPrefetcher.cc" data-ln="learnTransition() - write-back">
+entries[victim].delta_vpn = delta;
+entries[victim].conf      = m_conf_init;
+m_stats.learning_inserts++;
+
+// Write back to the first page of the source region
+PayloadWord new_payload = m_codec.encodeAll(old_payload, entries);
+if (learn_2mb)
+    pt->writePMDPayloadBits(src_vpn, new_payload);
+else
+    pt->writePayloadBits(src_vpn, new_payload);
+</script>
+          </article>
+
+          <article class="stage">
+            <div class="node">3</div>
+            <h3>Reading the payload prefetches the next one</h3>
+            <p>On the walk, TRAIL decodes the demand region's slots and, for each confident delta, issues a
+              transparent walk for <code>region + &#916;</code>. Crucially, the <em>predicted</em> region's
+              payload is enqueued at depth+1 — so TRAIL follows the successor of the successor, running
+              ahead down the chain up to <code>max_prefetch_depth</code>.</p>
+            <script type="text/plain" class="snip" data-path="TemporalPTEPrefetcher.cc" data-ln="performPrefetch() - chain enqueue">
+// Chained prefetching: enqueue the next depth
+if (chained_payload != 0 && m_max_prefetch_depth > 0)
+{
+    if (current_depth < m_max_prefetch_depth)
+    {
+        // A chain can only start once this region's walk completes
+        work_queue.push_back({ target_region_u64, chained_payload,
+                               current_depth + 1, region_completion, child_score });
+    }
+}
+</script>
+            <p class="sub">Each transparent walk (<code>PTWTransparent</code>) restores the caller's clock,
+              so demand-path timing is never charged for a prediction.</p>
+          </article>
+
+          <article class="stage">
+            <div class="node">4</div>
+            <h3>Predictions land in the L2 TLB via a prefetch queue</h3>
+            <p>Each prediction returns with a completion timestamp and waits in a timestamp-ordered queue
+              (capped at the PQ size). When the demand clock passes that time, the entry is
+              <b>allocated into the L2 TLB</b>, tagged as a prefetch, and the prefetcher is told its guess
+              is now resident.</p>
+            <script type="text/plain" class="snip" data-path="tlb.cc" data-ln="lookup() - materialize">
+while (!entry_priority_queue.empty() &&
+        entry_priority_queue.top().timestamp <= now)
+{
+    query_entry entry = entry_priority_queue.top();
+    entry_priority_queue.pop();
+
+    // Install the completed prefetch into the L2 TLB
+    allocate(entry.address, entry.timestamp, false, lock_signal,
+             entry.page_size, entry.ppn, /*prefetch=*/true);
+    tlb_stats.m_pq_materialized++;
+
+    // Tell the prefetcher its prediction is now resident
+    for (int i = 0; i < number_of_prefetchers; i++)
+        prefetchers[i]->notifyInstall(entry.address, entry.page_size);
+}
+</script>
+            <p class="sub">A later demand for that region hits the installed entry — a <code>pq_hit</code> —
+              and skips the walk entirely. That saved walk is the payoff.</p>
+          </article>
+
+          <article class="stage">
+            <div class="node">5</div>
+            <h3>Two homes for the payload</h3>
+            <p>The successors can ride in the <b>spare bits of the PTE</b> (<code>v4-trail</code>), or live
+              in a separate OS-managed radix <b>side-car</b> table (<code>v4-trail-sidecar</code>) fetched
+              <em>in parallel</em> with the walk. The side-car never slows translation — it only shifts
+              <em>when</em> a prediction becomes available.</p>
+            <script type="text/plain" class="snip" data-path="TemporalPTEPrefetcher.cc" data-ln="performPrefetch() - side-car delay">
+// Side-car variant: the payload lives in a separate OS table, fetched in
+// PARALLEL with the page walk - so it only delays *when* a prefetch lands.
+if (m_payload_in_side_table && !result.empty())
+{
+    const SubsecondTime side_lat =
+        modelSideTableAccess(region_id, eip, lock, modeled, count);
+    if (side_lat > SubsecondTime::Zero())
+        for (auto& q : result)
+            q.timestamp += side_lat;   // materialization only, not translation
+}
+</script>
+            <div class="compare">
+              <div class="cc">
+                <div class="h">v4-trail</div>
+                <h3>In-PTE payload</h3>
+                <p>Rides in spare page-table bits, read inline during the walk. No extra structure; bounded
+                  by the ~80-bit spare-bit budget.</p>
+              </div>
+              <div class="cc">
+                <div class="h">v4-trail-sidecar</div>
+                <h3>OS radix side-car</h3>
+                <p>Payload in a separate table with its own walk cache, fetched in parallel. Frees the PTE
+                  and widens the budget, at the cost of a parallel lookup.</p>
+              </div>
+            </div>
+          </article>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="container fade-in">
+        <p class="kicker">Configuration</p>
+        <h2>What the config sets</h2>
+        <p class="lead">The mechanism is a handful of parameters in
+          <code>config/mmu_configs/mmu_temporal_pte.cfg</code> (per-experiment overrides in
+          <code>clist_prefetcher_v3.yaml</code>). The ones that matter:</p>
+        <div class="tblwrap">
+          <table class="tbl">
+            <thead><tr><th>Key</th><th>Value</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td class="k">num_offsets</td><td class="v">4</td><td class="d">successor slots per translation</td></tr>
+              <tr><td class="k">offset_bits</td><td class="v">18</td><td class="d">signed &#916; width — &plusmn;128K regions</td></tr>
+              <tr><td class="k">conf_bits</td><td class="v">2</td><td class="d">confidence counter per slot</td></tr>
+              <tr><td class="k">region_shift</td><td class="v">3 – 5</td><td class="d">pages per region (32KB &rarr; 128KB); also the fan-out</td></tr>
+              <tr><td class="k">max_prefetch_depth</td><td class="v">1 – 3</td><td class="d">how far to run ahead on the chain</td></tr>
+              <tr><td class="k">pq1/size</td><td class="v">1024</td><td class="d">prefetch-queue capacity</td></tr>
+              <tr><td class="k">mode</td><td class="v">pc_cond_learn</td><td class="d">learn transitions per program counter</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note"><b>Note.</b> <code>region_shift</code> does double duty: it sets both the
+          prediction granularity <em>and</em> the fan-out — one prediction installs
+          <code>2^region_shift</code> TLB entries, but is charged only one modeled walk per PTE cache
+          line.</div>
+      </div>
+    </section>
+
+    <section class="block" style="background:var(--white-color);border-top:1px solid var(--border-color)">
+      <div class="container fade-in">
+        <p class="kicker">Evaluation</p>
+        <h2>Measured effect</h2>
+        <p class="lead">Single-core numbers are geometric means over the workload suite; the multi-core
+          number is an equal-work harmonic mean across the four cores. Perfect-L2TLB is an idealized upper
+          bound. All figures reproduce from the public artifact.</p>
+        <div class="tblwrap">
+          <table class="tbl">
+            <thead><tr><th>Configuration</th><th>vs no-prefetch</th><th>vs best prior</th><th>Perfect-L2TLB</th></tr></thead>
+            <tbody>
+              <tr><td class="d">Single-core, 8 MB LLC</td><td class="v">+4.7%</td><td class="v">+2.4%</td><td class="v">+11%</td></tr>
+              <tr><td class="d">Single-core, 2 MB LLC</td><td class="v">+5.1%</td><td class="v">+2.8%</td><td class="v">+16.5%</td></tr>
+              <tr><td class="d">4-core, mixed (hmean)</td><td class="v">+11%</td><td class="v">&asymp;+6pt</td><td class="v">+23%</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="sub" style="color:#667085;font-size:.9rem;margin-top:1rem">&ldquo;Best prior&rdquo; is the
+          strongest of ASP, Stride/NextPage, DP, Recency, ATP, and Berti on that configuration. Reproduce
+          everything from the
+          <a href="https://github.com/CMU-SAFARI/Virtuoso/tree/trail-artifact-release/experiments/ae" target="_blank" rel="noopener">artifact</a>.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-links">
+      <a href="index.html">Home</a>
+      <a href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/CMU-SAFARI/Virtuoso/tree/trail-artifact-release/experiments/ae" target="_blank" rel="noopener">Artifact</a>
+    </div>
+    <p>A walkthrough of the <code style="background:none;color:#cbd5e1">TemporalPTEPrefetcher</code> in Virtuoso (Sniper + MimicOS). Snippets are excerpted from the implementation.</p>
+    <p>SAFARI Research Group, ETH Zurich &amp; CMU</p>
+    <p>&copy; 2025 Virtuoso. All rights reserved.</p>
+  </footer>
+
+  <button class="back-to-top" id="backToTop" aria-label="Back to top">&#x2191;</button>
+
+  <script>
+    // fade-in on scroll
+    var io = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('visible'); io.unobserve(e.target); } });
+    }, { threshold:0.1 });
+    document.querySelectorAll('.fade-in').forEach(function(el){ io.observe(el); });
+
+    // back to top
+    var btn = document.getElementById('backToTop');
+    window.addEventListener('scroll', function(){ btn.classList.toggle('show', window.scrollY > 400); });
+    btn.addEventListener('click', function(){ window.scrollTo({ top:0, behavior:'smooth' }); });
+
+    // tiny safe C++ highlighter (comments & strings win by alternation order)
+    var KW = "if|else|for|while|return|struct|class|const|constexpr|static|bool|true|false|"
+      + "void|auto|new|delete|nullptr|namespace|template|sizeof|this|break|continue|float|"
+      + "double|unsigned|int|long|short|char";
+    var re = new RegExp(
+      "(\\/\\/[^\\n]*)"
+      + "|(\"(?:[^\"\\\\]|\\\\.)*\")"
+      + "|\\b(0x[0-9a-fA-F]+|\\d+(?:\\.\\d+)?[uUlLfF]*)\\b"
+      + "|\\b(" + KW + ")\\b"
+      + "|\\b([A-Z]\\w*|\\w+_t|SubsecondTime|PayloadWord)\\b", "g");
+    function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+    function hl(code){
+      var out="", last=0, m;
+      while((m=re.exec(code))){
+        out += esc(code.slice(last, m.index));
+        var cls = m[1]?"c-com":m[2]?"c-lit":m[3]?"c-lit":m[4]?"c-kw":"c-typ";
+        out += '<span class="'+cls+'">'+esc(m[0])+"</span>";
+        last = m.index + m[0].length;
+      }
+      return out + esc(code.slice(last));
+    }
+    document.querySelectorAll("script.snip").forEach(function(s){
+      var code = s.textContent.replace(/^\n/,"").replace(/\s+$/,"");
+      var fig = document.createElement("figure"); fig.className = "code";
+      var cap = document.createElement("div"); cap.className = "cap";
+      cap.innerHTML = '<span class="dot"></span><span class="path">'
+        + esc(s.dataset.path||"") + '</span><span class="ln">' + esc(s.dataset.ln||"") + '</span>';
+      var pre = document.createElement("pre"); var c = document.createElement("code");
+      c.innerHTML = hl(code); pre.appendChild(c);
+      fig.appendChild(cap); fig.appendChild(pre);
+      s.parentNode.replaceChild(fig, s);
+    });
+  </script>
+</body>
+</html>

@@ -148,6 +148,7 @@
                     <li><a href="#architecture">Architecture</a></li>
                     <li><a href="#components">Components</a></li>
                     <li><a href="#workshop">Workshop</a></li>
+                    <li><a href="trail.html">TRAIL</a></li>
                     <li><a href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener">GitHub</a></li>
                 </ul>
             </nav>
@@ -264,8 +265,9 @@
                 <h2>Supported Components</h2>
                 <div class="comp-grid">
                     <div class="comp-card">
-                        <h3>Physical Memory Allocators <span class="comp-count">7</span></h3>
+                        <h3>Physical Memory Allocators <span class="comp-count">8</span></h3>
                         <ul>
+                            <li><strong>Revelator</strong> : Page-fault-driven physical-memory allocator with NUMA-aware placement policies (Kanellopoulos et al., ISCA '26)</li>
                             <li><strong>Baseline</strong> : Simple 4KB buddy allocator</li>
                             <li><strong>ReserveTHP</strong> : Reservation-based transparent huge pages with 2MB promotion</li>
                             <li><strong>SpOT</strong> : Contiguity-aware allocator exploiting OS allocation patterns (<a href="https://chloe-alverti.github.io/publications/isca2020-contiguity/" target="_blank" rel="noopener">Alverti et al., ISCA '20</a>)</li>
@@ -299,8 +301,9 @@
                         </ul>
                     </div>
                     <div class="comp-card">
-                        <h3>TLB Prefetchers <span class="comp-count">6</span></h3>
+                        <h3>TLB Prefetchers <span class="comp-count">7</span></h3>
                         <ul>
+                            <li><strong>TRAIL</strong> : Temporal prefetcher that makes the page table self-prefetching &mdash; each PTE carries its likely successors (<a href="trail.html">code walkthrough &rarr;</a>)</li>
                             <li><strong>Agile TLB Prefetcher (ATP)</strong> : Adaptive multi-stride prefetcher with frequency-based detection (<a href="https://dl.acm.org/doi/10.1109/ISCA52012.2021.00016" target="_blank" rel="noopener">Vavouliotis et al., ISCA '21</a>)</li>
                             <li><strong>Recency Prefetcher</strong> : Pointer-table based prefetching using page access recency</li>
                             <li><strong>Distance Prefetcher</strong> : Distance-indexed prediction table for irregular access patterns</li>
