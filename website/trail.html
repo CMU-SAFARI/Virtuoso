@@ -77,6 +77,24 @@
     .dg-carw{stroke:var(--primary-color);stroke-width:1.8;fill:none}
     .dg-mk{fill:var(--primary-color)}
     .t-mut{fill:#64748b}.t-txt{fill:var(--heading-color)}.t-pri{fill:var(--primary-color)}.t-faint{fill:#94a3b8}
+    /* figure animation */
+    .pf-controls{text-align:center;margin-top:1.1rem}
+    .pf-btn{font-size:.9rem;padding:.6rem 1.3rem}
+    .pf-ico{font-size:.72em;margin-right:.45em;position:relative;top:-1px}
+    .pf-pulse{fill:var(--primary-color);opacity:0}
+    @keyframes pfPop{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:none}}
+    @keyframes pfFlash{0%{fill:var(--badge-bg)}45%{fill:var(--primary-color)}100%{fill:var(--badge-bg)}}
+    @keyframes pfPulse{0%{opacity:0;transform:translateX(0)}12%{opacity:1}86%{opacity:1}100%{opacity:0;transform:translateX(272px)}}
+    figure.diagram.animate .pf-step{animation:pfPop .55s cubic-bezier(.2,.7,.3,1) both}
+    figure.diagram.animate #pf-s1{animation-delay:.5s}
+    figure.diagram.animate #pf-s2{animation-delay:1s}
+    figure.diagram.animate #pf-s3{animation-delay:1.5s}
+    figure.diagram.animate .pf-slots rect{animation:pfFlash .45s ease both}
+    figure.diagram.animate .pf-slots rect:nth-of-type(2){animation-delay:.09s}
+    figure.diagram.animate .pf-slots rect:nth-of-type(3){animation-delay:.18s}
+    figure.diagram.animate .pf-slots rect:nth-of-type(4){animation-delay:.27s}
+    figure.diagram.animate .pf-pulse{animation:pfPulse 1.9s ease-in-out .35s both}
+    @media (prefers-reduced-motion:reduce){figure.diagram.animate *{animation:none!important}.pf-pulse{opacity:0}}
 
     /* code map + tables */
     .tblwrap{overflow-x:auto}
@@ -181,25 +199,35 @@
             <text class="t-faint" x="123" y="76" text-anchor="middle" font-size="9.5">walk</text>
             <rect class="dg-pte" x="150" y="50" width="150" height="68" rx="9"/>
             <text class="t-pri" x="225" y="43" text-anchor="middle" font-size="10">PTE payload &middot; 4 slots</text>
-            <g class="t-txt" font-size="11" text-anchor="middle">
+            <g class="t-txt pf-slots" font-size="11" text-anchor="middle">
               <rect class="dg-slot" x="160" y="72" width="30" height="30" rx="5"/><text x="175" y="91">&#916;1</text>
               <rect class="dg-slot" x="194" y="72" width="30" height="30" rx="5"/><text x="209" y="91">&#916;2</text>
               <rect class="dg-slot" x="228" y="72" width="30" height="30" rx="5"/><text x="243" y="91">&#916;3</text>
               <rect class="dg-slot" x="262" y="72" width="30" height="30" rx="5"/><text x="277" y="91">&#916;4</text>
             </g>
-            <line class="dg-carw" x1="304" y1="84" x2="344" y2="84" marker-end="url(#arw)"/>
-            <text class="t-pri" x="324" y="76" text-anchor="middle" font-size="9.5">+&#916;</text>
-            <rect class="dg-pred" x="348" y="62" width="72" height="44" rx="8"/>
-            <text class="t-txt" x="384" y="88" text-anchor="middle" font-size="12">VPN+&#916;</text>
-            <line class="dg-carw" x1="424" y1="84" x2="452" y2="84" marker-end="url(#arw)" opacity=".8"/>
-            <rect class="dg-pred" x="456" y="66" width="60" height="36" rx="7" opacity=".8"/>
-            <text class="t-mut" x="486" y="88" text-anchor="middle" font-size="11">+&#916;&#39;</text>
-            <line class="dg-carw" x1="520" y1="84" x2="546" y2="84" marker-end="url(#arw)" opacity=".55"/>
-            <rect class="dg-pred" x="550" y="70" width="44" height="28" rx="6" opacity=".55"/>
-            <text class="t-faint" x="572" y="88" text-anchor="middle" font-size="10">&#8230;</text>
+            <g class="pf-step" id="pf-s1">
+              <line class="dg-carw" x1="304" y1="84" x2="344" y2="84" marker-end="url(#arw)"/>
+              <text class="t-pri" x="324" y="76" text-anchor="middle" font-size="9.5">+&#916;</text>
+              <rect class="dg-pred" x="348" y="62" width="72" height="44" rx="8"/>
+              <text class="t-txt" x="384" y="88" text-anchor="middle" font-size="12">VPN+&#916;</text>
+            </g>
+            <g class="pf-step" id="pf-s2">
+              <line class="dg-carw" x1="424" y1="84" x2="452" y2="84" marker-end="url(#arw)" opacity=".8"/>
+              <rect class="dg-pred" x="456" y="66" width="60" height="36" rx="7" opacity=".8"/>
+              <text class="t-mut" x="486" y="88" text-anchor="middle" font-size="11">+&#916;&#39;</text>
+            </g>
+            <g class="pf-step" id="pf-s3">
+              <line class="dg-carw" x1="520" y1="84" x2="546" y2="84" marker-end="url(#arw)" opacity=".55"/>
+              <rect class="dg-pred" x="550" y="70" width="44" height="28" rx="6" opacity=".55"/>
+              <text class="t-faint" x="572" y="88" text-anchor="middle" font-size="10">&#8230;</text>
+            </g>
+            <circle class="pf-pulse" cx="302" cy="84" r="4.5"/>
             <text class="t-pri" x="300" y="150" text-anchor="middle" font-size="10">run-ahead along the successor chain</text>
           </svg>
           <figcaption>Spare page-table bits hold deltas to a region's usual successors; each prediction can be followed one step further.</figcaption>
+          <div class="pf-controls">
+            <button class="btn btn-outline pf-btn" id="pfBtn" type="button"><span class="pf-ico" aria-hidden="true">&#9658;</span> Play the run-ahead</button>
+          </div>
         </figure>
       </div>
     </section>
@@ -455,6 +483,18 @@ if (m_payload_in_side_table && !result.empty())
     var btn = document.getElementById('backToTop');
     window.addEventListener('scroll', function(){ btn.classList.toggle('show', window.scrollY > 400); });
     btn.addEventListener('click', function(){ window.scrollTo({ top:0, behavior:'smooth' }); });
+
+    // animate the schematic (button replays the run-ahead)
+    var pfBtn = document.getElementById('pfBtn');
+    var pfFig = document.querySelector('figure.diagram');
+    if (pfBtn && pfFig) {
+      pfBtn.addEventListener('click', function(){
+        pfFig.classList.remove('animate');
+        void pfFig.offsetWidth;                 // reflow so the animation restarts
+        pfFig.classList.add('animate');
+        pfBtn.innerHTML = '<span class="pf-ico" aria-hidden="true">&#8635;</span> Replay';
+      });
+    }
 
     // tiny safe C++ highlighter (comments & strings win by alternation order)
     var KW = "if|else|for|while|return|struct|class|const|constexpr|static|bool|true|false|"
