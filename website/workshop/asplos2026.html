@@ -52,8 +52,10 @@
         @keyframes heroShimmer { 0% { transform: translate(0,0) rotate(0deg); } 100% { transform: translate(2%,-2%) rotate(1deg); } }
         .hero p { font-size: 1.2rem; color: #555; max-width: 700px; margin: 1rem auto 0; }
         .hero .date-location { font-size: 1.1rem; font-weight: 600; color: var(--primary-color); margin-top: 1.5rem; }
-        .hero .edition-badge { display: inline-block; background: var(--primary-color); color: #fff; padding: 0.4rem 1rem; border-radius: 999px; font-size: 0.9rem; font-weight: 600; margin-bottom: 1rem; animation: badgePulse 3s ease-in-out infinite; }
-        @keyframes badgePulse { 0%,100% { box-shadow: 0 0 0 0 rgba(71,85,105,0.4); } 50% { box-shadow: 0 0 0 8px rgba(71,85,105,0); } }
+        .hero .edition-badge { display: inline-block; position: relative; background: var(--primary-color); color: #fff; padding: 0.4rem 1rem; border-radius: 999px; font-size: 0.9rem; font-weight: 600; margin-bottom: 1rem; }
+        .hero .edition-badge::after { content: ''; position: absolute; inset: 0; border-radius: inherit; border: 2px solid rgba(71,85,105,0.45); animation: badgePulse 3s ease-out infinite; pointer-events: none; will-change: transform, opacity; }
+        @keyframes badgePulse { 0% { transform: scale(1); opacity: 0.7; } 70%, 100% { transform: scale(1.18); opacity: 0; } }
+        @media (prefers-reduced-motion: reduce) { .hero .edition-badge::after { animation: none; opacity: 0; } }
 
         /* --- Countdown --- */
         .countdown { display: flex; justify-content: center; gap: 1.5rem; margin-top: 1.5rem; flex-wrap: wrap; }

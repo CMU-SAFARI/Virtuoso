@@ -95,8 +95,8 @@
     .pf-explain{max-width:640px;margin:1rem auto 0;background:var(--white-color);border:1px solid var(--border-color);border-left:4px solid var(--primary-color);border-radius:0 8px 8px 0;padding:.9rem 1.1rem;box-shadow:var(--shadow);font-size:.92rem;text-align:left;line-height:1.6;min-height:3.4em}
     .pf-explain b{color:var(--primary-color)}
     .pf-nav:disabled{opacity:.38;cursor:default;transform:none!important;filter:none!important}
-    /* reading progress */
-    .progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:2000;background:linear-gradient(90deg,var(--primary-color),var(--accent-color));transition:width .1s linear}
+    /* reading progress — scaleX only (compositor-friendly, no layout work) */
+    .progress{position:fixed;top:0;left:0;height:3px;width:100%;z-index:2000;background:linear-gradient(90deg,var(--primary-color),var(--accent-color));transform:scaleX(0);transform-origin:left;will-change:transform}
     /* snippet copy button */
     .cap-copy{margin-left:.8rem;background:none;border:1px solid var(--border-color);color:#667085;border-radius:6px;padding:.12rem .55rem;font-family:'Poppins',sans-serif;font-size:.68rem;font-weight:600;cursor:pointer;transition:color .2s,border-color .2s}
     .cap-copy:hover{color:var(--primary-color);border-color:var(--primary-color)}
@@ -577,13 +577,19 @@ if (m_payload_in_side_table && !result.empty())
       s.parentNode.replaceChild(fig, s);
     });
 
-    // reading progress bar
+    // reading progress bar — rAF-throttled, transform-only updates
     var prog = document.createElement("div"); prog.className = "progress"; document.body.appendChild(prog);
-    window.addEventListener("scroll", function(){
+    var progTick = false;
+    function progUpdate(){
+      progTick = false;
       var h = document.documentElement;
       var max = h.scrollHeight - h.clientHeight;
-      prog.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + "%";
+      prog.style.transform = "scaleX(" + (max > 0 ? h.scrollTop / max : 0) + ")";
+    }
+    window.addEventListener("scroll", function(){
+      if (!progTick) { progTick = true; requestAnimationFrame(progUpdate); }
     }, { passive: true });
+    progUpdate();
   </script>
 </body>
 </html>
