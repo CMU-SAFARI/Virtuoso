@@ -29,7 +29,8 @@
 
         h1, h2, h3 { font-weight: 700; color: var(--heading-color); line-height: 1.2; margin-top: 0; }
         h1 { font-size: 2.8rem; text-align: center; }
-        h2 { font-size: 2rem; border-bottom: 2px solid var(--primary-color); padding-bottom: 0.5rem; margin-bottom: 2rem; }
+        h2 { font-size: 2rem; position: relative; padding-bottom: 0.6rem; margin-bottom: 2rem; }
+        h2::after { content: ''; position: absolute; left: 0; bottom: 0; width: 64px; height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--primary-color), var(--accent-color) 70%, transparent); }
         h3 { font-size: 1.25rem; color: var(--primary-color); }
         p { margin-bottom: 1rem; }
         a { color: var(--primary-color); text-decoration: none; transition: color 0.2s; }
@@ -55,9 +56,10 @@
         .hero .subtitle { font-size: 1.5rem; font-weight: 600; color: var(--primary-color); margin-bottom: 0.75rem; }
         .hero .desc { font-size: 0.95rem; color: #555; max-width: 620px; margin: 0 auto 1.5rem; line-height: 1.6; }
         .cta-row { display: flex; gap: 1rem; align-items: center; justify-content: center; flex-wrap: wrap; }
-        .btn { display: inline-block; padding: .7rem 1.4rem; border-radius: 10px; border: 1px solid var(--primary-color); background: var(--primary-color); color: #fff; font-weight: 700; font-family: inherit; font-size: 0.95rem; text-decoration: none; transition: filter 0.2s, transform 0.2s; }
-        .btn:hover { filter: brightness(0.92); text-decoration: none; transform: translateY(-1px); }
-        .btn-outline { background: #fff; color: var(--primary-color); }
+        .btn { display: inline-block; padding: .7rem 1.4rem; border-radius: 10px; border: 1px solid var(--primary-color); background: linear-gradient(180deg, #52607a, var(--primary-color)); color: #fff; font-weight: 700; font-family: inherit; font-size: 0.95rem; text-decoration: none; transition: filter 0.2s, transform 0.2s, box-shadow 0.2s; box-shadow: 0 1px 2px rgba(30,41,59,0.18); }
+        .btn:hover { filter: brightness(0.95); text-decoration: none; transform: translateY(-1px); box-shadow: 0 6px 14px rgba(30,41,59,0.18); }
+        .btn-outline { background: #fff; color: var(--primary-color); box-shadow: none; }
+        .btn-outline:hover { background: var(--secondary-color); }
 
         /* --- Sections --- */
         main section { padding: 4rem 0; border-bottom: 1px solid var(--border-color); }
@@ -69,9 +71,11 @@
 
         /* --- Feature Grid --- */
         .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
-        .feature-card { background: var(--white-color); padding: 2rem 1.5rem; border-radius: 8px; box-shadow: var(--shadow); transition: transform 0.2s, box-shadow 0.2s; }
-        .feature-card:hover { transform: translateY(-5px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
-        .feature-icon { font-size: 2rem; margin-bottom: 0.75rem; display: block; }
+        .feature-card { position: relative; overflow: hidden; background: var(--white-color); padding: 2rem 1.5rem; border-radius: 12px; border: 1px solid var(--border-color); box-shadow: var(--shadow); transition: transform 0.25s, box-shadow 0.25s; }
+        .feature-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--primary-color), var(--accent-color)); transform: scaleX(0); transform-origin: left; transition: transform 0.3s ease; }
+        .feature-card:hover { transform: translateY(-5px); box-shadow: 0 10px 24px rgba(30,41,59,0.12); }
+        .feature-card:hover::before { transform: scaleX(1); }
+        .feature-icon { width: 52px; height: 52px; border-radius: 14px; background: var(--badge-bg); color: var(--primary-color); display: flex; align-items: center; justify-content: center; font-size: 1.5rem; margin-bottom: 1rem; }
         .feature-card h3 { margin-top: 0; }
         .feature-card p { margin-bottom: 0; font-size: 0.95rem; }
 
@@ -81,24 +85,28 @@
 
         /* --- Components Grid --- */
         .comp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
-        .comp-card { background: var(--white-color); border-radius: 8px; box-shadow: var(--shadow); padding: 1.5rem; }
-        .comp-card h3 { margin-top: 0; font-size: 1.1rem; margin-bottom: 0.75rem; }
+        .comp-card { background: var(--white-color); border-radius: 12px; border: 1px solid var(--border-color); box-shadow: var(--shadow); padding: 1.5rem; transition: transform 0.25s, box-shadow 0.25s, border-color 0.25s; }
+        .comp-card:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(30,41,59,0.10); border-color: #cbd5e1; }
+        .comp-card h3 { margin-top: 0; font-size: 1.1rem; margin-bottom: 0.75rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--border-color); }
         .comp-card ul { margin: 0; padding-left: 18px; font-size: 0.9rem; }
-        .comp-card li { margin-bottom: 0.25rem; }
+        .comp-card li { margin-bottom: 0.35rem; }
+        .comp-card li::marker { color: var(--accent-color); }
         .comp-count { display: inline-block; background: var(--badge-bg); color: var(--primary-color); border: 1px solid var(--primary-color); padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; margin-left: 0.4rem; vertical-align: middle; }
 
         /* --- Workshop Banner --- */
-        .workshop-banner { background: linear-gradient(135deg, var(--white-color) 0%, var(--badge-bg) 100%); border: 2px solid var(--primary-color); border-radius: 12px; padding: 2.5rem; text-align: center; }
+        .workshop-banner { background: linear-gradient(160deg, var(--white-color) 0%, var(--secondary-color) 100%); border: 1px solid var(--border-color); border-top: 3px solid var(--primary-color); border-radius: 14px; padding: 2.5rem; text-align: center; box-shadow: var(--shadow); transition: transform 0.25s, box-shadow 0.25s; }
+        .workshop-banner:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(30,41,59,0.10); }
         .workshop-banner h3 { font-size: 1.4rem; margin-bottom: 0.5rem; }
         .workshop-banner p { color: #555; max-width: 600px; margin: 0 auto 1.5rem; }
 
         /* --- Code Block --- */
-        .code-block { background: var(--heading-color); color: #e2e8f0; border-radius: 8px; padding: 1.5rem 2rem; font-family: 'Courier New', Courier, monospace; font-size: 0.88rem; line-height: 1.8; overflow-x: auto; }
+        .code-block { position: relative; background: linear-gradient(180deg, #212b3b, var(--heading-color)); color: #e2e8f0; border-radius: 10px; padding: 1.5rem 2rem; font-family: 'Courier New', Courier, monospace; font-size: 0.88rem; line-height: 1.8; overflow-x: auto; box-shadow: 0 8px 22px rgba(15,23,42,0.18); }
+        .code-block::before { content: ''; position: absolute; top: 0.95rem; right: 1.1rem; width: 8px; height: 8px; border-radius: 50%; background: #64748b; box-shadow: -14px 0 0 #47556955, -28px 0 0 #47556933; }
         .code-block .comment { color: #64748b; }
         .code-block .prompt { color: #94a3b8; user-select: none; }
 
         /* --- Citation --- */
-        .cite-block { background: var(--white-color); border-left: 5px solid var(--primary-color); border-radius: 8px; padding: 1.5rem 2rem; font-family: 'Courier New', Courier, monospace; font-size: 0.82rem; line-height: 1.7; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+        .cite-block { background: var(--white-color); border: 1px solid var(--border-color); border-left: 5px solid var(--primary-color); border-radius: 0 10px 10px 0; padding: 1.5rem 2rem; font-family: 'Courier New', Courier, monospace; font-size: 0.82rem; line-height: 1.7; overflow-x: auto; white-space: pre-wrap; word-break: break-word; box-shadow: var(--shadow); }
 
         /* --- Footer --- */
         .site-footer { background-color: var(--heading-color); color: var(--secondary-color); text-align: center; padding: 2rem 1rem; font-size: 0.9rem; }
@@ -194,22 +202,24 @@
 
         <!-- Architecture -->
         <style>
-            .arch-diagram { max-width: 800px; margin: 0 auto; position: relative; }
+            .arch-diagram { max-width: 800px; margin: 0 auto; position: relative; padding: 2rem 1.5rem; border: 1px solid var(--border-color); border-radius: 16px; background-color: var(--secondary-color); background-image: radial-gradient(circle at 1px 1px, #d8dee8 1px, transparent 0); background-size: 22px 22px; box-shadow: inset 0 1px 4px rgba(30,41,59,0.04); }
             .arch-layer { display: flex; justify-content: center; gap: 2rem; margin-bottom: 0.5rem; }
-            .arch-box { border-radius: 10px; padding: 1rem 1.5rem; text-align: center; font-size: 0.85rem; transition: transform 0.3s, box-shadow 0.3s; cursor: default; min-width: 200px; }
-            .arch-box:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.12); }
+            .arch-box { border-radius: 12px; padding: 1rem 1.5rem; text-align: center; font-size: 0.85rem; transition: transform 0.3s, box-shadow 0.3s; cursor: default; min-width: 200px; box-shadow: 0 2px 8px rgba(30,41,59,0.08); }
+            .arch-box:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(30,41,59,0.16); }
             .arch-box h4 { margin: 0 0 0.3rem; font-size: 1rem; }
             .arch-box p { margin: 0; font-size: 0.8rem; opacity: 0.85; }
-            .arch-sim { background: #475569; color: #fff; border: none; }
+            .arch-sim { background: linear-gradient(160deg, #52607a 0%, #475569 60%, #3e4c63 100%); color: #fff; border: none; }
             .arch-mimicos { background: linear-gradient(135deg, #334155 0%, #1e293b 100%); color: #fff; border: none; padding: 1.5rem 2rem; min-width: 420px; }
-            .arch-mimicos h4 { font-size: 1.15rem; }
+            .arch-mimicos h4 { font-size: 1.15rem; letter-spacing: 0.02em; }
             .arch-sub { background: var(--white-color); border: 1.5px solid var(--border-color); }
-            .arch-connector { width: 2px; height: 28px; background: var(--primary-color); margin: 0 auto; position: relative; }
-            .arch-connector::after { content: ''; position: absolute; bottom: -4px; left: -4px; width: 10px; height: 10px; border-radius: 50%; background: var(--primary-color); }
-            .arch-connector-h { display: flex; align-items: center; justify-content: center; margin: 0.5rem 0; }
-            .arch-connector-h span { background: var(--badge-bg); color: var(--primary-color); font-size: 0.7rem; font-weight: 700; padding: 0.2rem 0.7rem; border-radius: 999px; border: 1px solid var(--border-color); }
-            .arch-pulse { animation: archPulse 2.5s ease-in-out infinite; }
-            @keyframes archPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(71,85,105,0.3); } 50% { box-shadow: 0 0 0 10px rgba(71,85,105,0); } }
+            .arch-connector { width: 2px; height: 30px; background: linear-gradient(var(--primary-color), var(--accent-color)); margin: 0 auto; position: relative; }
+            .arch-connector::after { content: ''; position: absolute; bottom: -3px; left: -4px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--accent-color); }
+            .arch-connector-h { display: flex; align-items: center; justify-content: center; margin: 0.9rem 0; position: relative; }
+            .arch-connector-h::before { content: ''; position: absolute; left: 12%; right: 12%; top: 50%; height: 1px; background: linear-gradient(90deg, transparent, #cbd5e1 20%, #cbd5e1 80%, transparent); }
+            .arch-connector-h span { position: relative; background: var(--white-color); color: var(--primary-color); font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 0.25rem 0.9rem; border-radius: 999px; border: 1px solid var(--border-color); box-shadow: 0 1px 3px rgba(30,41,59,0.08); }
+            .arch-pulse { animation: archPulse 3s ease-in-out infinite; }
+            @keyframes archPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(71,85,105,0.25); } 50% { box-shadow: 0 0 0 12px rgba(71,85,105,0); } }
+            @media (prefers-reduced-motion: reduce) { .arch-pulse { animation: none; } }
         </style>
         <section id="architecture" class="fade-in" style="background-color: var(--white-color);">
             <div class="container">
