@@ -130,7 +130,7 @@
 
   <header class="hero">
     <p class="eyebrow">Temporal TLB prefetcher · implementation notes</p>
-    <h1>Embedding Deltas in Page-Table Entries (or On the Side)</h1>
+    <h1>Translation prefetching using page-table-embedded deltas (or just put them on the side)</h1>
     <p class="lede">TRAIL augments each PTE with the deltas of the translations that most
       often follow it. Reading a translation during a page-table walk therefore <b>also yields the next
       prediction</b>, and the walker can run ahead down the successor chain. These notes walk the
