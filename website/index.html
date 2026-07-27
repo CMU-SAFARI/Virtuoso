@@ -53,6 +53,8 @@
         .main-nav a::after { content: ''; position: absolute; bottom: -3px; left: 0; width: 0; height: 2px; background: var(--primary-color); border-radius: 1px; transition: width 0.3s ease; }
         .main-nav a:hover::after { width: 100%; }
         .main-nav a:hover { text-decoration: none; }
+        .main-nav a.active { color: var(--primary-color); }
+        .main-nav a.active::after { width: 100%; }
 
         /* --- Hero --- */
         .hero { background: #ffffff; padding: 5rem 1rem; text-align: center; position: relative; overflow: hidden; }
@@ -113,7 +115,9 @@
 
         /* --- Code Block --- */
         .code-block { position: relative; background: linear-gradient(180deg, #212b3b, var(--heading-color)); color: #e2e8f0; border-radius: 10px; padding: 1.5rem 2rem; font-family: 'Courier New', Courier, monospace; font-size: 0.88rem; line-height: 1.8; overflow-x: auto; box-shadow: 0 8px 22px rgba(15,23,42,0.18); }
-        .code-block::before { content: ''; position: absolute; top: 0.95rem; right: 1.1rem; width: 8px; height: 8px; border-radius: 50%; background: #64748b; box-shadow: -14px 0 0 #47556955, -28px 0 0 #47556933; }
+        .copy-btn { position: absolute; top: 50%; transform: translateY(-50%); right: 0.9rem; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.18); color: #cbd5e1; border-radius: 8px; padding: 0.3rem 0.75rem; font-family: 'Poppins', sans-serif; font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: background 0.2s, color 0.2s; }
+        .copy-btn:hover { background: rgba(255,255,255,0.14); color: #fff; }
+        .copy-btn.copied { color: #a6cf9f; border-color: #a6cf9f66; }
         .code-block .comment { color: #64748b; }
         .code-block .prompt { color: #94a3b8; user-select: none; }
 
@@ -178,7 +182,7 @@
     <main>
         <!-- Hero -->
         <section class="hero">
-            <img src="img/virtuoso-logo.png" alt="Virtuoso" style="max-width:420px; margin-bottom:0.5rem;">
+            <img src="img/virtuoso-logo.png" alt="Virtuoso" width="2804" height="728" style="max-width:420px; height:auto; margin-bottom:0.5rem;">
             <p class="subtitle">Fast and Accurate Virtual Memory Research via Imitation-based OS Simulation</p>
             <p class="desc">Rapid prototyping of hardware/OS co-designs for virtual memory. Powered by MimicOS, a lightweight userspace kernel that imitates only the necessary OS functionalities.</p>
             <div><a class="hero-pill" href="trail.html"><span class="new">New</span> TRAIL: translation prefetching via page-table-embedded deltas <span class="arr">&rarr;</span></a></div>
@@ -435,6 +439,32 @@
         const btn = document.getElementById('backToTop');
         window.addEventListener('scroll', () => { btn.classList.toggle('show', window.scrollY > 400); });
         btn.addEventListener('click', () => { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+
+        // Copy button on code blocks
+        document.querySelectorAll('.code-block').forEach(block => {
+            const b = document.createElement('button');
+            b.className = 'copy-btn'; b.type = 'button'; b.textContent = 'Copy';
+            b.addEventListener('click', () => {
+                const text = block.textContent.replace(/^\s*\$\s*/, '').replace('Copy', '').trim();
+                navigator.clipboard.writeText(text).then(() => {
+                    b.textContent = 'Copied ✓'; b.classList.add('copied');
+                    setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('copied'); }, 1600);
+                });
+            });
+            block.appendChild(b);
+        });
+
+        // Scrollspy: highlight the nav link of the section in view
+        const navLinks = Array.from(document.querySelectorAll('.main-nav a[href^="#"]'));
+        const spied = navLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+        const spy = new IntersectionObserver(entries => {
+            entries.forEach(e => {
+                if (e.isIntersecting) {
+                    navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id));
+                }
+            });
+        }, { rootMargin: '-30% 0px -60% 0px' });
+        spied.forEach(s => spy.observe(s));
     </script>
 </body>
 </html>

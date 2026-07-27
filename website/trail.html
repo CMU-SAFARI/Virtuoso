@@ -95,6 +95,12 @@
     .pf-explain{max-width:640px;margin:1rem auto 0;background:var(--white-color);border:1px solid var(--border-color);border-left:4px solid var(--primary-color);border-radius:0 8px 8px 0;padding:.9rem 1.1rem;box-shadow:var(--shadow);font-size:.92rem;text-align:left;line-height:1.6;min-height:3.4em}
     .pf-explain b{color:var(--primary-color)}
     .pf-nav:disabled{opacity:.38;cursor:default;transform:none!important;filter:none!important}
+    /* reading progress */
+    .progress{position:fixed;top:0;left:0;height:3px;width:0;z-index:2000;background:linear-gradient(90deg,var(--primary-color),var(--accent-color));transition:width .1s linear}
+    /* snippet copy button */
+    .cap-copy{margin-left:.8rem;background:none;border:1px solid var(--border-color);color:#667085;border-radius:6px;padding:.12rem .55rem;font-family:'Poppins',sans-serif;font-size:.68rem;font-weight:600;cursor:pointer;transition:color .2s,border-color .2s}
+    .cap-copy:hover{color:var(--primary-color);border-color:var(--primary-color)}
+    .cap-copy.copied{color:#4d7d69;border-color:#4d7d6966}
     @media (prefers-reduced-motion:reduce){.pf-stage{transition-duration:.01s}figure.diagram.stepped .pf-stage.current .pf-arw,figure.diagram.stepped .pf-stage.current .dg-slot{animation:none}}
 
     /* code map + tables */
@@ -517,6 +523,15 @@ if (m_payload_in_side_table && !result.empty())
       pfFig.classList.add('stepped');
       pfPrev.addEventListener('click', function(){ if (pfCur > 0){ pfCur--; pfRender(); } });
       pfNext.addEventListener('click', function(){ pfCur = pfCur === pfLast ? 0 : pfCur + 1; pfRender(); });
+      // arrow keys step through when the figure is in view
+      document.addEventListener('keydown', function(ev){
+        if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
+        var r = pfFig.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > window.innerHeight) return;   // figure off-screen
+        if (ev.key === 'ArrowRight' && pfCur < pfLast) { pfCur++; pfRender(); ev.preventDefault(); }
+        if (ev.key === 'ArrowLeft'  && pfCur > 0)     { pfCur--; pfRender(); ev.preventDefault(); }
+      });
+      pfPrev.title = 'Left arrow'; pfNext.title = 'Right arrow';
       pfRender();
     }
 
@@ -547,11 +562,28 @@ if (m_payload_in_side_table && !result.empty())
       var cap = document.createElement("div"); cap.className = "cap";
       cap.innerHTML = '<span class="dot"></span><span class="path">'
         + esc(s.dataset.path||"") + '</span><span class="ln">' + esc(s.dataset.ln||"") + '</span>';
+      var cp = document.createElement("button");
+      cp.className = "cap-copy"; cp.type = "button"; cp.textContent = "Copy";
+      cp.addEventListener("click", function(){
+        navigator.clipboard.writeText(code).then(function(){
+          cp.textContent = "Copied ✓"; cp.classList.add("copied");
+          setTimeout(function(){ cp.textContent = "Copy"; cp.classList.remove("copied"); }, 1600);
+        });
+      });
+      cap.appendChild(cp);
       var pre = document.createElement("pre"); var c = document.createElement("code");
       c.innerHTML = hl(code); pre.appendChild(c);
       fig.appendChild(cap); fig.appendChild(pre);
       s.parentNode.replaceChild(fig, s);
     });
+
+    // reading progress bar
+    var prog = document.createElement("div"); prog.className = "progress"; document.body.appendChild(prog);
+    window.addEventListener("scroll", function(){
+      var h = document.documentElement;
+      var max = h.scrollHeight - h.clientHeight;
+      prog.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + "%";
+    }, { passive: true });
   </script>
 </body>
 </html>
