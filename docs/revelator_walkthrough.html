@@ -1,4 +1,4 @@
-<title>Revelator — translation you can compute (implementation notes)</title>
+<title>Revelator: Hash, Speculate and Win (implementation notes)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root{
@@ -130,7 +130,7 @@
 
   <header class="hero">
     <p class="eyebrow">Hash-based speculative translation · implementation notes</p>
-    <h1>Translation you can compute, then check</h1>
+    <h1>Hash, Speculate and Win</h1>
     <p class="lede">Revelator makes the physical frame a <b>function of the virtual address</b>. The
       allocator places each page where a hash says it belongs; the MMU replays the same hash to guess the
       frame and starts fetching the data <b>while the page walk is still running</b>. The walk stays the
