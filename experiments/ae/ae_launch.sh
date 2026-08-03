@@ -7,8 +7,8 @@
 #
 # --partitions is optional: if omitted, no --partition is passed to sbatch (your
 #   cluster's default partition is used).
-# --icount overrides every job's instruction budget (default 300M, 100M for the
-#   virtuoso traces) — e.g. --icount 2000000 for a quick end-to-end test.
+# --icount overrides every job's instruction budget (default 300M single-core,
+#   50M/core for the 4-core suite) — e.g. --icount 2000000 for a quick test.
 #
 # Generates the jobfile, checks the traces are present, submits ALL jobs, and
 # returns immediately. It does NOT wait — start the watcher next:
@@ -43,9 +43,10 @@ mkdir -p "$AE_OUT"
 echo "==== [launch] suite=$SUITE  mode=$MODE ===="
 echo "generating jobfile ..."
 ae_generate "$SUITE" || { echo "generation failed"; exit 1; }
-# --icount: override every job's instruction budget (quick testing; default 300M/100M)
+# --icount: override every job's instruction budget (quick testing). Covers both
+# the single-core flag (stop-by-icount:) and the multicore one (…-percore:).
 if [ -n "$ICOUNT" ]; then
-  sed -i -E "s/stop-by-icount:[0-9]+/stop-by-icount:${ICOUNT}/g" "$JOBFILE"
+  sed -i -E "s/stop-by-icount(-percore)?:[0-9]+/stop-by-icount\1:${ICOUNT}/g" "$JOBFILE"
   echo "  NOTE: instruction count overridden to ${ICOUNT} for all jobs (quick test)."
 fi
 EXPECTED=$(grep -c '^sbatch' "$JOBFILE")

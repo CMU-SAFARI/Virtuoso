@@ -1,123 +1,172 @@
 #!/usr/bin/env python3
 """
-Multicore prefetcher head-to-head parser (4-core, 100-mix study).
+Revelator 4-core head-to-head parser.
 
-Uses the EQUAL-WORK, 50M-per-core-heartbeat-crossing method for per-core IPC.
-Do NOT use sim.stats global cycle_count: it overshoots and inflates aggressive
-prefetchers (TRAIL appeared +28% / beating Perfect-L2TLB; real ~+11%).
+Uses the EQUAL-WORK per-core heartbeat-crossing method for per-core IPC. Do NOT
+use sim.stats global cycle_count: it overshoots by however far the last core ran
+past the stop point, which systematically flatters whichever config finishes its
+cores at the most uneven times.
 
 Each run dir has a heartbeat.txt with periodic lines:
   [PERCORE-ICOUNT] agg=.. global_time=..ns [c0=.., c1=.., ...]
   [PERCORE-CLOCK] [c0=..ns, c1=..ns, ...]
-We interpolate each core's own clock at its first 50M-instruction crossing and
-take IPC_i = 50e6 / clk_i(50M) (frequency cancels in ratios vs no-prefetch).
+We interpolate each core's own clock at its crossing of the target instruction
+count and take IPC_i = target / clk_i(target); frequency cancels in ratios.
 
-Usage:
-  parse_multicore.py --results-dir DIR [--target 50000000] [--md OUT.md]
-DIR should contain the mc-v4-<scheme>_4core_<mix> run subdirectories.
+    parse_multicore.py --results-dir DIR [--target auto|N] [--md OUT.md]
+
+--target auto (the default) picks the largest instruction count every run in the
+suite actually reached, so a short `--icount` smoke run still parses.
+
+DIR should contain the <config>_4core_<mix> run subdirectories.
 """
-import os, re, math, argparse
+import os, re, sys, math, argparse
 from collections import defaultdict
 
-SCHEMES = ["nopf","asp","asp-dp","asp-recency","asp-atp","asp-berti",
-           "asp-l2tlb32k","asp-l2tlb64k","trail","perfect"]
-LABEL = {"nopf":"no-pf","asp":"ASP","asp-dp":"ASP+DP","asp-recency":"ASP+Recency",
-         "asp-atp":"ASP+ATP","asp-berti":"ASP+Berti","asp-l2tlb32k":"ASP+L2TLB32k",
-         "asp-l2tlb64k":"ASP+L2TLB64k","trail":"TRAIL","perfect":"Perfect-L2TLB"}
+# (display name, config name in clist_multicore.yaml)
+SCHEMES = [("ReserveTHP (baseline)", "fd-4c-frag1.0"),
+           ("Revelator 4KB",         "rev4kb-4c")]
+BASE = "fd-4c-frag1.0"
+
 IC = re.compile(r"\[PERCORE-ICOUNT\].*?\[([^\]]+)\]")
 CK = re.compile(r"\[PERCORE-CLOCK\]\s*\[([^\]]+)\]")
+RUNDIR = re.compile(r"^(.+?)_(\d+)core_(.+)$")
 
 def vals(s):
-    return [float(x.split("=")[1].replace("ns","")) for x in s.split(",")]
+    return [float(x.split("=")[1].replace("ns", "")) for x in s.split(",")]
 
-def equalwork_ipc(hbpath, target):
-    icounts=[]; clocks=[]
-    with open(hbpath) as f:
+def read_heartbeat(path):
+    """-> (icounts, clocks) as parallel lists of per-core samples."""
+    icounts, clocks = [], []
+    with open(path) as f:
         for line in f:
-            m=IC.search(line)
-            if m: icounts.append(vals(m.group(1))); continue
-            m=CK.search(line)
-            if m: clocks.append(vals(m.group(1)))
-    n=min(len(icounts),len(clocks))
-    if n<2: return None
-    ncore=len(icounts[0]); ipc=[]
+            m = IC.search(line)
+            if m:
+                icounts.append(vals(m.group(1))); continue
+            m = CK.search(line)
+            if m:
+                clocks.append(vals(m.group(1)))
+    n = min(len(icounts), len(clocks))
+    return icounts[:n], clocks[:n]
+
+def max_reachable(icounts):
+    """Largest instruction count EVERY core in this run reached."""
+    if not icounts:
+        return 0
+    return min(max(s[c] for s in icounts) for c in range(len(icounts[0])))
+
+def equalwork_ipc(icounts, clocks, target):
+    if len(icounts) < 2:
+        return None
+    ncore = len(icounts[0]); ipc = []
     for c in range(ncore):
-        prev=None; hit=None
-        for k in range(n):
-            ic=icounts[k][c]; ck=clocks[k][c]
-            if ic>=target: hit=(prev,(ic,ck)); break
-            prev=(ic,ck)
-        if hit is None: return None
-        pre,(ic1,ck1)=hit
+        prev = None; hit = None
+        for k in range(len(icounts)):
+            ic, ck = icounts[k][c], clocks[k][c]
+            if ic >= target:
+                hit = (prev, (ic, ck)); break
+            prev = (ic, ck)
+        if hit is None:
+            return None
+        pre, (ic1, ck1) = hit
         if pre is None:
-            clk=ck1*(target/ic1) if ic1>0 else None
+            clk = ck1 * (target / ic1) if ic1 > 0 else None
         else:
-            ic0,ck0=pre
-            frac=(target-ic0)/(ic1-ic0) if ic1>ic0 else 0
-            clk=ck0+frac*(ck1-ck0)
-        if not clk or clk<=0: return None
-        ipc.append(target/clk)
+            ic0, ck0 = pre
+            frac = (target - ic0) / (ic1 - ic0) if ic1 > ic0 else 0
+            clk = ck0 + frac * (ck1 - ck0)
+        if not clk or clk <= 0:
+            return None
+        ipc.append(target / clk)
     return ipc
 
-def gm(xs): return math.exp(sum(math.log(x) for x in xs)/len(xs)) if xs else float('nan')
+def gm(xs):
+    return math.exp(sum(math.log(x) for x in xs) / len(xs)) if xs else float('nan')
 
 def main():
-    ap=argparse.ArgumentParser()
-    ap.add_argument("--results-dir", required=True,
-                    help="dir containing mc-v4-<scheme>_4core_<mix> run subdirs")
-    ap.add_argument("--target", type=int, default=50_000_000)
-    ap.add_argument("--md", default=None, help="optional markdown output path")
-    a=ap.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--results-dir", required=True)
+    ap.add_argument("--target", default="auto", help="instructions/core, or 'auto'")
+    ap.add_argument("--md", default=None)
+    ap.add_argument("--top200", default=None, help=argparse.SUPPRESS)
+    a = ap.parse_args()
 
-    # Walk recursively: MC results may nest under results/<suite>/mc-v4-*_4core_<mix>.
-    data=defaultdict(dict); skipped=0
-    for root,dirs,_ in os.walk(a.results_dir):
+    known = {cfg for _, cfg in SCHEMES}
+    raw = {}          # (mix, cfg) -> (icounts, clocks)
+    skipped = 0
+    for root, dirs, _ in os.walk(a.results_dir):
         for d in dirs:
-            m=re.match(r"mc-v4-(.+?)_4core_(.+)$", d)
-            if not m: continue
-            hb=os.path.join(root, d, "heartbeat.txt")
-            if not os.path.exists(hb): skipped+=1; continue
-            ipc=equalwork_ipc(hb, a.target)
-            if ipc is None: skipped+=1; continue
-            data[m.group(2)][m.group(1)]=ipc
-    mixes=[m for m in data if "nopf" in data[m] and len(data[m])>=8]
+            m = RUNDIR.match(d)
+            if not m or m.group(1) not in known:
+                continue
+            hb = os.path.join(root, d, "heartbeat.txt")
+            if not os.path.exists(hb):
+                skipped += 1; continue
+            ic, ck = read_heartbeat(hb)
+            if len(ic) < 2:
+                skipped += 1; continue
+            raw[(m.group(3), m.group(1))] = (ic, ck)
 
-    percore=defaultdict(list); agg=defaultdict(list); hm=defaultdict(list); won=defaultdict(int)
+    if not raw:
+        print(f"ERROR: no parseable <config>_4core_<mix>/heartbeat.txt under {a.results_dir}")
+        raise SystemExit(1)
+
+    # equal work across EVERY run, so no config is credited for running longer
+    if a.target == "auto":
+        target = min(max_reachable(ic) for ic, _ in raw.values())
+        if target <= 0:
+            print("ERROR: no run has a complete per-core heartbeat.", file=sys.stderr)
+            raise SystemExit(1)
+    else:
+        target = int(a.target)
+
+    data = defaultdict(dict)
+    for (mix, cfg), (ic, ck) in raw.items():
+        v = equalwork_ipc(ic, ck, target)
+        if v is None:
+            skipped += 1; continue
+        data[mix][cfg] = v
+    mixes = [m for m in data if BASE in data[m] and len(data[m]) >= 2]
+
+    percore = defaultdict(list); agg = defaultdict(list); hm = defaultdict(list)
     for mix in mixes:
-        bl=data[mix]["nopf"]; N=len(bl); best=None; bv=0
-        for s in SCHEMES:
-            if s not in data[mix] or len(data[mix][s])!=N: continue
-            ip=data[mix][s]
-            percore[s].append(sum(ip[i]/bl[i] for i in range(N))/N)
-            av=sum(ip)/sum(bl); agg[s].append(av)
-            hm[s].append((N/sum(1/x for x in ip))/(N/sum(1/x for x in bl)))
-            if s!="nopf" and av>bv: bv=av; best=s
-        won[best]+=1
+        bl = data[mix][BASE]; N = len(bl)
+        for _, cfg in SCHEMES:
+            ip = data[mix].get(cfg)
+            if not ip or len(ip) != N:
+                continue
+            percore[cfg].append(sum(ip[i] / bl[i] for i in range(N)) / N)
+            agg[cfg].append(sum(ip) / sum(bl))
+            hm[cfg].append((N / sum(1 / x for x in ip)) / (N / sum(1 / x for x in bl)))
 
-    lines=[]
-    def out(s): lines.append(s); print(s)
-    out(f"Multicore 4-core head-to-head — {len(mixes)} mixes (skipped runs={skipped}), "
-        f"equal-work @ {a.target//1_000_000}M/core")
+    lines = []
+    out = lambda s: (lines.append(s), print(s))
+    out(f"# Revelator 4-core head-to-head — {len(mixes)} mixes "
+        f"(unparsed runs={skipped}), equal work @ {target/1e6:.0f}M instr/core")
     out("")
-    out(f"| {'scheme':<14} | {'STP':>8} | {'aggIPC':>8} | {'HM-IPC':>8} | {'>nopf':>7} | {'won':>4} |")
-    out(f"|{'-'*16}|{'-'*10}|{'-'*10}|{'-'*10}|{'-'*9}|{'-'*6}|")
-    M=len(mixes)
-    for s in SCHEMES:
-        if not agg[s]: continue
-        npos=sum(1 for x in agg[s] if x>1.0)
-        out(f"| {LABEL[s]:<14} | {(gm(percore[s])-1)*100:>+7.2f}% | {(gm(agg[s])-1)*100:>+7.2f}% "
-            f"| {(gm(hm[s])-1)*100:>+7.2f}% | {npos:>4}/{M:<2} | {won.get(s,0):>4} |")
-    tp=sum(1 for mix in mixes if "trail" in data[mix] and "perfect" in data[mix]
-           and sum(data[mix]["trail"])>sum(data[mix]["perfect"]))
-    out("")
-    out(f"TRAIL beats Perfect-L2TLB (aggIPC) in {tp}/{len(mixes)} mixes.")
-    if agg["trail"]:
-        ts=sorted(agg["trail"])
-        out(f"TRAIL aggIPC speedup: min={(ts[0]-1)*100:+.2f}%  "
-            f"median={(ts[len(ts)//2]-1)*100:+.2f}%  max={(ts[-1]-1)*100:+.2f}%")
+    out("| scheme | STP | aggIPC | HM-IPC | mixes > baseline |")
+    out("|--|--:|--:|--:|--:|")
+    M = len(mixes)
+    for name, cfg in SCHEMES:
+        if not agg[cfg]:
+            out(f"| {name} | n/a | n/a | n/a | 0/{M} |"); continue
+        npos = sum(1 for x in agg[cfg] if x > 1.0)
+        out(f"| {name} | {(gm(percore[cfg])-1)*100:+.2f}% | {(gm(agg[cfg])-1)*100:+.2f}% "
+            f"| {(gm(hm[cfg])-1)*100:+.2f}% | {npos}/{M} |")
+
+    if agg["rev4kb-4c"]:
+        s = sorted(agg["rev4kb-4c"])
+        out("")
+        out(f"Revelator aggIPC speedup: min={(s[0]-1)*100:+.2f}%  "
+            f"median={(s[len(s)//2]-1)*100:+.2f}%  max={(s[-1]-1)*100:+.2f}%")
+    if a.target == "auto":
+        out("")
+        out(f"Target chosen automatically as the largest instruction count every run reached "
+            f"({target/1e6:.1f}M/core). Pass --target 50000000 to pin it.")
+
     if a.md:
-        open(a.md,"w").write("\n".join(lines)+"\n")
+        open(a.md, "w").write("\n".join(lines) + "\n")
         print(f"\n[wrote {a.md}]")
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()

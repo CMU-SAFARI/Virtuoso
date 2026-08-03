@@ -11,9 +11,9 @@ hash says it should be — so Revelator is a **co-design**: a hash-based physica
 memory allocator in MimicOS plus a speculation engine in the MMU that replays the
 same hash.
 
-This page is the map of what ships in this branch. It is a component inventory, not
-an artifact-evaluation script: there is no one-command reproduction harness for the
-ISCA '26 numbers here.
+This page is the map of what ships in this branch — a component inventory. For the
+reviewer-facing reproduction flow (build, traces, suites, figures) see
+[`experiments/ae/README.md`](../experiments/ae/README.md).
 
 ---
 
@@ -52,17 +52,6 @@ in `common/system/memory_management/physical_memory_allocators/allocator_factory
 (`common/system/memory_management/exception_handling/revelator_exception_handler.{cc,h}`),
 which routes page faults through the hash-based placement path. Registered in
 `exception_handling/exception_handler_factory.h`.
-
-### Auxiliary material (`revelator_auxiliary/`)
-
-- `RTL/` — Chisel-to-Verilog flow for the hardware speculation engine, plus
-  `static_power_analyzer.py` for post-synthesis static power. **Note:** the README
-  there describes an `sbt_builder` Docker image and a Chisel source tree that are
-  *not* checked into this branch; only the synthesis/analysis instructions and the
-  power script ship here.
-- `revelator_microbench_mapping/` — native microbenchmarks (`hog_memory.c`,
-  `vm_scan.c`) plus `parse_vapa_mapping.py` to extract real VA→PA mappings from a
-  Linux host, used to characterise the placement that Revelator's hash has to match.
 
 ---
 
@@ -134,6 +123,7 @@ cd simulator/sniper
 | 4KB-only, homogeneous/heterogeneous mixes | `revelator_4kb_{2,4,8}core_{homo,hetero}` |
 | Utilization sweep (2× memory, `target_fragmentation` sweep) | `revelator_util_sweep_*` |
 | Top-250 mixes | `revelator_4kb_{2,4,8,16}core_top250` |
+| Head-to-head vs the ReserveTHP baseline (used by the AE) | `ae_revelator_4core` |
 
 ```bash
 python3 experiments/create_experiments.py \
@@ -146,12 +136,29 @@ python3 experiments/create_experiments.py \
 python3 experiments/safe_submit.py experiments/exp_revelator_4c/jobfile.sh --dry-run
 ```
 
-There are no Revelator suites in the single-core `experiments/clist.yaml`; run
-single-core configs directly with `run-sniper`, or add a suite following the
-pattern in `clist_multicore.yaml`.
+The single-core AE suites live in `experiments/clist_revelator.yaml`
+(`revelator_headtohead`, `revelator_thp_headtohead`, `revelator_util_sweep`) and
+are generated the same way, with `--yaml experiments/clist_revelator.yaml`. The
+general-purpose `experiments/clist.yaml` also carries a couple of standalone
+Revelator entries (`revelator`, `revelator-3hash-utilization-sweep`).
 
-### Hardware area and power
+### Artifact evaluation
 
-See `revelator_auxiliary/RTL/README.md` for the yosys synthesis invocation and
-`static_power_analyzer.py` usage. The Chisel sources referenced there are not part
-of this branch.
+The three single-core suites and the 4-core suite are driven by the harness in
+[`experiments/ae/`](../experiments/ae/README.md):
+
+```bash
+bash experiments/ae/build_and_validate.sh          # build + traces + sanity check
+bash experiments/ae/ae_run_all.sh --mode local --jobs $(nproc)
+bash experiments/ae/ae_run_all.sh --status
+bash experiments/ae/ae_run_all.sh --results
+```
+
+Suites: `revelator`, `revelator_thp`, `utilsweep`, `multicore`.
+
+### Not in this branch
+
+The RTL (Chisel sources, the `sbt_builder` image, the yosys synthesis flow) and the
+native VA→PA mapping microbenchmarks are **not** included — the `revelator_auxiliary/`
+tree was removed. Area and static-power numbers cannot be reproduced from this
+branch alone.

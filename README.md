@@ -20,20 +20,24 @@ hash-based physical memory allocator in MimicOS plus a matching speculative
 translation engine in the MMU, so a physical frame can be guessed straight from
 the virtual address and validated against the parallel page walk.
 
-Start at **[`docs/revelator.md`](docs/revelator.md)** — it maps every engine,
-allocator, exception handler, config, and knob, and shows how to run the
-single-core configs and the multicore suites.
+**Reproducing the Revelator results?** All artifact instructions — dependencies,
+the one-command setup, and running each suite — are in
+**[`experiments/ae/README.md`](experiments/ae/README.md)**. Start there.
 
-> Also on this branch: the TRAIL TLB prefetcher and its artifact-evaluation
-> harness under [`experiments/ae/`](experiments/ae/README.md), kept because
-> Revelator shares its MimicOS and memory-management infrastructure. TRAIL's own
-> release is the `trail-artifact-release` branch.
+For the design itself — every engine, allocator, exception handler, config and
+knob — see **[`docs/revelator.md`](docs/revelator.md)**.
+
+> The TRAIL TLB prefetcher's *implementation* is still on this branch, because
+> Revelator shares its MimicOS and memory-management infrastructure. TRAIL's
+> artifact-evaluation harness is not: that lives on the `trail-artifact-release`
+> branch, and `experiments/ae/` here is Revelator's.
 
 ---
 
 ## Table of Contents
 
-- [Revelator](docs/revelator.md)
+- [Artifact Evaluation — Revelator](experiments/ae/README.md)
+- [Revelator design notes](docs/revelator.md)
 - [Key Features](#key-features)
 - [Repository Structure](#repository-structure)
 - [Prerequisites](#prerequisites)

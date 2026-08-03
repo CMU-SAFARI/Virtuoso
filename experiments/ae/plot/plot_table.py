@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """plot_table.py — render a parsed markdown table as a PDF/PNG image.
 
-    plot_table.py --md ae_out/table5.md --out ae_out/table5.pdf [--title "..."]
+    plot_table.py --md ae_out/<suite>.md --out ae_out/<suite>_table.pdf [--title "..."]
 
-Used for the grid suites (Table 5 / Table 6) so the reviewer gets a rendered
-table image, not just markdown. Default matplotlib font.
+Run for every suite so the reviewer gets a rendered table image, not just
+markdown. Default matplotlib font.
 """
 import argparse, sys
 

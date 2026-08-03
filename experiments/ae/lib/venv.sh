@@ -9,7 +9,7 @@
 #   huggingface_hub   — the `hf` trace-download CLI
 #
 # install_deps.sh creates and populates it; every other harness entry point
-# (ae_common.sh, build_and_validate.sh, run_motivation.sh) sources this file so
+# (ae_common.sh, build_and_validate.sh) sources this file so
 # `python3` and `hf` resolve to the venv. Override the location with AE_VENV=/path.
 #
 # Sourced, not executed.

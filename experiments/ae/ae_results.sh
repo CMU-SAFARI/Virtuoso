@@ -41,44 +41,28 @@ echo "==== [results] $SUITE  ->  paper $FIG ===="
 sed 's/^/  /' "$DONEF" | head -8
 MD="$AE_OUT/$SUITE.md"; PDF="$AE_OUT/$FIGFILE.pdf"
 echo "parsing -> $MD"
-python3 "$HERE/parse/$PARSER" --results-dir "$RESULTS" --top200 "$TOP200" $PARGS --md "$MD" >/dev/null 2>&1 \
-  || python3 "$HERE/parse/$PARSER" --results-dir "$RESULTS" $PARGS --md "$MD"   # multicore has no --top200
+python3 "$HERE/parse/$PARSER" --results-dir "$RESULTS" $PARGS --md "$MD" || exit 1
 echo
 echo "=== table ($MD) ==="; cat "$MD"
 echo
 echo "plotting -> $PDF"
-have_valid() { [ -d "$1" ] && [ -n "$(find "$1" -maxdepth 3 -name sim.stats -size +50k -print -quit 2>/dev/null)" ]; }
 case "$SUITE" in
-  head8mb|head2mb)
-    # paper-format single-core figure; include both NUCA rows if both suites ran
-    args=""
-    have_valid "$EXP/exp_ae_head2mb/results" && args="$args --head2mb $EXP/exp_ae_head2mb/results"
-    have_valid "$EXP/exp_ae_head8mb/results" && args="$args --head8mb $EXP/exp_ae_head8mb/results"
-    python3 "$HERE/plot/plot_singlecore.py" $args --out "$PDF" && echo "  figure: $PDF" \
+  utilsweep)
+    # speedup vs memory occupancy, one line per Revelator variant
+    python3 "$HERE/plot/plot_utilsweep.py" --md "$MD" --out "$PDF" && echo "  figure: $PDF" \
       || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
-    # Figure 13: TRAIL mechanism metrics, from the 8 MB single-core results
-    if have_valid "$EXP/exp_ae_head8mb/results"; then
-      python3 "$HERE/plot/plot_mechanism.py" --results-dir "$EXP/exp_ae_head8mb/results" \
-        --out "$AE_OUT/figure13.pdf" && echo "  figure: $AE_OUT/figure13.pdf (mechanism)" || true
-    fi
     ;;
   multicore)
-    # paper-format multicore figure (equal-work harmonic-mean from heartbeats)
-    python3 "$HERE/plot/plot_multicore.py" --results-dir "$RESULTS" --out "$PDF" && echo "  figure: $PDF" \
+    # bar chart of the aggregate-IPC column (col 2 = aggIPC)
+    python3 "$HERE/plot/plot_suite.py" --md "$MD" --out "$PDF" --col 2 && echo "  figure: $PDF" \
       || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
-    ;;
-  pqsweep)
-    # Figure 20: TRAIL-vs-ASP speedup across PQ sizes (line plot)
-    python3 "$HERE/plot/plot_pqsweep.py" --results-dir "$RESULTS" --top200 "$TOP200" --out "$PDF" && echo "  figure: $PDF" \
-      || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
-    ;;
-  table5|table6)
-    # render the parsed table as an image
-    python3 "$HERE/plot/plot_table.py" --md "$MD" --out "$PDF" && echo "  table image: $PDF" \
-      || echo "  (render skipped — need matplotlib: pip install matplotlib)"
     ;;
   *)
+    # head-to-head suites: bar chart of the speedup column
     python3 "$HERE/plot/plot_suite.py" --md "$MD" --out "$PDF" && echo "  figure: $PDF" \
       || echo "  (plot skipped — need matplotlib: pip install matplotlib)"
     ;;
 esac
+# every suite also gets a rendered table image next to the markdown
+python3 "$HERE/plot/plot_table.py" --md "$MD" --out "$AE_OUT/${FIGFILE}_table.pdf" >/dev/null 2>&1 \
+  && echo "  table image: $AE_OUT/${FIGFILE}_table.pdf" || true

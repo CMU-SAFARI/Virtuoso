@@ -18,7 +18,7 @@ SNIPER="$ROOT/simulator/sniper"
 N=3
 ICOUNT=1000000
 TLDIR="$ROOT/experiments/vm_tlist"
-CFG="$SNIPER/config/address_translation_schemes/trail_comparison_v4/v4_asp.cfg"
+CFG="$SNIPER/config/address_translation_schemes/revelator.cfg"
 while [ $# -gt 0 ]; do case "$1" in
   --n) N="$2"; shift 2;;
   --icount) ICOUNT="$2"; shift 2;;

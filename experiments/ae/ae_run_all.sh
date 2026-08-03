@@ -2,7 +2,7 @@
 # ===========================================================================
 # ae_run_all.sh — launch + watch MULTIPLE suites in parallel.
 #
-#   experiments/ae/ae_run_all.sh [--suites "head8mb table5 ..." | all]
+#   experiments/ae/ae_run_all.sh [--suites "revelator multicore ..." | all]
 #         [--mode slurm|local] [--partitions cpu_part,bio_part]
 #         [--exclude node01,...] [--jobs N]
 #
@@ -15,9 +15,10 @@
 #   experiments/ae/ae_run_all.sh --status     # progress of every launched suite
 #   experiments/ae/ae_run_all.sh --results    # parse + plot every FINISHED suite
 #
-# Paper mapping:  head8mb+head2mb -> Figure 12 (8MB bottom / 2MB top),
-#                 table5 -> Table 5,  table6 -> Table 6,
-#                 pqsweep -> Figure 20,  multicore -> Figure 22.
+# Suites:  revelator      Revelator (4KB) single-core head-to-head
+#          revelator_thp  Revelator-THP single-core head-to-head
+#          utilsweep      speedup as memory fills (both variants)
+#          multicore      4-core Revelator vs ReserveTHP baseline
 # ===========================================================================
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"

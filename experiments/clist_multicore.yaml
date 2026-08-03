@@ -1321,3 +1321,22 @@ experiment_suites:
     trace_suite: prefetcher_v4_diverse_4core
     instruction_count: 50000000
     sim_end: first
+  # =========================================
+  # Revelator AE — 4-core head-to-head (experiments/ae, suite `multicore`)
+  # =========================================
+  # Baseline and Revelator in ONE suite so the parser can pair them per mix.
+  # Both are fast_detailed 4-core / 16MB L3 configs, so the caching protocol is
+  # identical and only address translation differs.
+  #
+  # Fragmentation pairing: `fast-detailed-4c-no-frag` sets
+  # reserve_thp/target_fragmentation=1.0 (unfragmented memory), which is the
+  # counterpart of Revelator's default revelator/target_fragmentation=1.0
+  # (0% of memory occupied). Both therefore start from an empty, unfragmented
+  # pool. Re-pair against the *-full-frag config to study the fragmented end.
+  ae_revelator_4core:
+    description: "Revelator AE: 4-core Revelator 4KB vs ReserveTHP baseline, top250 mixes"
+    topology: 4core
+    configs: [fast-detailed-4c-no-frag, revelator-4kb-4c]
+    trace_suite: top250_4core
+    instruction_count: 50000000
+    sim_end: last

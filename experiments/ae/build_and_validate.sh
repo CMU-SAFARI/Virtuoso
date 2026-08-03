@@ -1,6 +1,6 @@
 #!/bin/bash
 # ===========================================================================
-# build_and_validate.sh — one-command Artifact-Evaluation entry point for TRAIL.
+# build_and_validate.sh — one-command Artifact-Evaluation entry point for Revelator.
 # (installs deps, builds the trace-replay simulator, downloads traces, validates)
 #
 # A reviewer just clones the repo and runs:
@@ -19,6 +19,8 @@
 #
 # Options (env var or flag):
 #   --hf-repo   REPO   Hugging Face dataset      (default: $HF_REPO or konkanello/trail_traces)
+#                      NOTE: this is the shared Virtuoso trace bundle (traces/ +
+#                      vm_tlist/); it is not TRAIL-specific despite the name.
 #   --bundle    DIR    where to download traces  (default: <artifact>/ae_bundle)
 #   --n         N      random traces to validate (default: 3)
 #   --skip-deps        do not run install_deps.sh (deps already installed)
@@ -50,7 +52,7 @@ C_G=$'\033[1;32m'; C_Y=$'\033[1;33m'; C_R=$'\033[1;31m'; C_0=$'\033[0m'
 step() { echo; echo "${C_G}==== $* ====${C_0}"; }
 die()  { echo "${C_R}ERROR: $*${C_0}" >&2; exit 1; }
 
-echo "TRAIL artifact reproduction"
+echo "Revelator artifact reproduction"
 echo "  artifact root : $ROOT"
 echo "  HF dataset    : $HF_REPO"
 echo "  trace bundle  : $BUNDLE"
@@ -141,14 +143,8 @@ experiments/ae/ae_out/. You do NOT run anything per-suite.
     bash experiments/ae/ae_run_all.sh --status
     bash experiments/ae/ae_run_all.sh --results
 
-  Subset:  --suites "head8mb multicore"   |   quick test:  --icount 2000000
-  Suites:  head8mb head2mb table5 table6 pqsweep multicore
-
-Motivation figures (Figures 4, 5, 6, 8, 9 — separate, no simulation):
-
-    hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
-    bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode local --jobs \$(nproc)
-    #   on a cluster instead:  --mode slurm [--partitions <p>]
+  Subset:  --suites "revelator multicore"   |   quick test:  --icount 2000000
+  Suites:  revelator revelator_thp utilsweep multicore
 
 Don't run launch/status/results back-to-back: launch once, poll --status until
 every suite reads DONE, then --results. Full details: experiments/ae/README.md.

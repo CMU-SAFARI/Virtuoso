@@ -1,0 +1,187 @@
+# ===========================================================================
+# clist_revelator.yaml — single-core experiment definitions for the Revelator
+# artifact evaluation (experiments/ae).
+#
+# Two headline suites:
+#   revelator_headtohead      Revelator (4KB, hash-based) vs the allocator and
+#                             speculative-engine alternatives in the repo.
+#   revelator_thp_headtohead  Revelator-THP (huge-page-aware) vs the same set.
+#
+# Plus a memory-utilization sweep for both variants. Revelator's hash-based
+# placement is what makes the speculation correct, so its behaviour as memory
+# fills up is the interesting axis: target_fragmentation = 1.0 means 0% of
+# memory is already occupied, 0.2 means 80% is.
+#
+# Driven by experiments/create_experiments.py via experiments/ae/ae_launch.sh.
+# ===========================================================================
+
+# Trace suites: named collections of .tlist files (resolved into
+# experiments/vm_tlist/ by experiments/ae/lib/setup_tlists.sh).
+trace_suite:
+  top250:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - top250_cvp1.tlist
+      - top250_dpc3.tlist
+      - top250_gap.tlist
+      - top250_google.tlist
+      - top250_huawei.tlist
+      - top250_safari.tlist
+      - top250_ml.tlist
+      - top250_virtuoso.tlist
+
+configs:
+  configs_base_path: "../simulator/sniper/config/address_translation_schemes/"
+
+  # ---------------------------------------------------------------------
+  # Reference points shared by both head-to-head suites
+  # ---------------------------------------------------------------------
+
+  rev-baseline:
+    name: "rev-baseline"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Floor: 4-level radix + ReserveTHP, no speculation"
+
+  rev-spot:
+    name: "rev-spot"
+    file: "spot.cfg"
+    description: "Prior art: SpOT — offset-based speculation from physical contiguity"
+
+  rev-spectlb:
+    name: "rev-spectlb"
+    file: "spectlb_reservethp.cfg"
+    description: "Prior art: SpecTLB over ReserveTHP"
+
+  rev-asap:
+    name: "rev-asap"
+    file: "asap.cfg"
+    description: "Prior art: ASAP — prefetched translation with eager superpages"
+
+  rev-oracle:
+    name: "rev-oracle"
+    file: "spec_oracle_reservethp.cfg"
+    description: "Ceiling: perfect speculation (oracle engine) over ReserveTHP"
+
+  rev-notranslation:
+    name: "rev-notranslation"
+    file: "no_translation.cfg"
+    description: "Ceiling: no address translation at all (sanity upper bound)"
+
+  # ---------------------------------------------------------------------
+  # Revelator (4KB, hash-based placement + hash-replaying spec engine)
+  # ---------------------------------------------------------------------
+
+  rev-revelator:
+    name: "rev-revelator"
+    file: "revelator.cfg"
+    description: "Revelator, 1 hash / 1 prediction (default)"
+
+  rev-revelator-3h:
+    name: "rev-revelator-3h"
+    file: "revelator.cfg"
+    extends:
+      - "--perf_model/revelator/number_of_hashes=3"
+      - "--perf_model/revelator/number_of_predictions=3"
+    description: "Revelator, 3 hashes / 3 predictions"
+
+  rev-revelator-oracle:
+    name: "rev-revelator-oracle"
+    file: "revelator.cfg"
+    extends:
+      - "--perf_model/revelator/oracle=true"
+    description: "Revelator with an oracle engine — isolates hash accuracy from the rest"
+
+  # ---------------------------------------------------------------------
+  # Revelator-THP (huge-page-aware variant)
+  # ---------------------------------------------------------------------
+
+  rev-revelator-thp:
+    name: "rev-revelator-thp"
+    file: "revelator_thp.cfg"
+    description: "Revelator-THP, 1 hash / 1 prediction"
+
+  rev-revelator-thp-3h:
+    name: "rev-revelator-thp-3h"
+    file: "revelator_thp.cfg"
+    extends:
+      - "--perf_model/revelator/number_of_hashes=3"
+      - "--perf_model/revelator/number_of_predictions=3"
+    description: "Revelator-THP, 3 hashes / 3 predictions"
+
+  # ---------------------------------------------------------------------
+  # Memory-utilization sweeps
+  #   target_fragmentation 1.0 -> 0% of memory occupied
+  #                        0.2 -> 80% of memory occupied
+  # ---------------------------------------------------------------------
+
+  rev-util-1h:
+    name: "rev-util-1h"
+    file: "revelator.cfg"
+    sweeps:
+      - identifier: ["util"]
+        option: ["--perf_model/revelator/target_fragmentation="]
+        values: [[1.0, 0.8, 0.6, 0.4, 0.2]]
+    description: "Revelator 1 hash, memory-utilization sweep"
+
+  rev-util-3h:
+    name: "rev-util-3h"
+    file: "revelator.cfg"
+    extends:
+      - "--perf_model/revelator/number_of_hashes=3"
+      - "--perf_model/revelator/number_of_predictions=3"
+    sweeps:
+      - identifier: ["util"]
+        option: ["--perf_model/revelator/target_fragmentation="]
+        values: [[1.0, 0.8, 0.6, 0.4, 0.2]]
+    description: "Revelator 3 hashes, memory-utilization sweep"
+
+  rev-util-thp:
+    name: "rev-util-thp"
+    file: "revelator_thp.cfg"
+    sweeps:
+      - identifier: ["util"]
+        option: ["--perf_model/revelator/target_fragmentation="]
+        values: [[1.0, 0.8, 0.6, 0.4, 0.2]]
+    description: "Revelator-THP, memory-utilization sweep"
+
+experiment_suites:
+
+  revelator_headtohead:
+    description: "Revelator (4KB) vs ReserveTHP floor, prior speculative designs, and the ceilings"
+    configs:
+      - rev-baseline
+      - rev-spot
+      - rev-spectlb
+      - rev-asap
+      - rev-revelator
+      - rev-revelator-3h
+      - rev-revelator-oracle
+      - rev-oracle
+      - rev-notranslation
+    trace_suite: top250
+    instruction_count: 300000000
+
+  revelator_thp_headtohead:
+    description: "Revelator-THP vs ReserveTHP floor, ASAP, 4KB Revelator, and the ceilings"
+    configs:
+      - rev-baseline
+      - rev-asap
+      - rev-revelator
+      - rev-revelator-thp
+      - rev-revelator-thp-3h
+      - rev-oracle
+      - rev-notranslation
+    trace_suite: top250
+    instruction_count: 300000000
+
+  revelator_util_sweep:
+    description: "Revelator / Revelator-THP as memory fills (target_fragmentation 1.0 -> 0.2)"
+    configs:
+      - rev-baseline
+      - rev-util-1h
+      - rev-util-3h
+      - rev-util-thp
+    trace_suite: top250
+    instruction_count: 300000000
