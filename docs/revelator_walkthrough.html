@@ -503,13 +503,18 @@ if (allocator_name != "revelator" && allocator_name != "revelator_simple")
     <table class="tbl">
       <thead><tr><th>Suite</th><th>Compares against</th><th>Reads out</th></tr></thead>
       <tbody>
-        <tr><td class="f">revelator</td><td class="d">ReserveTHP floor, SpOT, SpecTLB, ASAP</td><td class="d">geomean IPC speedup, plus oracle and no-translation ceilings</td></tr>
+        <tr><td class="f">revelator</td><td class="d">ReserveTHP floor, SpecTLB, ASAP</td><td class="d">geomean IPC speedup, plus oracle and no-translation ceilings</td></tr>
         <tr><td class="f">revelator_thp</td><td class="d">the floor, ASAP, and 4 KB Revelator</td><td class="d">what huge-page granularity is worth</td></tr>
         <tr><td class="f">utilsweep</td><td class="d">the same floor at every fill level</td><td class="d">how fast the win decays from an empty pool to 80% full</td></tr>
         <tr><td class="f">multicore</td><td class="d">ReserveTHP baseline, 4-core mixes</td><td class="d">STP, aggregate IPC, harmonic-mean IPC</td></tr>
       </tbody>
     </table>
     </div>
+    <div class="note"><b>SpOT is not in the comparison.</b> It speculates from physical contiguity, so it
+      needs each trace's VMA layout — and when that is missing the allocator silently falls back to
+      per-page buddy allocation instead of failing, which would report a buddy baseline under SpOT's name.
+      The reasoning and how to re-enable it are in the
+      <a href="https://github.com/CMU-SAFARI/Virtuoso/tree/revelator-artifact-release/experiments/ae">artifact README</a>.</div>
     <div class="note"><b>No numbers here.</b> These suites have not been run to completion,
       so this page deliberately quotes none. Two sanity conditions to apply when you do run them: Revelator
       must land <em>below</em> its own oracle configuration, and the utilization curve must fall
