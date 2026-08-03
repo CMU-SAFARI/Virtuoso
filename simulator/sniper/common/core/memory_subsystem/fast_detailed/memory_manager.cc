@@ -317,7 +317,12 @@ MemoryManager::coreInitiateMemoryAccess(
                 "skip=", skip_translation ? "Y" : "N",
                 "mmu_type=", mmu_type.c_str());
 
-   if (!skip_translation)
+   if (mmu_type == "midgard" && !skip_translation)
+   {
+      translation_result = m_mmu->performAddressTranslationFrontend(
+          eip, address, is_instruction, lock_signal, should_model, count);
+   }
+   else if (!skip_translation)
    {
       translation_result = m_mmu->performAddressTranslation(
           eip, address, is_instruction, lock_signal, should_model, count);
@@ -445,6 +450,13 @@ MemoryManager::coreInitiateMemoryAccess(
          memory_access_stats.translation_slower_than_memory_access++;
       if (cache_lat > trans_lat)
          memory_access_stats.translation_faster_than_memory_access++;
+   }
+
+   // ===== MIDGARD BACKEND =====
+   if (mmu_type == "midgard" && m_mmu && dram_access)
+   {
+      m_mmu->performAddressTranslationBackend(
+          eip, address, is_instruction, lock_signal, should_model, count);
    }
 
    return result.hit_where;

@@ -11,8 +11,28 @@ Virtuoso integrates with diverse architectural simulators, each specializing in 
 
 > Konstantinos Kanellopoulos, Konstantinos Sgouras, F. Nisa Bostanci, Andreas Kosmas Kakolyris, Berkin Kerim Konar, Rahul Bera, Mohammad Sadrosadati, Rakesh Kumar, Nandita Vijaykumar, and Onur Mutlu, "Virtuoso: Enabling Fast and Accurate Virtual Memory Research via an Imitation-based Operating System Simulation Methodology," **ASPLOS 2025**. [[Paper]](https://arxiv.org/pdf/2403.04635v2)
 
+---
+
+## Designs built on Virtuoso
+
+`main` carries the **implementation** of every design below, plus the shared
+MimicOS and memory-management infrastructure they need. It deliberately does
+**not** carry their artifact-evaluation harnesses or per-paper experiment suites —
+those live on a release branch per paper, so `main` stays a framework rather than a
+pile of reproduction scripts.
+
+| Design | What it is | Code walkthrough | Artifact branch |
+|--------|-----------|------------------|-----------------|
+| **TRAIL** | Temporal TLB prefetcher: each PTE carries the deltas of the translations that usually follow it, so one walk both installs a translation and delivers the next prediction | [`docs/trail_walkthrough.html`](docs/trail_walkthrough.html) | `trail-artifact-release` |
+| **Revelator** (ISCA '26) | Hash-based speculative address translation: the allocator places each page where a hash of its virtual address says, and the MMU replays that hash to guess the frame while the walk runs | [`docs/revelator_walkthrough.html`](docs/revelator_walkthrough.html) · [`docs/revelator.md`](docs/revelator.md) | `revelator-artifact-release` |
+
+Both walkthroughs are self-contained HTML — open them in a browser.
+
+---
+
 ## Table of Contents
 
+- [Designs built on Virtuoso](#designs-built-on-virtuoso)
 - [Key Features](#key-features)
 - [Repository Structure](#repository-structure)
 - [Prerequisites](#prerequisites)
@@ -42,6 +62,8 @@ MimicOS is a lightweight userspace kernel that imitates the OS memory management
 | **EagerPaging** | Contiguous physical range allocation for entire VMAs, used by RMM ([Karakostas et al., ISCA '15](https://dl.acm.org/doi/10.1145/2872887.2749471)) |
 | **NUMA ReserveTHP** | Multi-node reservation-based THP with per-node capacity and placement policies |
 | **Buddy** | Power-of-two buddy system allocator (shared foundation for all allocators) |
+| **Revelator** | Hash-based placement so a frame is derivable from the virtual address (Kanellopoulos et al., ISCA '26) — see [docs/revelator_walkthrough.html](docs/revelator_walkthrough.html) |
+| **Revelator THP / Simple / NUMA** | Huge-page-aware, minimal, and multi-node variants of the Revelator allocator |
 
 ### Page Table Formats
 | Page Table | Description |
@@ -73,10 +95,12 @@ MimicOS is a lightweight userspace kernel that imitates the OS memory management
 | **Stride** | Classic next-page stride TLB prefetcher |
 | **H2** | History-based TLB prefetcher |
 | **ASP** | PC-indexed arbitrary stride prefetcher |
+| **TRAIL** | Temporal prefetcher with successor deltas embedded in the PTE (or an OS radix side-car) — see [docs/trail_walkthrough.html](docs/trail_walkthrough.html) |
 
 ### Speculative Translation Engines
 | Engine | Description |
 |--------|-------------|
+| **Revelator** | Hash-based speculative address translation, co-designed with a hash-based allocator (Kanellopoulos et al., ISCA '26) — see [docs/revelator_walkthrough.html](docs/revelator_walkthrough.html). Variants: base, open-addressing, THP-aware, NUMA |
 | **SpOT** | Offset-based speculation exploiting physical contiguity ([Alverti et al., ISCA '20](https://chloe-alverti.github.io/publications/isca2020-contiguity/)) |
 | **Oracle** | Perfect speculation for upper-bound analysis |
 | **SpecTLB** | Speculative address translation mechanism ([Barr et al., ISCA '11](https://dl.acm.org/doi/10.1145/2024723.2000101)) |
@@ -394,41 +418,44 @@ make SNIPER_INCLUDE=$PWD/../../sniper/include
 
 ## Smoke Tests
 
-The `smoke-test-all` suite validates 22 configurations with 2M instructions on a quick trace. These configurations cover the major axes of the framework:
+The `smoke-test-all` suite validates 28 configurations with 2M instructions on a quick trace. These configurations cover the major axes of the framework:
 
 | Category | Configurations |
 |----------|---------------|
 | **Allocators** | `no-translation`, `reservethp` (frag 0.0), `reservethp` (frag 1.0), `spot`, `utopia`, `asap` |
-| **TLB Prefetchers** | `atp-baseline`, `dp-baseline`, `recency-baseline` |
-| **Speculative Engines** | `spec-oracle`, `spectlb` |
+| **TLB Prefetchers** | `atp-baseline`, `dp-baseline`, `recency-baseline`, `temporal-pte` (TRAIL) |
+| **Speculative Engines** | `spec-oracle`, `spectlb`, `revelator-smoke` |
 | **MMU Designs** | `pomtlb`, `dmt`, `rmm` |
 | **Page Tables** | `ech-baseline`, `hdc-baseline`, `ht-baseline`, `reservethp-ech`, `reservethp-hdc`, `reservethp-ht` |
 | **Userspace MimicOS** | `userspace-baseline`, `userspace-reservethp` |
+| **OS Daemons** | `reservethp-kcompactd`, `reservethp-khugepaged`, `reservethp-kswapd`, `reservethp-all-daemons` |
 
 Run smoke tests individually by category:
 ```bash
-# Allocators only
---suite smoke-test-allocators
-
-# Prefetchers only
---suite smoke-test-prefetchers
-
-# Page table variants only
---suite smoke-test-page-tables
-
-# MMU designs only
---suite smoke-test-mmu-designs
-
-# Speculative engines only
---suite smoke-test-spec-engines
-
-# Userspace MimicOS only
---suite smoke-test-userspace
+--suite smoke-test-allocators    # allocators only
+--suite smoke-test-prefetchers   # TLB prefetchers only
+--suite smoke-test-page-tables   # page table variants only
+--suite smoke-test-mmu-designs   # MMU designs only
+--suite smoke-test-spec-engines  # speculative engines only
+--suite smoke-test-userspace     # userspace MimicOS only
+--suite smoke-test-os-daemons    # kcompactd / khugepaged / kswapd
+--suite smoke-test-revelator     # Revelator engine only
 ```
+
+### Scope of the experiment lists
+
+`experiments/clist.yaml` and `experiments/clist_multicore.yaml` hold the smoke
+tests and a small set of baseline reference suites — and nothing else. Per-paper
+studies, parameter sweeps and design comparisons live in their paper's own clist
+on that paper's artifact branch (see [Designs built on Virtuoso](#designs-built-on-virtuoso)),
+which is what keeps these two files from growing a suite per experiment.
 
 ## Website and Documentation
 
 - **Website**: [https://cmu-safari.github.io/Virtuoso](https://cmu-safari.github.io/Virtuoso) -tutorials, documentation, and API reference
+- **TRAIL walkthrough**: [docs/trail_walkthrough.html](docs/trail_walkthrough.html) -how the temporal PTE prefetcher works
+- **Revelator walkthrough**: [docs/revelator_walkthrough.html](docs/revelator_walkthrough.html) -how the code works, stage by stage
+- **Revelator components**: [docs/revelator.md](docs/revelator.md) -engines, allocators, configs, knobs
 - **Experiment workflow**: [experiments/README.md](experiments/README.md) -detailed experiment framework documentation
 - **Ramulator2 integration**: [docs/ramulator2_mimicos.md](docs/ramulator2_mimicos.md)
 

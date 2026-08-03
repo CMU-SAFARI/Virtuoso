@@ -779,24 +779,47 @@ uint64_t Sift::Writer::Magic(uint64_t a, uint64_t b, uint64_t c)
    while (true)
    {
       Record respRec;
+      /* Zero respRec BEFORE the read: vistream::read is void and cvifstream's
+         fail() only fires when the stream is fully NULL, so a short/EOF read
+         silently leaves respRec partially uninitialised.  Zeroing makes the
+         post-read checks deterministic — an EOF leaves {zero=0,type=0,size=0}
+         which falls into the "malformed" branch below and shuts down cleanly
+         instead of reading stale stack garbage that happens to look like a
+         Magic response with a bad size. */
+      memset(&respRec, 0, sizeof(respRec.Other));
 
       response->read(reinterpret_cast<char*>(&respRec), sizeof(rec.Other));
-      // printf("Record type: %" PRIu8 "\n", respRec.Other.type);
-      // printf("Record zero: %" PRIu8 "\n", respRec.Other.zero);
 
-
-      sift_assert(!response->fail());
-      sift_assert(respRec.Other.zero == 0);
+      if (response->fail()) {
+         frontEndStop();
+         return 0; // safety net; frontEndStop exits
+      }
+      /* Shutdown race tolerance (Apr 18 2026): Sniper calling TraceManager::
+         stop()/stopAll() while we're blocked here can close the response
+         pipe, leaving respRec all-zeroes after the read.  zero=0 still
+         validates but type=RecOtherIcache (value 0) is never a valid
+         response, so any zero-type record is teardown.  Treat it — and any
+         other unrecognized/malformed response — as a graceful shutdown. */
+      if (respRec.Other.zero != 0) {
+         frontEndStop();
+         return 0;
+      }
 
       switch(respRec.Other.type)
       {
          case RecOtherMagicInstructionResponse:
          {
-            sift_assert(respRec.Other.size == sizeof(uint64_t));
+            if (respRec.Other.size != sizeof(uint64_t)) {
+               /* Shutdown race produced a Magic-typed header with wrong
+                  size (e.g. all-zero teardown buffer).  Shut down cleanly
+                  rather than trip the assertion and crash the recorder. */
+               frontEndStop();
+               return 0;
+            }
             uint64_t ack;
             response->read(reinterpret_cast<char*>(&ack), sizeof(uint64_t));
 
-            
+
             return ack; // 0 - no error; 1 - otherwise
          }
          case RecOtherMemoryRequest:
@@ -806,8 +829,9 @@ uint64_t Sift::Writer::Magic(uint64_t a, uint64_t b, uint64_t c)
 	    frontEndStop();
 	    break;
          default:
-            sift_assert(false);
-            break;
+            /* Unrecognized type — treat as shutdown rather than crash. */
+            frontEndStop();
+            return 0;
       }
    }
    // We should not get here

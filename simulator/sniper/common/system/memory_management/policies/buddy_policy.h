@@ -9,11 +9,13 @@
 
 #include "memory_management/policies/reserve_thp_policy.h"
 #include "memory_management/policies/baseline_policy.h"
+#include "memory_management/policies/revelator_policy.h"
 #include "memory_management/policies/spot_policy.h"
 #include "memory_management/policies/asap_policy.h"
 #include "memory_management/policies/utopia_policy.h"
 #include "memory_management/policies/utopia_coalesce_policy.h"
 #include "memory_management/policies/eager_paging_policy.h"
+#include "memory_management/policies/numa_revelator_policy.h"
 #include "memory_management/policies/numa_reserve_thp_policy.h"
 
 namespace Sniper {
@@ -75,6 +77,11 @@ struct BuddyPolicyFor<Sniper::Baseline::MetricsPolicy> {
 };
 
 template <>
+struct BuddyPolicyFor<Sniper::Revelator::RevelatorSniperPolicy> {
+    using type = Sniper::Buddy::MetricsPolicy;
+};
+
+template <>
 struct BuddyPolicyFor<Sniper::Spot::SpotSniperPolicy> {
     using type = Sniper::Buddy::MetricsPolicy;
 };
@@ -100,6 +107,11 @@ struct BuddyPolicyFor<Sniper::EagerPaging::MetricsPolicy> {
 };
 
 // NUMA allocator buddy policy mappings
+template <>
+struct BuddyPolicyFor<Sniper::NumaRevelator::NumaRevelatorSniperPolicy> {
+    using type = Sniper::Buddy::MetricsPolicy;
+};
+
 template <>
 struct BuddyPolicyFor<Sniper::NumaReserveTHP::NumaReserveTHPSniperPolicy> {
     using type = Sniper::Buddy::MetricsPolicy;

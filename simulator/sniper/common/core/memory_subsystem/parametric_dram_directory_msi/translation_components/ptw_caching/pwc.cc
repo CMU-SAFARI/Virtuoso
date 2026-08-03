@@ -27,7 +27,10 @@ namespace ParametricDramDirectoryMSI
 		for (int i = 0; i < num_caches; i++)
 		{
 
-			m_cache[i] = new Cache(name + "_L" + itostr((num_caches + 1) - i), cfgname, core_id, entries[i] / associativities[i], associativities[i], 8, "lru", CacheBase::PR_L1_CACHE, CacheBase::hash_t::HASH_MASK, NULL, NULL, true, page_sizes, 1);
+			// HASH_MOD: lets the PWC accept non-power-of-2 num_sets if anyone needs odd
+			// PWC geometries.  For pow-2 sizes the compiler optimises % to a bitmask,
+			// so it's free; for non-pow-2 it gives a valid set index.
+			m_cache[i] = new Cache(name + "_L" + itostr((num_caches + 1) - i), cfgname, core_id, entries[i] / associativities[i], associativities[i], 8, "lru", CacheBase::PR_L1_CACHE, CacheBase::hash_t::HASH_MOD, NULL, NULL, true, page_sizes, 1);
 			registerStatsMetric(name + "_L" + itostr((num_caches + 1) - i), core_id, "access", &m_access[i]);
 			registerStatsMetric(name + "_L" + itostr((num_caches + 1) - i), core_id, "miss", &m_miss[i]);
 		}

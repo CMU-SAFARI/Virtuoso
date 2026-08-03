@@ -58,13 +58,12 @@ VOID Detach(VOID *v)
 
 BOOL followChild(CHILD_PROCESS childProcess, VOID *val)
 {
-   if (any_thread_in_detail)
-   {
-      fprintf(stderr, "EXECV ignored while in ROI\n");
-      return false; // Cannot fork/execv after starting ROI
-   }
-   else
-      return true;
+   /* Stage A (Apr 15 2026): always follow the child.  The userspace MimicOS
+      `spawn_live_application(binary, argv)` path uses fork+execve to launch
+      live userspace apps under PIN; the child's execve'd image must be
+      instrumented for SIFT recording. */
+   (void)childProcess; (void)val;
+   return true;
 }
 
 VOID forkBefore(THREADID threadid, const CONTEXT *ctxt, VOID *v)
@@ -83,9 +82,20 @@ VOID forkAfterInChild(THREADID threadid, const CONTEXT *ctxt, VOID *v)
    // Assume identity of child process
    app_id = child_app_id;
    num_threads = 1;
-   // Open new SIFT pipe for thread 0
    thread_data[0].bbv = new Bbv();
-   openFile(0);
+   /* Stage A (Apr 15 2026): carry the child's app_id across the upcoming
+      execve via an env var.  PIN's tool main() re-runs after execve with a
+      fresh address space, so the in-memory `app_id` we just set is lost.
+      The post-execve main() reads SIFT_CHILD_APP_ID to recover it. */
+   char buf[32];
+   snprintf(buf, sizeof(buf), "%d", app_id);
+   setenv("SIFT_CHILD_APP_ID", buf, 1);
+   /* Stage A (Apr 15 2026): do NOT openFile(0) here.  The child is about to
+      execve into the target binary; execve replaces the process image so any
+      Writer opened here is destroyed and its header is stranded in the FIFO.
+      The post-execve main() re-runs and calls openFile(0) itself — that is
+      the single header the Sniper-side Reader should consume.  Opening here
+      would leave TWO headers in the FIFO and corrupt stream framing. */
 }
 
 bool assert_ignore()
@@ -202,6 +212,20 @@ int main(int argc, char **argv)
    PIN_InitLock(&new_threadid_lock);
 
    app_id = KnobSiftAppId.Value();
+   /* Stage A (Apr 15 2026): if this is a PIN instance spawned after
+      execve by a live userspace app (via MimicOS spawn_live_application),
+      the parent has set SIFT_CHILD_APP_ID in our environment with the
+      app_id allocated by Sniper's injectForkedApp.  It overrides the
+      default knob (which would otherwise reuse the parent's app_id=0
+      and clobber the parent's SIFT FIFOs). */
+   if (const char *env_app_id = getenv("SIFT_CHILD_APP_ID"))
+   {
+      app_id = atoi(env_app_id);
+      std::cerr << "[SIFT_RECORDER] Using app_id=" << app_id
+                << " from SIFT_CHILD_APP_ID env" << std::endl;
+      /* Consume it so any further descendants start fresh. */
+      unsetenv("SIFT_CHILD_APP_ID");
+   }
    blocksize = KnobBlocksize.Value();
    fast_forward_target = KnobFastForwardTarget.Value();
    detailed_target = KnobDetailedTarget.Value();

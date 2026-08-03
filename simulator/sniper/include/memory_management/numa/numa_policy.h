@@ -13,7 +13,7 @@
  *   - Compact per-page node hints (2-4 bits per page) for bounded fanout
  *   - Confidence tracking for automatic counter-only vs hint-guided mode
  *
- * NUMA-aware allocation policy for Virtuoso
+ * Based on: Revelator NUMA policy-aware workflow (Kanellopoulos+, ISCA 2026)
  */
 
 #include "fixed_types.h"
@@ -289,7 +289,7 @@ public:
      * Initialize the NUMA placement engine.
      * @param num_nodes       Number of NUMA nodes
      * @param policy          Placement policy
-     * @param num_hashes      Number of hash functions (for hash-based allocators)
+     * @param num_hashes      Number of hash functions (for Revelator)
      * @param util_threshold  Utilization threshold for spill decisions
      * @param max_spec_nodes  Maximum nodes to speculate on (k)
      */
@@ -437,7 +437,7 @@ public:
      *   - When confidence degrades: consult per-page node hints
      * 
      * @param vpn           Virtual page number
-     * @param hash_idx      Hash function index (for multi-hash allocators)
+     * @param hash_idx      Hash function index (for Revelator multi-hash)
      * @param cpu_local_node CPU-local node ID
      * @return Vector of candidate node IDs (bounded by max_speculation_nodes)
      */

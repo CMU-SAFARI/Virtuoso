@@ -190,7 +190,7 @@ std::vector<IntPtr> IPStridePrefetcher::generatePrefetchAddress(RPTEntry *rpt_en
 		// But stay within the page if requested
 		if (!m_stop_at_page || (prefetch_offset >= 0 && prefetch_offset < (int32_t)NUM_CACHE_BLOCKS_IN_PAGE))
 		{
-			IntPtr prefetch_address = (current_page << LOG2_PAGE_SIZE) + ((IntPtr)prefetch_offset << LOG2_CACHE_BLOCK_SIZE);
+			IntPtr prefetch_address = (current_page << LOG2_PAGE_SIZE) + static_cast<IntPtr>(prefetch_offset) * CACHE_BLOCK_SIZE;
 			// std::cout << " " << std::hex << prefetch_address << std::dec << ",";
 			addresses.push_back(prefetch_address);
 			stats.gen_prefetch++;

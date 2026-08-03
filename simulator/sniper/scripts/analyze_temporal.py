@@ -3,7 +3,6 @@
 Deep analysis of cache behavior differences.
 """
 
-import os
 from collections import defaultdict
 
 def analyze_address_patterns(trace_path, name):
@@ -73,9 +72,8 @@ def analyze_address_patterns(trace_path, name):
 def compare_unique_addresses():
     """Compare unique addresses between the two runs."""
     
-    _sniper_root = os.environ.get("SNIPER_ROOT", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-    no_trans_path = os.path.join(_sniper_root, "results/addr_trace_debug/no_translation/telemetry/address_trace.csv")
-    reservethp_path = os.path.join(_sniper_root, "results/addr_trace_debug/reservethp/telemetry/address_trace.csv")
+    no_trans_path = "/mnt/panzer/kanellok/virtuoso_artifact/simulator/sniper/results/addr_trace_debug/no_translation/telemetry/address_trace.csv"
+    reservethp_path = "/mnt/panzer/kanellok/virtuoso_artifact/simulator/sniper/results/addr_trace_debug/reservethp/telemetry/address_trace.csv"
     
     print("=" * 60)
     print("TEMPORAL CACHE BEHAVIOR ANALYSIS")

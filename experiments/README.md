@@ -115,8 +115,8 @@ Interface:
 python3 experiments/create_experiments.py \
   --artifact-path /home/user/workspace/safari/vmorph/virtuoso_artifact \
   --yaml experiments/clist.yaml \
-  --suite reservethp \
-  --suite-dir-name reservethp \
+  --suite smoke-test-allocators \
+  --suite-dir-name smoke-test-allocators \
   --force
 ```
 
@@ -218,8 +218,8 @@ python3 experiments/create_rerun_experiments.py \
 python3 experiments/create_experiments.py \
   --artifact-path /home/user/workspace/safari/vmorph/virtuoso_artifact \
   --clist experiments/clist.yaml \
-  --suite reservethp \
-  --suite-dir-name reservethp \
+  --suite smoke-test-allocators \
+  --suite-dir-name smoke-test-allocators \
   --force
 ```
 

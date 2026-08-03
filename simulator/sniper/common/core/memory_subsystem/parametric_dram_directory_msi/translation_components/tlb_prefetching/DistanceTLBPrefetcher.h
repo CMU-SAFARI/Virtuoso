@@ -34,7 +34,8 @@ public:
 						  ShmemPerfModel *_shmem_perf_model, String name,
 						  uint32_t page_shift, uint32_t num_rows,
 						  uint32_t num_slots, uint32_t assoc,
-						  bool model_prefetch_walks);
+						  bool model_prefetch_walks,
+						  uint32_t max_depth);
 
 	~DistanceTLBPrefetcher() override;
 
@@ -42,7 +43,7 @@ public:
 		IntPtr address, IntPtr eip, Core::lock_signal_t lock,
 		bool modeled, bool count, PageTable *pt,
 		bool instruction = false, bool tlb_hit = false,
-		bool pq_hit = false) override;
+		bool pq_hit = false, int page_size = 12) override;
 
 private:
 	// ── Table helpers ─────────────────────────────────────────────
@@ -89,6 +90,8 @@ private:
 	int64_t  m_last_distance;
 
 	bool     m_model_prefetch_walks;
+	uint32_t m_max_depth;     // 1 = original DP (no chaining); >1 = chained
+	                          // Markov walk following the MRU successor
 
 	// ── Stats ────────────────────────────────────────────────────
 	struct DPStats
@@ -127,6 +130,14 @@ private:
 		UInt64 prefetch_attempts;
 		UInt64 prefetch_successful;
 		UInt64 prefetch_failed;
+
+		// Chained-depth walk (max_depth > 1)
+		UInt64 chain_lookups;            // depth>=2 row lookups attempted
+		UInt64 chain_row_hits;           // depth>=2 lookups that found a row
+		UInt64 chain_breaks_no_row;      // chain ended: successor distance had no row
+		UInt64 chain_breaks_no_slot;     // chain ended: row had no valid MRU slot
+		UInt64 chain_breaks_invalid_vpn; // chain ended: advanced VPN went negative
+		UInt64 chain_predictions_issued; // predictions issued at depth >= 2
 	} m_stats;
 };
 

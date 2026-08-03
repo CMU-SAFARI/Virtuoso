@@ -7,6 +7,7 @@
 #include "eager_paging_exception_handler.h"
 #include "spot_exception_handler.h"
 #include "utopia_exception_handler.h"
+#include "revelator_exception_handler.h"
 #include "simulator.h"
 #include "config.hpp"
 
@@ -73,6 +74,9 @@ private:
         }
         else if (handler_type == "utopia") {
             return new UtopiaExceptionHandler(core);
+        }
+        else if (handler_type == "revelator") {
+            return new RevelatorExceptionHandler(core);
         }
         else {
             std::cerr << "[EXCEPTION_HANDLER_FACTORY] Unknown handler type: " << handler_type << ", using default" << std::endl;

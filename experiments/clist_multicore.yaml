@@ -1,0 +1,384 @@
+# ===========================================================================
+# clist_multicore.yaml - baseline multicore experiment definitions.
+#
+# Baseline topologies only: 2/4/8/16 cores, homogeneous and heterogeneous mixes,
+# under the parametric and fast_detailed caching protocols, plus the top-250
+# mixes.
+#
+# Per-paper studies (mechanism comparisons, fragmentation and utilization sweeps,
+# prefetcher head-to-heads) do NOT belong here - they ship with their paper's
+# artifact branch.
+#
+# Used by experiments/create_multicore_experiments.py.
+# ===========================================================================
+
+trace_suite:
+  homo_2core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_homo_2core.tlist
+  homo_4core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_homo_4core.tlist
+  homo_8core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_homo_8core.tlist
+  homo_16core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_homo_16core.tlist
+  hetero_2core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_hetero_2core.tlist
+  hetero_4core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_hetero_4core.tlist
+  hetero_8core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_hetero_8core.tlist
+  hetero_16core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_hetero_16core.tlist
+  top250_2core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_top250_2core.tlist
+  top250_4core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_top250_4core.tlist
+  top250_8core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_top250_8core.tlist
+  top250_16core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - multicore_top250_16core.tlist
+  parametric_2core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - parametric_2core.tlist
+  parametric_4core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - parametric_4core.tlist
+  parametric_8core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - parametric_8core.tlist
+  parametric_16core:
+    tracelist_base_path: vm_tlist/
+    tracelists:
+      - parametric_16core.tlist
+
+configs:
+  configs_base_path: ../simulator/sniper/config/address_translation_schemes/
+  reservethp-full-fragmentation:
+    name: reservethp-frag0.0
+    file: reservethp.cfg
+    extends:
+      - --perf_model/reserve_thp/target_fragmentation=0.0
+    description: Reservation-based THP allocator with full fragmentation (baseline)
+  reservethp-no-fragmentation:
+    name: reservethp-frag1.0
+    file: reservethp.cfg
+    extends:
+      - --perf_model/reserve_thp/target_fragmentation=1.0
+    description: Reservation-based THP allocator with no fragmentation
+  fast-detailed-2c-full-frag:
+    name: fd-2c-frag0.0
+    file: multicore/fast_detailed_baseline_2c.cfg
+    extends:
+      - --perf_model/reserve_thp/target_fragmentation=0.0
+    description: Fast detailed 2-core, 8MB L3, full fragmentation
+  fast-detailed-2c-no-frag:
+    name: fd-2c-frag1.0
+    file: multicore/fast_detailed_baseline_2c.cfg
+    extends:
+      - --perf_model/reserve_thp/target_fragmentation=1.0
+    description: Fast detailed 2-core, 8MB L3, no fragmentation
+  fast-detailed-4c-full-frag:
+    name: fd-4c-frag0.0
+    file: multicore/fast_detailed_baseline_4c.cfg
+    extends:
+      - --perf_model/reserve_thp/target_fragmentation=0.0
+    description: Fast detailed 4-core, 16MB L3, full fragmentation
+  fast-detailed-4c-no-frag:
+    name: fd-4c-frag1.0
+    file: multicore/fast_detailed_baseline_4c.cfg
+    extends:
+      - --perf_model/reserve_thp/target_fragmentation=1.0
+    description: Fast detailed 4-core, 16MB L3, no fragmentation
+  fast-detailed-8c-full-frag:
+    name: fd-8c-frag0.0
+    file: multicore/fast_detailed_baseline_8c.cfg
+    extends:
+      - --perf_model/reserve_thp/target_fragmentation=0.0
+    description: Fast detailed 8-core, 32MB L3, full fragmentation
+  fast-detailed-8c-no-frag:
+    name: fd-8c-frag1.0
+    file: multicore/fast_detailed_baseline_8c.cfg
+    extends:
+      - --perf_model/reserve_thp/target_fragmentation=1.0
+    description: Fast detailed 8-core, 32MB L3, no fragmentation
+  fast-detailed-16c-full-frag:
+    name: fd-16c-frag0.0
+    file: multicore/fast_detailed_baseline_16c.cfg
+    extends:
+      - --perf_model/reserve_thp/target_fragmentation=0.0
+    description: Fast detailed 16-core, 64MB L3, full fragmentation
+  fast-detailed-16c-no-frag:
+    name: fd-16c-frag1.0
+    file: multicore/fast_detailed_baseline_16c.cfg
+    extends:
+      - --perf_model/reserve_thp/target_fragmentation=1.0
+    description: Fast detailed 16-core, 64MB L3, no fragmentation
+  param-bl-2c:
+    name: param-bl-2c
+    file: multicore/parametric_baseline_2c.cfg
+    sweeps:
+      - identifier: frag
+        option: --perf_model/reserve_thp/target_fragmentation=
+        values:
+          - 0.0
+          - 0.005
+          - 0.1
+    description: Parametric baseline 2-core, frag sweep
+  param-bl-4c:
+    name: param-bl-4c
+    file: multicore/parametric_baseline_4c.cfg
+    sweeps:
+      - identifier: frag
+        option: --perf_model/reserve_thp/target_fragmentation=
+        values:
+          - 0.0
+          - 0.005
+          - 0.1
+    description: Parametric baseline 4-core, frag sweep
+  param-bl-8c:
+    name: param-bl-8c
+    file: multicore/parametric_baseline_8c.cfg
+    sweeps:
+      - identifier: frag
+        option: --perf_model/reserve_thp/target_fragmentation=
+        values:
+          - 0.0
+          - 0.005
+          - 0.1
+    description: Parametric baseline 8-core, frag sweep
+  param-bl-16c:
+    name: param-bl-16c
+    file: multicore/parametric_baseline_16c.cfg
+    sweeps:
+      - identifier: frag
+        option: --perf_model/reserve_thp/target_fragmentation=
+        values:
+          - 0.0
+          - 0.005
+          - 0.1
+    description: Parametric baseline 16-core, frag sweep
+
+experiment_suites:
+  multicore_2core_homo:
+    description: 2-core homogeneous (rnd on both cores)
+    topology: 2core
+    configs:
+      - reservethp-full-fragmentation
+      - reservethp-no-fragmentation
+    trace_suite: homo_2core
+    instruction_count: 100000000
+  multicore_2core_hetero:
+    description: 2-core heterogeneous (rnd + bfs)
+    topology: 2core
+    configs:
+      - reservethp-full-fragmentation
+      - reservethp-no-fragmentation
+    trace_suite: hetero_2core
+    instruction_count: 200000000
+  multicore_4core_homo:
+    description: 4-core homogeneous (rnd on all cores)
+    topology: 4core
+    configs:
+      - reservethp-full-fragmentation
+      - reservethp-no-fragmentation
+    trace_suite: homo_4core
+    instruction_count: 100000000
+  multicore_4core_hetero:
+    description: 4-core heterogeneous (rnd, bfs, pr, dlrm)
+    topology: 4core
+    configs:
+      - reservethp-full-fragmentation
+      - reservethp-no-fragmentation
+    trace_suite: hetero_4core
+    instruction_count: 100000000
+  multicore_8core_homo:
+    description: 8-core homogeneous (rnd on all cores)
+    topology: 8core
+    configs:
+      - reservethp-full-fragmentation
+      - reservethp-no-fragmentation
+    trace_suite: homo_8core
+    instruction_count: 100000000
+  multicore_8core_hetero:
+    description: 8-core heterogeneous (rnd, bfs, pr, dlrm, cc, sssp, xs, bc)
+    topology: 8core
+    configs:
+      - reservethp-full-fragmentation
+      - reservethp-no-fragmentation
+    trace_suite: hetero_8core
+    instruction_count: 60000000
+  multicore_16core_homo:
+    description: 16-core homogeneous (rnd on all cores)
+    topology: 16core
+    configs:
+      - reservethp-full-fragmentation
+      - reservethp-no-fragmentation
+    trace_suite: homo_16core
+    instruction_count: 100000000
+  multicore_16core_hetero:
+    description: 16-core heterogeneous (11 unique traces, wraps to 16)
+    topology: 16core
+    configs:
+      - reservethp-full-fragmentation
+      - reservethp-no-fragmentation
+    trace_suite: hetero_16core
+    instruction_count: 30000000
+  fast_detailed_2core_homo:
+    description: 2-core fast-detailed homogeneous
+    topology: 2core
+    configs:
+      - fast-detailed-2c-full-frag
+      - fast-detailed-2c-no-frag
+    trace_suite: homo_2core
+    instruction_count: 100000000
+  fast_detailed_2core_hetero:
+    description: 2-core fast-detailed heterogeneous
+    topology: 2core
+    configs:
+      - fast-detailed-2c-full-frag
+      - fast-detailed-2c-no-frag
+    trace_suite: hetero_2core
+    instruction_count: 100000000
+  fast_detailed_4core_homo:
+    description: 4-core fast-detailed homogeneous
+    topology: 4core
+    configs:
+      - fast-detailed-4c-full-frag
+      - fast-detailed-4c-no-frag
+    trace_suite: homo_4core
+    instruction_count: 50000000
+  fast_detailed_4core_hetero:
+    description: 4-core fast-detailed heterogeneous
+    topology: 4core
+    configs:
+      - fast-detailed-4c-full-frag
+      - fast-detailed-4c-no-frag
+    trace_suite: hetero_4core
+    instruction_count: 50000000
+  fast_detailed_8core_homo:
+    description: 8-core fast-detailed homogeneous
+    topology: 8core
+    configs:
+      - fast-detailed-8c-full-frag
+      - fast-detailed-8c-no-frag
+    trace_suite: homo_8core
+    instruction_count: 25000000
+  fast_detailed_8core_hetero:
+    description: 8-core fast-detailed heterogeneous
+    topology: 8core
+    configs:
+      - fast-detailed-8c-full-frag
+      - fast-detailed-8c-no-frag
+    trace_suite: hetero_8core
+    instruction_count: 25000000
+  fast_detailed_16core_homo:
+    description: 16-core fast-detailed homogeneous
+    topology: 16core
+    configs:
+      - fast-detailed-16c-full-frag
+      - fast-detailed-16c-no-frag
+    trace_suite: homo_16core
+    instruction_count: 10000000
+  fast_detailed_16core_hetero:
+    description: 16-core fast-detailed heterogeneous
+    topology: 16core
+    configs:
+      - fast-detailed-16c-full-frag
+      - fast-detailed-16c-no-frag
+    trace_suite: hetero_16core
+    instruction_count: 10000000
+  parametric_baseline_2core:
+    description: Parametric baseline 2-core, frag 0.0 / 0.005 / 0.1
+    topology: 2core
+    configs:
+      - param-bl-2c
+    trace_suite: parametric_2core
+    instruction_count: 50000000
+    sim_end: last
+  parametric_baseline_4core:
+    description: Parametric baseline 4-core, frag 0.0 / 0.005 / 0.1
+    topology: 4core
+    configs:
+      - param-bl-4c
+    trace_suite: parametric_4core
+    instruction_count: 30000000
+    sim_end: last
+  parametric_baseline_8core:
+    description: Parametric baseline 8-core, frag 0.0 / 0.005 / 0.1
+    topology: 8core
+    configs:
+      - param-bl-8c
+    trace_suite: parametric_8core
+    instruction_count: 20000000
+    sim_end: last
+  parametric_baseline_16core:
+    description: Parametric baseline 16-core, frag 0.0 / 0.005 / 0.1
+    topology: 16core
+    configs:
+      - param-bl-16c
+    trace_suite: parametric_16core
+    instruction_count: 10000000
+    sim_end: last
+  top250_2core:
+    description: 2-core top250, google + victima (no gen/dlrm/sssp/gc)
+    topology: 2core
+    configs:
+      - fast-detailed-2c-full-frag
+      - fast-detailed-2c-no-frag
+    trace_suite: top250_2core
+    instruction_count: 100000000
+    sim_end: last
+  top250_4core:
+    description: 4-core top250, google + victima (no gen/dlrm/sssp/gc)
+    topology: 4core
+    configs:
+      - fast-detailed-4c-full-frag
+      - fast-detailed-4c-no-frag
+    trace_suite: top250_4core
+    instruction_count: 50000000
+    sim_end: last
+  top250_8core:
+    description: 8-core top250, google + victima (no gen/dlrm/sssp/gc)
+    topology: 8core
+    configs:
+      - fast-detailed-8c-full-frag
+      - fast-detailed-8c-no-frag
+    trace_suite: top250_8core
+    instruction_count: 25000000
+    sim_end: last
+  top250_16core:
+    description: 16-core top250, google + victima (no gen/dlrm/sssp/gc)
+    topology: 16core
+    configs:
+      - fast-detailed-16c-full-frag
+      - fast-detailed-16c-no-frag
+    trace_suite: top250_16core
+    instruction_count: 10000000
+    sim_end: last

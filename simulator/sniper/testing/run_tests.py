@@ -52,7 +52,7 @@ def get_traces_dir(config):
     """Get the traces directory from config or use default."""
     if 'paths' in config and 'traces_dir' in config['paths']:
         return Path(config['paths']['traces_dir'])
-    return Path(os.environ.get("VIRTUOSO_TRACES", "/path/to/traces"))
+    return Path("/mnt/panzer/kanellok/virtuoso_traces")
 
 
 def get_config_path(config_name, config_def, config):

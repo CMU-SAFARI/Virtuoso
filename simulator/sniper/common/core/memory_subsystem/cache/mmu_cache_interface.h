@@ -53,5 +53,56 @@ public:
       return SubsecondTime::Zero();
    }
 
+   /**
+    * @brief Tag an existing cache line as prefetched (set CacheBlockInfo::PREFETCH).
+    *
+    * Called after a prefetch PTW walk fills a line via the normal demand path.
+    * A subsequent demand access that hits this line will increment hits-prefetch.
+    */
+   virtual void tagMMUPrefetch(IntPtr cache_address, HitWhere::where_t hit_where = HitWhere::UNKNOWN)
+   {
+      // Default: no-op
+   }
+
+   /**
+    * @brief Mark an MMU-prefetched line for per-PTE (sub-line) hit accounting.
+    *
+    * Marks all 8-byte sub-regions as pending-credit so each distinct PTE a
+    * later demand walk consumes is counted once (vs. the once-per-line
+    * CacheBlockInfo::PREFETCH bit). Called on the level demand walks land (L1D).
+    */
+   virtual void markMMUPrefetchSubline(IntPtr cache_address, HitWhere::where_t hit_where = HitWhere::UNKNOWN)
+   {
+      // Default: no-op
+   }
+
+   /**
+    * @brief Tag-only residency check. No fill, no replacement update, no
+    * latency advance — just "is this line present in *this* cache level?"
+    * Used by speculative parallel-probe paths (e.g. Victima leaf-probe).
+    * Default returns false for backends that can't peek.
+    */
+   virtual bool isLinePresent(IntPtr cache_address)
+   {
+      return false;
+   }
+
+   /**
+    * @brief Mark a resident line dirty (MODIFIED) without modeling a store.
+    *
+    * Used to model the writeback traffic caused when an in-PTE prefetch
+    * payload (TRAIL delta) is updated: the PTE's cacheline becomes dirty and
+    * will generate a DRAM writeback when evicted.  Marks dirty only if the
+    * line is currently resident (dirty-if-present); does NOT fetch on miss.
+    * Returns: 0 = line not resident (no writeback modeled),
+    *          1 = resident clean line newly upgraded to dirty,
+    *          2 = line already dirty (write coalesced into a pending writeback).
+    * Default 0 for backends that don't model writebacks.
+    */
+   virtual int markMMUPayloadDirty(IntPtr /*cache_address*/)
+   {
+      return 0;
+   }
+
    virtual ~MMUCacheInterface() = default;
 };

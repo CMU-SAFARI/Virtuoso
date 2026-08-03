@@ -10,12 +10,22 @@
 // Static member definitions (for backward compatibility)
 std::unordered_map<std::string, uint64_t> MimicOS::protocol_codes_encode = {
     {"page_fault", 1},
-    {"syscall", 2}
+    {"syscall",    2},
+    /* Stage 2 (Apr 18 2026): scheduler lifecycle events.
+       argv[0] is one of these codes.
+       "new_thread":  argv[1]=app_thread_id (encoded).  Kernel appends to
+                      its runqueue and issues SimContextSwitchTo.
+       "thread_exit": argv[1]=app_thread_id.  Kernel removes from runqueue
+                      and SimContextSwitchTo to next runnable (or idles). */
+    {"new_thread",  3},
+    {"thread_exit", 4}
 };
 
 std::unordered_map<uint64_t, std::string> MimicOS::protocol_codes_decode = {
     {1, "page_fault"},
-    {2, "syscall"}
+    {2, "syscall"},
+    {3, "new_thread"},
+    {4, "thread_exit"}
 };
 
 // ============ Construction/Destruction ============
@@ -92,6 +102,8 @@ MimicOS::MimicOS(bool is_guest)
         m_log << "[MimicOS] Memory Allocator created and fragmented" << std::endl;
 #endif
     }
+
+    // kcompactd start is deferred to after creation (see below)
     
     // Page fault latency
     m_page_fault_latency = ComponentLatency(
@@ -149,6 +161,126 @@ MimicOS::MimicOS(bool is_guest)
         }
     }
     
+    // kcompactd (memory compaction daemon)
+    {
+        CompactdConfig kcompactd_cfg;
+        try {
+            kcompactd_cfg.enabled = Sim()->getCfg()->getBoolDefault("perf_model/" + m_name + "/kcompactd_enabled", false);
+            if (kcompactd_cfg.enabled) {
+                try { kcompactd_cfg.scan_interval_us   = Sim()->getCfg()->getInt("perf_model/" + m_name + "/kcompactd_scan_interval_us"); } catch (...) {}
+                try { kcompactd_cfg.low_util_threshold  = Sim()->getCfg()->getFloat("perf_model/" + m_name + "/kcompactd_low_util_threshold"); } catch (...) {}
+                try { kcompactd_cfg.high_util_threshold = Sim()->getCfg()->getFloat("perf_model/" + m_name + "/kcompactd_high_util_threshold"); } catch (...) {}
+                try { kcompactd_cfg.max_pages_per_scan  = Sim()->getCfg()->getInt("perf_model/" + m_name + "/kcompactd_max_pages_per_scan"); } catch (...) {}
+            }
+        } catch (...) {
+            kcompactd_cfg.enabled = false;
+        }
+
+        if (kcompactd_cfg.enabled) {
+            m_kcompactd = std::make_unique<SniperKcompactd>(kcompactd_cfg);
+            m_kcompactd_interval_ns = kcompactd_cfg.scan_interval_us * 1000; // us to ns
+            m_kcompactd_last_scan_ns = 0;
+
+            // Bind kcompactd to the allocator's data structures
+            try {
+                String alloc_type = Sim()->getCfg()->getString("perf_model/" + m_name + "/memory_allocator_type");
+                if (alloc_type == "reserve_thp") {
+                    auto* rthp = dynamic_cast<SniperReserveTHPAllocator*>(m_memory_allocator.get());
+                    if (rthp) {
+                        m_kcompactd->bind(&rthp->getTwoMbMap(), rthp->getBuddyAllocator());
+
+                        // Register HOOK_PERIODIC callback so kcompactd runs at simulated time intervals
+                        Sim()->getHooksManager()->registerHook(
+                            HookType::HOOK_PERIODIC,
+                            MimicOS::hookKcompactdPeriodic,
+                            (UInt64)this);
+
+                        std::cout << "[MimicOS] kcompactd bound to ReserveTHP, periodic hook registered (interval="
+                                  << kcompactd_cfg.scan_interval_us << "us simulated)" << std::endl;
+                    }
+                }
+            } catch (std::exception& e) {
+                std::cout << "[MimicOS] kcompactd: failed to read allocator_type: " << e.what() << std::endl;
+            }
+        }
+    }
+
+    // khugepaged (THP coalescing daemon)
+    {
+        KhugepagedConfig khp_cfg;
+        try {
+            khp_cfg.enabled = Sim()->getCfg()->getBoolDefault("perf_model/" + m_name + "/khugepaged_enabled", false);
+            if (khp_cfg.enabled) {
+                try { khp_cfg.scan_interval_us       = Sim()->getCfg()->getInt("perf_model/" + m_name + "/khugepaged_scan_interval_us"); } catch (...) {}
+                try { khp_cfg.promotion_threshold     = Sim()->getCfg()->getFloat("perf_model/" + m_name + "/khugepaged_promotion_threshold"); } catch (...) {}
+                try { khp_cfg.max_promotions_per_scan = Sim()->getCfg()->getInt("perf_model/" + m_name + "/khugepaged_max_promotions_per_scan"); } catch (...) {}
+            }
+        } catch (...) {
+            khp_cfg.enabled = false;
+        }
+
+        if (khp_cfg.enabled) {
+            m_khugepaged = std::make_unique<SniperKhugepaged>(khp_cfg);
+            m_khugepaged_interval_ns = khp_cfg.scan_interval_us * 1000;
+            m_khugepaged_last_scan_ns = 0;
+
+            try {
+                String alloc_type = Sim()->getCfg()->getString("perf_model/" + m_name + "/memory_allocator_type");
+                if (alloc_type == "reserve_thp") {
+                    auto* rthp = dynamic_cast<SniperReserveTHPAllocator*>(m_memory_allocator.get());
+                    if (rthp) {
+                        m_khugepaged->bind(&rthp->getTwoMbMap());
+                        Sim()->getHooksManager()->registerHook(
+                            HookType::HOOK_PERIODIC,
+                            MimicOS::hookKhugepagedPeriodic,
+                            (UInt64)this);
+                        std::cout << "[MimicOS] khugepaged bound to ReserveTHP, periodic hook registered (interval="
+                                  << khp_cfg.scan_interval_us << "us, threshold=" << khp_cfg.promotion_threshold << ")" << std::endl;
+                    }
+                }
+            } catch (std::exception& e) {
+                std::cout << "[MimicOS] khugepaged: failed to bind: " << e.what() << std::endl;
+            }
+        }
+    }
+
+    // kswapd (page reclamation daemon)
+    {
+        KswapdConfig ks_cfg;
+        try {
+            ks_cfg.enabled = Sim()->getCfg()->getBoolDefault("perf_model/" + m_name + "/kswapd_enabled", false);
+            if (ks_cfg.enabled) {
+                try { ks_cfg.scan_interval_us   = Sim()->getCfg()->getInt("perf_model/" + m_name + "/kswapd_scan_interval_us"); } catch (...) {}
+                try { ks_cfg.pages_high         = Sim()->getCfg()->getInt("perf_model/" + m_name + "/kswapd_pages_high"); } catch (...) {}
+                try { ks_cfg.pages_low          = Sim()->getCfg()->getInt("perf_model/" + m_name + "/kswapd_pages_low"); } catch (...) {}
+                try { ks_cfg.pages_min          = Sim()->getCfg()->getInt("perf_model/" + m_name + "/kswapd_pages_min"); } catch (...) {}
+                try { ks_cfg.batch_size         = Sim()->getCfg()->getInt("perf_model/" + m_name + "/kswapd_batch_size"); } catch (...) {}
+            }
+        } catch (...) {
+            ks_cfg.enabled = false;
+        }
+
+        if (ks_cfg.enabled && m_memory_allocator) {
+            m_kswapd = std::make_unique<SniperKswapd>(ks_cfg);
+            m_kswapd_interval_ns = ks_cfg.scan_interval_us * 1000;
+            m_kswapd_last_scan_ns = 0;
+
+            // Bind to allocator's free page tracking
+            // kswapd doesn't need the two_mb_map, just the free page count
+            m_kswapd->bind(nullptr, 0);  // Free page tracking done internally by kswapd's LRU
+
+            Sim()->getHooksManager()->registerHook(
+                HookType::HOOK_PERIODIC,
+                MimicOS::hookKswapdPeriodic,
+                (UInt64)this);
+
+            std::cout << "[MimicOS] kswapd enabled (interval=" << ks_cfg.scan_interval_us
+                      << "us, watermarks: high=" << ks_cfg.pages_high
+                      << " low=" << ks_cfg.pages_low
+                      << " min=" << ks_cfg.pages_min << ")" << std::endl;
+        }
+    }
+
     std::cout << "[MimicOS] Initialization complete" << std::endl;
 }
 
@@ -431,6 +563,18 @@ void MimicOS::initPerCorePageFaultState(UInt32 num_cores)
 {
     if (m_pf_states.empty()) {
         m_pf_states.resize(num_cores);
+    }
+    /* Stage 4 (Apr 18 2026): per-core event queues (replaces the
+       Stage 2 single-slot m_messages/m_message_ready design).  Each
+       core has its own deque protected by its own mutex.  Scratch
+       slot kept for the deprecated getMessage() shim. */
+    if (m_event_queues.empty()) {
+        m_event_queues.resize(num_cores);
+        m_event_queue_locks.reserve(num_cores);
+        for (UInt32 i = 0; i < num_cores; ++i) {
+            m_event_queue_locks.emplace_back(new std::mutex());
+        }
+        m_scratch_messages.resize(num_cores);
     }
 }
 

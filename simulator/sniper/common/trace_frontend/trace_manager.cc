@@ -174,6 +174,7 @@ thread_id_t TraceManager::newThread(app_id_t app_id, bool first, bool init_fifo,
    }
 
    m_num_threads_running++;
+   std::cout << "[TraceManager] newThread: tracefile='" << tracefile << "' responsefile='" << responsefile << "' thread_num=" << thread_num << std::endl;
    Thread *thread = Sim()->getThreadManager()->createThread(app_id, creator_thread_id);
    TraceThread *tthread = new TraceThread(thread, time, tracefile, responsefile, app_id, init_fifo /*cleaup*/);
    m_threads.push_back(tthread);
@@ -203,12 +204,59 @@ thread_id_t TraceManager::newThread(app_id_t app_id, bool first, bool init_fifo,
 
 
          setKernelTraceReader(tthread->getSiftReader());
+         tthread->setIsKernelPthread(true);
       }
       else {
          // Default path: set current sift reader to the main trace reader
          // so that handleAccessMemory/getLength/getPosition work correctly
          tthread->setCurrentSiftReader(tthread->getSiftReader());
       }
+   }
+   else if (userspace_mimicos_enabled && app_id >= 1)
+   {
+      /* Stage A (Apr 15 2026, extended Stage 1 Apr 18 2026): any userspace app
+         TraceThread — first thread of a fork-spawned app (thread_num==0) OR a
+         worker pthread_create'd inside a live app (thread_num>=1).  Both need
+         the same wiring:
+            - kernel_trace = shared main-kernel SIFT (for fault routing)
+            - app_trace    = this TraceThread's own SIFT (its PIN thread's pipe)
+            - current      = app_trace (start in user mode)
+         On fault, m_run_func_with_userpace_mimicos flips current to kernel;
+         on SimContextSwitch, back to app. */
+      Sift::Reader* kernel = getKernelTraceReader();
+      if (kernel == nullptr) {
+         std::cerr << "[TraceManager] ERROR: userspace_mimicos_enabled but no kernel SIFT "
+                      "reader registered yet (app_id=" << app_id << ")" << std::endl;
+      } else {
+         tthread->setKernelSIFTRreader(kernel);
+         tthread->setAppSiftReader(tthread->getSiftReader());
+         tthread->setCurrentSiftReader(tthread->getSiftReader());  /* start on app */
+         /* Stage 2B.1 (Apr 18 2026): register this user-thread Reader in the
+            pool so SimContextSwitchTo can switch any other core's TraceThread
+            to it.  Key is encode(app_id, thread_num). */
+         m_app_reader_pool.registerReader(
+            AppReaderPool::encodeId(app_id, (UInt32)thread_num),
+            tthread->getSiftReader());
+         std::cout << "[TraceManager] Stage 1: bound app_id=" << app_id
+                   << " thread_num=" << thread_num
+                   << " to shared kernel SIFT (kernel=" << kernel->getFilename()
+                   << ", app=" << tthread->getSiftReader()->getFilename()
+                   << ") pool_size=" << m_app_reader_pool.size() << std::endl;
+      }
+   }
+   else if (userspace_mimicos_enabled && app_id == 0 && thread_num >= 1)
+   {
+      /* Kernel pthread: its own SIFT pipe is the kernel reader.
+         An app reader (trace or live) may be injected later via
+         createTraceBasedApplication or injectForkedApp.  Until then,
+         the mimicos run func stays in kernel mode (reading from its
+         own SIFT pipe) because getCurrentSiftReader() != getAppSiftReader()
+         is always true when m_app_trace is NULL. */
+      tthread->setKernelSIFTRreader(tthread->getSiftReader());
+      tthread->setCurrentSiftReader(tthread->getSiftReader());
+      tthread->setIsKernelPthread(true);
+      std::cout << "[TraceManager] Kernel pthread thread_num=" << thread_num
+                << ": kernel reader = own SIFT, awaiting app injection" << std::endl;
    }
 
 
@@ -224,6 +272,109 @@ thread_id_t TraceManager::newThread(app_id_t app_id, bool first, bool init_fifo,
 #endif
 
    return thread->getId();
+}
+
+app_id_t TraceManager::injectForkedApp(thread_id_t creator_thread_id)
+{
+   ScopedLock sl(m_lock);
+
+   app_id_t app_id = m_num_apps;
+   m_num_apps++;
+   m_num_apps_nonfinish++;
+   app_info_t app_info;
+   m_app_info.push_back(app_info);
+   m_app_info[app_id].num_threads = 1;
+   m_app_info[app_id].thread_count = 1;
+
+   /* Create FIFOs the PIN child will open after execve. */
+   String tracefile    = getFifoName(app_id, 0, false /*response*/, true /*create*/);
+   String responsefile = getFifoName(app_id, 0, true  /*response*/, true /*create*/);
+
+   Sim()->getMimicOS()->createApplication(app_id);
+
+   Sift::Reader* app_reader = new Sift::Reader(tracefile.c_str(),
+                                               responsefile.c_str(),
+                                               m_app_info[0].num_threads + app_id);
+
+   TraceThread* kernel_tthread = getTraceThread(0, creator_thread_id);
+   if (kernel_tthread == nullptr) {
+      std::cerr << "[TraceManager] injectForkedApp: no creator TraceThread (tid="
+                << creator_thread_id << ")" << std::endl;
+      delete app_reader;
+      return -1;
+   }
+
+   setTraceReaderHandlers(app_reader, kernel_tthread);
+   kernel_tthread->setAppSiftReader(app_reader);
+   /* Stage 1 (Apr 18 2026): record which app_id is "on" this TraceThread
+      when the app reader is active.  If the live app later pthread_creates
+      a new thread, handleNewThreadFunc reads this to create the new
+      TraceThread under the live app's app_id instead of the kernel's (0). */
+   kernel_tthread->setInjectedAppId(app_id);
+   /* Stage 2B.1 (Apr 18 2026): register this app reader in the pool so
+      SimContextSwitchTo(app_id << 16 | 0) can find it.  Stage 3 (Apr 18
+      2026): also stamp the kernel TraceThread with the running app_tid
+      so preemption events carry the right id even though we installed
+      the reader via the legacy inject path (not SimContextSwitchTo). */
+   auto atid = AppReaderPool::encodeId(app_id, 0);
+   m_app_reader_pool.registerReader(atid, app_reader);
+   kernel_tthread->setRunningAppTid(atid);
+   /* Do NOT swap current reader here; the kernel reader is mid-Read() when
+      this handler fires.  The existing trace-based path (createTraceBased
+      Application) follows the same convention — the run_func / SimContext
+      Switch machinery flips current from kernel → app at the right moment. */
+
+   std::cout << "[TraceManager] injectForkedApp: allocated app_id=" << app_id
+             << " tracefile=" << tracefile
+             << " (injected into tid=" << creator_thread_id << ")" << std::endl;
+
+   return app_id;
+}
+
+AppReaderPool::app_thread_id_t TraceManager::registerSpawnedAppThread(
+    app_id_t app_id, TraceThread* parent_tt)
+{
+   ScopedLock sl(m_lock);
+
+   if ((UInt32)app_id >= m_app_info.size()) {
+      std::cerr << "[TraceManager] registerSpawnedAppThread: app_id=" << app_id
+                << " out of range (have " << m_app_info.size() << " apps)" << std::endl;
+      return 0;
+   }
+
+   /* Allocate a fresh thread_num within this app (mirrors the newThread
+      thread_count logic — each app has its own monotonically increasing
+      thread counter, and the num_threads count is incremented for the
+      app-exit bookkeeping path). */
+   UInt32 thread_num = m_app_info[app_id].thread_count++;
+   m_app_info[app_id].num_threads++;
+
+   /* Stage 2D (Apr 18 2026): create the FIFO pair the child PIN thread will
+      write to.  PIN's sift_recorder opens a file with the exact same name
+      (app<app_id>.th<thread_num>.sift / _response) when threadStart fires;
+      the FIFO must exist on disk before PIN opens for write. */
+   String tracefile    = getFifoName(app_id, thread_num, false /*response*/, true /*create*/);
+   String responsefile = getFifoName(app_id, thread_num, true  /*response*/, true /*create*/);
+
+   /* Open the Reader.  Use a sensible id based on app+thread for diagnostics. */
+   Sift::Reader* reader = new Sift::Reader(tracefile.c_str(), responsefile.c_str(),
+                                           (app_id * 1000) + thread_num);
+
+   /* Bind handlers to parent_tt as a placeholder.  When the target core's
+      kernel calls SimContextSwitchTo(this_thread_id), the handler re-binds
+      them to the new TraceThread so magic/syscall records dispatch there. */
+   setTraceReaderHandlers(reader, parent_tt);
+
+   AppReaderPool::app_thread_id_t atid =
+       AppReaderPool::encodeId(app_id, thread_num);
+   m_app_reader_pool.registerReader(atid, reader);
+
+   std::cout << "[TraceManager] registerSpawnedAppThread: app_id=" << app_id
+             << " thread_num=" << thread_num
+             << " app_thread_id=0x" << std::hex << atid << std::dec
+             << " tracefile=" << tracefile << std::endl;
+
+   return atid;
 }
 
 app_id_t TraceManager::createApplication(SubsecondTime time, thread_id_t creator_thread_id)
@@ -252,39 +403,40 @@ app_id_t TraceManager::createTraceBasedApplication(SubsecondTime time, char *tra
 
    ScopedLock sl(m_lock);
 
+   std::cout << "[TraceManager] createTraceBasedApplication: trace='" << trace
+             << "' creator_tid=" << creator_thread_id << std::endl;
+
+   /* Inject trace reader into the caller's TraceThread.  In single-core mode
+      the caller is TraceThread 0 (the MimicOS main thread).  In multi-core
+      mode the caller is the kernel pthread's TraceThread (e.g. thread_id=1).
+      Either way, the TraceThread alternates between its kernel SIFT reader
+      and this app reader on fault via m_run_func_with_userpace_mimicos. */
+
    if(creator_thread_id == 0){
       std::cout << "[TraceManager] MimicOS creates trace-based application with trace file: " << trace << std::endl;
    }
 
-
-   // Create a new Sift reader for the trace file - only MimicOS (app 0) can create trace-based applications
-#ifdef DEBUG
-   std::cout <<  "[TraceManager] Create a new SIFT trace reader (App) for the trace file" <<
-                 " - only MimicOS (app_id 0, thread_id = 0)" <<
-                 " can create trace-based applications" << std::endl;
-#endif
-
    Sift::Reader *app_trace_reader = new Sift::Reader(trace, "",(m_app_info[0].num_threads+1));
-   // Get a pointer to the trace thread that called this function
 
-   // App 0 and Thread 0 are always the MimicOS thread
+   // Find the TraceThread for the caller (app_id=0, thread_id=creator_thread_id)
    TraceThread* mimicos_trace_thread = getTraceThread(0, creator_thread_id);
 
-#ifdef DEBUG
-   std::cout << "[TraceManager] mimicos_trace_thread obtained via getTraceThread - creator_thread_id = " << creator_thread_id << std::endl;
-   std::cout << "[TraceManager] Starting setHandle... instructions" << std::endl;
-#endif
+   if (mimicos_trace_thread == nullptr) {
+      std::cerr << "[TraceManager] createTraceBasedApplication: no TraceThread for (0, "
+                << creator_thread_id << ")" << std::endl;
+      delete app_trace_reader;
+      return -1;
+   }
+
    setTraceReaderHandlers(app_trace_reader, mimicos_trace_thread);
 
-#ifdef DEBUG
-   std::cout << "[TraceManager] Setting App Sift::Reader; ID = " << app_trace_reader->getId() << std::endl;
-#endif
    mimicos_trace_thread->setAppSiftReader(app_trace_reader);
+   /* Mark this as a replayable trace so the run-func can reopen the file
+      on EOF rather than exiting the TraceThread. */
+   mimicos_trace_thread->setAppTracePath(String(trace));
 
-#ifdef DEBUG
-   std::cout << "[TraceManager] setAppSiftReader in MimicOS Trace Thread to app_trace_reader = " << app_trace_reader->getFilename() << std::endl;
-   std::cout << "[TraceManager] createTraceBasedApplication returned succesfully (status code 0)" << std::endl;
-#endif
+   std::cout << "[TraceManager] createTraceBasedApplication: injected into TraceThread(0,"
+             << creator_thread_id << ")" << std::endl;
 
    return 0;
 }
@@ -344,6 +496,20 @@ void TraceManager::signalDone(TraceThread *thread, SubsecondTime time, bool abor
    }
 
    m_num_threads_running--;
+
+   /* Stop the whole simulation once every TraceThread has exited.
+      In the multi-core userspace-MimicOS setup, all threads share
+      app_id 0 (MimicOS kernel) so m_num_apps_nonfinish never reaches
+      0 via the legacy app-id accounting — instead, we key off the
+      live thread count.  This lets a live app finishing remove only
+      its own TraceThread (while a replaying trace on another core
+      keeps running) and only end simulation once no TraceThread
+      remains. */
+   if (m_num_threads_running == 0)
+   {
+      std::cout << "[TraceManager] All TraceThreads have exited — stopping simulation" << std::endl;
+      stop();
+   }
 }
 
 void TraceManager::endApplication(TraceThread *thread, SubsecondTime time)
@@ -353,6 +519,15 @@ void TraceManager::endApplication(TraceThread *thread, SubsecondTime time)
      // Abort all threads in this application, except ourselves (we should end normally soon)
      if ((*it)->getThread()->getAppId() == thread->getThread()->getAppId() && *it != thread)
      {
+       /* Stage 4 (Apr 18 2026): skip MimicOS kernel pthreads.  They all
+          register under app_id=0 so the "same app_id = same app" heuristic
+          here would falsely abort unrelated cores when any live app's
+          SYS_exit_group fires — even though each kernel pthread is an
+          independent per-core worker and should only exit when its own
+          shutdown event arrives. */
+       if ((*it)->isKernelPthread()) {
+          continue;
+       }
        // Ask thread to stop
        (*it)->stop();
        // Threads are often blocked on a futex in this case, so call signalDone in their place
@@ -395,12 +570,31 @@ void TraceManager::start()
 
 void TraceManager::stop()
 {
+   /* Stage 4 (Apr 18 2026): stop() can now be called from two paths —
+      the ROI-leave path (hooks on last-app-leaves-ROI) and our new
+      wasEverLiveAndNowZero trigger in notifyAppExitAndSwitchToKernel.
+      Guard against double-entry: stopAll() writing to already-closed
+      response pipes NULL-derefs the Reader's response stream. */
+   bool expected = false;
+   if (!m_shutdown_requested.compare_exchange_strong(expected, true,
+                                                     std::memory_order_acq_rel)) {
+      return;
+   }
+
    // End of region-of-interest when running Sniper inside Sniper
    SimRoiEnd();
 
    // Signal threads to stop.
    for (std::vector<TraceThread *>::iterator it = m_threads.begin(); it != m_threads.end(); ++it)
      (*it)->stop();
+   /* Stage 2 (Apr 18 2026): also tell every pool Reader's PIN-side Writer
+      to shut down.  Without this, an idle/descheduled live-app thread's
+      PIN process stays blocked on a magic-instruction response and hits
+      an fread short-read assertion in Sift::Writer::Magic during teardown.
+      Stopping their front-ends lets them exit cleanly.  initResponse can
+      fail if the PIN thread has already exited (the response FIFO has no
+      reader) — that is logged by Sift::Reader and handled gracefully. */
+   m_app_reader_pool.stopAll();
    // Give threads some time to end.
    sleep(1);
    
@@ -565,5 +759,5 @@ void TraceManager::setTraceReaderHandlers(Sift::Reader* reader, TraceThread* mim
    reader->setHandleEmuFunc(TraceThread::__handleEmuFunc, mimicos_trace_thread);
    reader->setHandleForkFunc(TraceThread::__handleForkFunc, mimicos_trace_thread);
    if (Sim()->getRoutineTracer())
-      reader->setHandleRoutineFunc(TraceThread::__handleRoutineChangeFunc, TraceThread::__handleRoutineAnnounceFunc, this);
+      reader->setHandleRoutineFunc(TraceThread::__handleRoutineChangeFunc, TraceThread::__handleRoutineAnnounceFunc, mimicos_trace_thread);
 }

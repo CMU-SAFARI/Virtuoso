@@ -58,6 +58,21 @@ class BarrierSyncServer : public ClockSkewMinimizationServer
       void advance();
       void setFastForward(bool fastforward, SubsecondTime next_barrier_time = SubsecondTime::MaxTime());
       SubsecondTime getGlobalTime(bool upper_bound = false) { return upper_bound ? m_next_barrier_time : m_global_time; }
+
+      /* Phase 5 (2026-04-22): external advance — bump global_time (and
+         m_next_barrier_time if needed) directly to a target, bypassing
+         the per-quantum barrierRelease cadence.  Used by the
+         SimMimicosResult handler to charge fault latency without
+         requiring real simulated instructions on the kernel pthread.
+         No-op if target <= current global_time. */
+      void advanceGlobalTime(SubsecondTime target) {
+         if (target > m_global_time) {
+            m_global_time = target;
+            if (target >= m_next_barrier_time) {
+               m_next_barrier_time = target + m_barrier_interval;
+            }
+         }
+      }
       void setBarrierInterval(SubsecondTime barrier_interval) { m_barrier_interval = barrier_interval; }
       SubsecondTime getBarrierInterval() const { return m_barrier_interval; }
 

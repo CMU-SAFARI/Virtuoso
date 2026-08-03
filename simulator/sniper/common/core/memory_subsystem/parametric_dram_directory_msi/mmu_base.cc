@@ -13,6 +13,8 @@
 #include "mimicos.h"
 #include "simulator.h"
 #include "config.hpp"
+#include "memory_management/physical_memory_allocators/utopia.h"
+#include "thread.h"
 #include "sim_log.h"
 
 #include "debug_config.h"
@@ -46,6 +48,18 @@ namespace ParametricDramDirectoryMSI
         perfect_translation_enabled = Sim()->getCfg()->getBoolDefault("perf_model/"+_name+"/perfect_translation", false);
         if (perfect_translation_enabled) {
             std::cout << "[MMU_BASE] PERFECT TRANSLATION MODE ENABLED - zero translation latency" << std::endl;
+        }
+
+        // Perfect L2 TLB mode: L1 TLBs work normally, L2 always hits (no PTW)
+        perfect_l2_tlb_enabled = Sim()->getCfg()->getBoolDefault("perf_model/"+_name+"/perfect_l2_tlb", false);
+        if (perfect_l2_tlb_enabled) {
+            std::cout << "[MMU_BASE] PERFECT L2 TLB MODE ENABLED - L1 misses always hit L2" << std::endl;
+        }
+
+        // Perfect prefetch: MMU fires an L2 prefetch for the data line on every demand translation when perfect_translation is enabled.  This compensates for the structural advantage that other cells get from aggressive data-side prefetchers, making Perfect a true diamond upper bound.
+        perfect_prefetch_enabled = Sim()->getCfg()->getBoolDefault("perf_model/"+_name+"/perfect_prefetch", false);
+        if (perfect_prefetch_enabled) {
+            std::cout << "[MMU_BASE] PERFECT PREFETCH MODE ENABLED - MMU prefetches data into L2 on every translation" << std::endl;
         }
 
         // Per-access PTW logging (runtime config option)
@@ -133,6 +147,8 @@ namespace ParametricDramDirectoryMSI
         registerStatsMetric("mmu_walker", core->getId(), "L1D_accesses_prefetch", &walker_stats.L1D_accesses_prefetch);
         registerStatsMetric("mmu_walker", core->getId(), "L2_accesses_prefetch", &walker_stats.L2_accesses_prefetch);
         registerStatsMetric("mmu_walker", core->getId(), "NUCA_accesses_prefetch", &walker_stats.NUCA_accesses_prefetch);
+        registerStatsMetric("mmu_walker", core->getId(), "beyond_l2_fetches_demand", &walker_stats.beyond_l2_fetches_demand);
+        registerStatsMetric("mmu_walker", core->getId(), "beyond_l2_fetches_prefetch", &walker_stats.beyond_l2_fetches_prefetch);
     }
 
 	MemoryManagementUnitBase::~MemoryManagementUnitBase()
@@ -245,17 +261,12 @@ namespace ParametricDramDirectoryMSI
 
 		mmu_base_log->debug("Accessing cache with address:", SimLog::hex(packet.address), "at time", t_start.getNS(), "ns");
 		HitWhere::where_t hit_where = HitWhere::UNKNOWN;
-		if(is_prefetch){
-
-			mmu_base_log->debug("Prefetching address:", SimLog::hex(packet.address), "at time", t_start.getNS(), "ns");
-			IntPtr cache_address = ((IntPtr)(packet.address)) & (~((64 - 1)));
-
-			MMUCacheInterface *l2_cache = memory_manager->getCacheCntlrAt(core->getId(), MemComponent::L2_CACHE);
-			// Use PAGE_TABLE_DATA for page table prefetch (we don't distinguish here)
-			if (l2_cache) l2_cache->handleMMUPrefetch(packet.eip, cache_address, shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD), CacheBlockInfo::block_type_t::PAGE_TABLE_DATA);
-
-		}
-		else {
+		{
+			// Both demand and prefetch PTW accesses go through the same L1D→L2→LLC
+			// cache path so that latency and hit_where are computed identically.
+			// For prefetch walks, we additionally tag the resulting L2 cache line
+			// with CacheBlockInfo::PREFETCH so that a later demand walk hitting
+			// that line increments L2.hits-prefetch.
 			hit_where = l1d_cache->handleMMUCacheAccess(
 			packet.eip,
 			packet.lock_signal,
@@ -294,8 +305,17 @@ namespace ParametricDramDirectoryMSI
 				}
 			}
 			if (hit_where == HitWhere::where_t::L1_OWN)
-				walker_stats.L1D_accesses++;				
-				
+				walker_stats.L1D_accesses++;
+
+			// For prefetch walks, tag the L2 cache line with PREFETCH so that
+			// a subsequent demand walk hitting the same line is counted as
+			// L2.hits-prefetch.  The line was just fetched via the normal
+			// L1D→L2→LLC path above, so it now resides in L2.
+			if (is_prefetch) {
+				MMUCacheInterface *l2_cache = memory_manager->getCacheCntlrAt(core->getId(), MemComponent::L2_CACHE);
+				if (l2_cache)
+					l2_cache->tagMMUPrefetch(cache_address, hit_where);
+			}
 		}
 
 		out_hit_where = hit_where;
@@ -445,9 +465,13 @@ namespace ParametricDramDirectoryMSI
 							MetadataContext::set(core->getId(), ptw_info);
 							
 							mmu_base_log->debug("Metadata context set for PTW access - address:", SimLog::hex(current_address), "level:", level, "table:", tab, "ptw_id:", current_ptw_id);
-							latency = accessCache(packet, t_now+fetch_delay[tab], false, temp_hit_where);
+							latency = accessCache(packet, t_now+fetch_delay[tab], is_prefetch, temp_hit_where);
 							
-							// Track prefetch-specific walker stats
+							// Track prefetch-specific walker stats and bandwidth
+							bool beyond_l2 = (temp_hit_where == HitWhere::where_t::NUCA_CACHE ||
+							                  temp_hit_where == HitWhere::where_t::DRAM_LOCAL ||
+							                  temp_hit_where == HitWhere::where_t::DRAM_REMOTE ||
+							                  temp_hit_where == HitWhere::where_t::DRAM);
 							if (is_prefetch) {
 								if (temp_hit_where == HitWhere::where_t::L1_OWN)
 									walker_stats.L1D_accesses_prefetch++;
@@ -457,6 +481,11 @@ namespace ParametricDramDirectoryMSI
 									walker_stats.NUCA_accesses_prefetch++;
 								else if (temp_hit_where == HitWhere::where_t::DRAM_LOCAL || temp_hit_where == HitWhere::where_t::DRAM_REMOTE || temp_hit_where == HitWhere::where_t::DRAM)
 									walker_stats.DRAM_accesses_prefetch++;
+								if (beyond_l2)
+									walker_stats.beyond_l2_fetches_prefetch++;
+							} else {
+								if (beyond_l2)
+									walker_stats.beyond_l2_fetches_demand++;
 							}
 							
 							// Clear context after access
@@ -607,11 +636,18 @@ namespace ParametricDramDirectoryMSI
 			bool is_pagefault = ptw_result.fault_happened;
 			int requested_frames = ptw_result.requested_frames;
 
-			// Read shadow PTE payload for temporal prefetching
+			// Read shadow payload for temporal prefetching.
+			// For 4KB pages: read from PTE-level shadow (keyed by 4KB VPN).
+			// For 2MB pages: read from PMD-level shadow (keyed by 2MB VPN).
 			uint64_t leaf_payload_bits = 0;
 			if (!is_pagefault) {
-				uint64_t vpn = address >> 12;
-				leaf_payload_bits = page_table->readPayloadBits(vpn);
+				if (page_size == 21) {
+					uint64_t vpn_2mb = address >> 21;
+					leaf_payload_bits = page_table->readPMDPayloadBits(vpn_2mb).toUint64();
+				} else {
+					uint64_t vpn = address >> 12;
+					leaf_payload_bits = page_table->readPayloadBits(vpn).toUint64();
+				}
 			}
 
 			auto* mimicos = Sim()->getMimicOS();
@@ -646,7 +682,7 @@ namespace ParametricDramDirectoryMSI
 			// The restarted walk will come under this else-if because the page fault will have been already satisfied
 			else if (!is_pagefault)
 			{
-				
+
 				stats.memory_accesses_before_filtering += ptw_result.accesses.size();
 
 				if (nested_mmu == nullptr)
@@ -654,7 +690,21 @@ namespace ParametricDramDirectoryMSI
 					ptw_result = filterPTWResult(address, ptw_result, page_table, count);
 				}
 				ptw_cycles = calculatePTWCycles(ptw_result, count, modeled, eip, lock, address, instruction, is_prefetch);
-			}	
+			}
+			// STEP 2 (corrected cost model): a TLB-prefetch walk that page-faulted still resolved
+			// the translation via restart_walk (the page was materialized).  Charge the real
+			// page-table-walk latency for that resolved walk, so a translation prefetch that
+			// touches an unmapped page pays for its walk instead of being free.  Demand faults
+			// are unaffected: they use restart_walk=false and are charged on replay.
+			else if (is_pagefault && is_prefetch)
+			{
+				stats.memory_accesses_before_filtering += ptw_result.accesses.size();
+				if (nested_mmu == nullptr)
+				{
+					ptw_result = filterPTWResult(address, ptw_result, page_table, count);
+				}
+				ptw_cycles = calculatePTWCycles(ptw_result, count, modeled, eip, lock, address, instruction, is_prefetch);
+			}
 			
 
 			
@@ -663,6 +713,18 @@ namespace ParametricDramDirectoryMSI
 			mmu_base_log->debug("Physical Page Number: ", ppn_result);
 			mmu_base_log->debug("Page Size: ", page_size);
 			mmu_base_log->debug("-------------- End of PTW");
+
+			// DEBUG: verify that a TLB-prefetch walk which page-faulted is charged ZERO PTW latency.
+			// Gate behind env var and cap the count so we don't flood (there can be 100k+ such faults).
+			if (is_prefetch && is_pagefault && getenv("PREFETCH_PF_DEBUG")) {
+				static UInt64 prefetch_pf_dbg_n = 0;
+				if (prefetch_pf_dbg_n++ < 100)
+					std::cout << "[PREFETCH-PF] is_prefetch=1 page_fault=1 charged_ptw_latency_fs="
+					          << ptw_cycles.getFS() << " ns=" << ptw_cycles.getNS()
+					          << " addr=0x" << std::hex << address << std::dec
+					          << " count_page_fault_latency=" << (count_page_fault_latency_enabled ? "on" : "off")
+					          << std::endl;
+			}
 
 			return PTWOutcome(ptw_cycles, is_pagefault, ppn_result, page_size, requested_frames, leaf_payload_bits);
 	}
@@ -684,6 +746,50 @@ namespace ParametricDramDirectoryMSI
 	std::pair<IntPtr, int> MemoryManagementUnitBase::translateWithoutTiming(IntPtr address, PageTable *page_table)
 	{
 		mmu_base_log->debug("Perfect translation (zero latency) for address:", SimLog::hex(address));
+
+		// If the active allocator is Utopia, RestSeg pages don't have radix
+		// page-table entries -- the radix walk would crash trying to look them up.
+		// Use Utopia's functional RestSeg lookup instead.  If the page hasn't
+		// been allocated yet, force allocation through utopia->allocate() and
+		// retry, mirroring what the normal walker would do via Utopia's
+		// exception handler.
+		auto* allocator = Sim()->getMimicOS()->getMemoryAllocator();
+		Utopia* utopia = dynamic_cast<Utopia*>(allocator);
+		if (utopia != nullptr && utopia->getNumRestSegs() > 0) {
+			int app_id = core->getThread() ? core->getThread()->getAppId() : 0;
+
+			auto try_lookup = [&]() -> std::pair<bool, std::pair<IntPtr,int>> {
+				for (int i = 0; i < utopia->getNumRestSegs(); i++) {
+					auto restseg = utopia->getRestSeg(i);
+					if (!restseg) continue;
+					if (restseg->inRestSeg(address, app_id, false /*count_stats*/)) {
+						int page_size_bits = restseg->getPageSizeBits();
+						IntPtr ppn = restseg->calculatePhysicalAddress(address, app_id);
+						IntPtr offset = address & ((IntPtr(1) << page_size_bits) - 1);
+						IntPtr physical_address = (ppn * 4096) + offset;
+						return {true, {physical_address, page_size_bits}};
+					}
+				}
+				return {false, {0, 0}};
+			};
+
+			auto first = try_lookup();
+			if (first.first) return first.second;
+
+			// Page not yet allocated in any RestSeg -- force a Utopia
+			// allocation for this VA and retry.
+			(void)utopia->allocate(/*size=*/4096, /*address=*/address,
+			                       /*core_id=*/core->getId(),
+			                       /*is_pagetable_allocation=*/false,
+			                       /*is_instruction_allocation=*/false);
+			auto second = try_lookup();
+			if (second.first) return second.second;
+
+			// Allocation didn't land in RestSeg (e.g. went to FlexSeg).
+			// Identity map as a fallback (rare in 4KB-only cfg with 8 GB RestSeg).
+			IntPtr offset = address & ((IntPtr(1) << 12) - 1);
+			return std::make_pair((address & ~((IntPtr(1) << 12) - 1)) | offset, 12);
+		}
 
 		// Perform the page table walk - this handles page faults and returns PPN
 		// We use restart_walk_after_fault=true so faults are handled automatically

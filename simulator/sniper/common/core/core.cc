@@ -550,7 +550,10 @@ Core::accessMemory(lock_signal_t lock_signal, mem_op_t mem_op_type, IntPtr d_add
       data_buffer = NULL; // initiateMemoryAccess's data is not used
    }
 
-   TraceThread *trace_thread = Sim()->getTraceManager()->getTraceThread(0,0);
+   /* Multi-core: use the TraceThread associated with THIS core's Thread,
+      not hardcoded (0,0).  A kernel pthread on core 1 has its own TraceThread
+      (app_id=0, thread_id=N), which alternates between kernel and app readers. */
+   TraceThread *trace_thread = Sim()->getTraceManager()->getTraceThread(getThread()->getAppId(), getThread()->getId());
    if (trace_thread && trace_thread->getCurrentSiftReader() == trace_thread->getAppSiftReader())
    {
       // If we are in the user thread, we perform translation

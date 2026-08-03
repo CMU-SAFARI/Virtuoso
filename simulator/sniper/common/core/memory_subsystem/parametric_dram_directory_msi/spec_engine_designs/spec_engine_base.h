@@ -67,6 +67,17 @@ namespace ParametricDramDirectoryMSI
         virtual void invokeSpecEngine(IntPtr address, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled, SubsecondTime invoke_start_time, IntPtr physical_address, bool page_table_speculation = false) = 0;
 
         /**
+         * @brief Overload that additionally receives the visited page-table entries.
+         *
+         * Default implementation ignores visited_pts and forwards to the original.
+         * Subclasses (e.g. ASAP) may override to use real PT addresses.
+         */
+        virtual void invokeSpecEngine(IntPtr address, int count, Core::lock_signal_t lock, IntPtr eip, bool modeled, SubsecondTime invoke_start_time, IntPtr physical_address, const accessedAddresses& visited_pts, bool page_table_speculation = false)
+        {
+            invokeSpecEngine(address, count, lock, eip, modeled, invoke_start_time, physical_address, page_table_speculation);
+        }
+
+        /**
          * @brief Abstract method to allocate entries in the speculative engine, typically in speculative TLB.
          *
          * This method should be implemented by subclasses to allocate an entry in the speculative structure

@@ -244,6 +244,7 @@ def build_multicore_jobfile(
     mixes: List[List[Tuple[str, str, str, str]]],
     output_root: str,
     sim_end: str = "last-restart",
+    slurm_exclude: str = None,
 ) -> List[Tuple[str, str, str, str]]:
     """
     Build a jobfile for multicore experiments.
@@ -280,7 +281,9 @@ def build_multicore_jobfile(
             # Build a short label from trace names  (e.g. "rnd+yankee_0060")
             trace_label = "+".join(sanitize_dirname(tn) for tn, _, _, _ in mix)
             if len(trace_label) > 120:
-                trace_label = trace_label[:117] + "..."
+                import hashlib
+                _h = hashlib.md5(trace_label.encode()).hexdigest()[:8]
+                trace_label = trace_label[:108] + "_" + _h  # unique suffix so long mixes don't collide
 
             for cfg_name, cfg_flags in configs:
                 safe_cfg = sanitize_dirname(cfg_name)
@@ -330,8 +333,9 @@ def build_multicore_jobfile(
                 command = " ".join(parts)
 
                 # SLURM sbatch line
+                exclude_flag = f" --exclude={slurm_exclude}" if slurm_exclude else ""
                 sbatch_cmd = (
-                    f"sbatch --exclude=kratos17"
+                    f"sbatch{exclude_flag}"
                     f" -c {host_cpus}"
                     f" -J {safe_cfg}_{ncores}core_mix{mix_idx}"
                     f" --output={os.path.join(output_directory, 'slurm.out')}"
@@ -366,6 +370,8 @@ Examples:
     parser.add_argument("--suite-dir-name", type=str, default=None, help="Override directory name for the suite")
     parser.add_argument("--force", action="store_true", help="Allow reusing an existing suite directory")
     parser.add_argument("--no-color", action="store_true", help="Disable colored output")
+    parser.add_argument("--exclude", type=str, default=None, metavar="NODELIST",
+                        help="SLURM nodes to exclude, e.g. --exclude node01,node02 (default: none).")
 
     args = parser.parse_args()
 
@@ -455,6 +461,7 @@ Examples:
             tmp_jobfile, sniper_path, instruction_count,
             ncores, topo_overrides, configs, mixes, suite_results,
             sim_end=sim_end,
+            slurm_exclude=args.exclude,
         )
 
         # Read the tmp jobfile (skip the shebang) and append
