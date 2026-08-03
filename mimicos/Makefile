@@ -1,9 +1,22 @@
 # Compiler and flags
-CC = gcc
+CC  = gcc
 CXX = g++
-CFLAGS = -Wall -Wextra -g
-CXXFLAGS = -Wall -Wextra -g
-LDFLAGS =
+# Optimisation level.  Apr 19 2026: was unset (= -O0), which meant every
+# `static inline` helper in include/mm/linux_phase_work.h (the hot fault
+# path) was emitted as a real call with stack-frame setup — Sniper then
+# simulates the extra x86 instructions, inflating per-fault wall time by
+# 2-4×.  Default to -O2 -DNDEBUG; override with OPT_LEVEL=-O0 for
+# debug-friendly builds.
+OPT_LEVEL ?= -O2 -DNDEBUG
+# MIMICOS_CALIBRATION_O0 gates the #pragma GCC optimize("O0") in
+# buddy.h / linux_buddy_anon.h so those allocator files stay at -O0
+# when MimicOS includes them — preserving the simulated-cycle cost we
+# calibrated against Linux (phys_alloc mean ~2 300 cyc) — while Sniper's
+# sniperspace build of the same files keeps its default -O3.
+OPT_FLAGS = $(OPT_LEVEL) -DMIMICOS_CALIBRATION_O0
+CFLAGS    = -Wall -Wextra -g $(OPT_FLAGS)
+CXXFLAGS  = -Wall -Wextra -g $(OPT_FLAGS)
+LDFLAGS   =
 
 # Directories
 SRC_DIR = ./src
@@ -66,7 +79,7 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cc | $(OBJ_DIR)
 
 # Link main binary (will include build/obj/virtuos/virtuos.o automatically)
 $(MAIN_BINARY): $(OBJ_FILES) startup_mimicos.cc | $(BUILD_DIR)
-	$(CXX) $(INCLUDE_DIR) $^ -o $@ -lrt
+	$(CXX) $(INCLUDE_DIR) $(CXXFLAGS) $^ -o $@ -lrt
 
 # Clean build artifacts
 clean:

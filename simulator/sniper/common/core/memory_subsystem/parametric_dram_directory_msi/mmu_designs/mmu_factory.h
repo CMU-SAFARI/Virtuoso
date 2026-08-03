@@ -11,6 +11,7 @@
 #include "mmu_spec.h"
 #include "mmu_utopia.h"
 #include "mmu_utopia_coalesce.h"
+#include "mmu_victima.h"
 #include "config.hpp"
 
 
@@ -57,6 +58,10 @@ namespace ParametricDramDirectoryMSI
 			else if (type == "utopia_coalesce")	// Utopia with coalesced 2MB radix walk
 			{
 				return new MemoryManagementUnitUtopiaCoalesce(core, memory_manager, shmem_perf_model, name, nested_mmu);
+			}
+			else if (type == "victima")	// Victima MMU design (Kanellopoulos et al. MICRO 2023)
+			{
+				return new MemoryManagementUnitVictima(core, memory_manager, shmem_perf_model, name, nested_mmu);
 			}
 			else
 			{

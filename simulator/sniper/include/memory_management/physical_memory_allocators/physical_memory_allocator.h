@@ -98,6 +98,21 @@ public:
     virtual UInt32 getNumaNodeForPPN(UInt64 ppn) const { return 0; }
 
     /**
+     * Phase 8: last-call allocator fast-path result, reported by
+     * allocators that distinguish a per-CPU-pool hit from a slow-path
+     * refill.  Populated by allocate() before return.  Values:
+     *   0 = slow path (buddy refill / zone lock)
+     *   1 = fast path (pcp / percpu pool hit)
+     *   2 = unknown / allocator doesn't distinguish
+     * Consumed by MimicOS's build_fingerprint so TRAINED profiles can
+     * split on the hit/miss regime and learn separate mean_cycles per
+     * class.  Stored as a plain field (not thread_local) because under
+     * the userspace MimicOS model the kernel pthread is single-threaded
+     * wrt. fault dispatch — each fault reads-then-reacts before the
+     * next starts.  Default = 2 for allocators that don't set it. */
+    uint8_t last_alloc_fastpath = 2;
+
+    /**
      * @brief Dump any final statistics before simulation ends
      * 
      * Called from MimicOS destructor to ensure allocator stats are written

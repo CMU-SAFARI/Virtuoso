@@ -38,10 +38,10 @@
 
 //     std::vector<UInt64> frames;
 
-//     if(allocator->getName() == "hash_based" || allocator->getName() == "hash_based_open" || allocator->getName() == "hash_based_thp")
+//     if(allocator->getName() == "revelator" || allocator->getName() == "revelator_open" || allocator->getName() == "revelator_thp")
 //     {
-//         // Cast allocator to hash-based allocator
-//         // We are using hash-based allocator, so we need to allocate page table frames
+//         // Cast allocator to revelator allocator
+//         // We are using revelator, so we need to allocate page table frames
 //         for (int i = 0; i < page_table_frames; i++)
 //         {
 //             auto result = allocator->allocate(4096, address, core_id, true);
@@ -60,12 +60,12 @@
 //             frames.push_back(frame);
 //         }
 
-//         //Reverse the frames if we are using hash-based allocator
-//         // This is because the hash-based allocator allocates the frames in reverse order
+//         //Reverse the frames if we are using revelator
+//         // This is because revelator allocates the frames in reverse order
 //         std::reverse(frames.begin(), frames.end());
 
 //         #ifdef DEBUG
-//             log_file << "[PF_HANDLER] Allocated page table frames using hash-based allocator: " << page_table_frames << std::endl;
+//             log_file << "[PF_HANDLER] Allocated page table frames using revelator: " << page_table_frames << std::endl;
 //         #endif
 
 //     }
@@ -157,7 +157,7 @@
 //         log_file << "[PF_HANDLER] Page table frames used: " << frames_used << std::endl;
 //     #endif
 
-//     if(allocator->getName() == "hash_based" || allocator->getName() == "hash_based_open" || allocator->getName() == "hash_based_thp")
+//     if(allocator->getName() == "revelator" || allocator->getName() == "revelator_open" || allocator->getName() == "revelator_thp")
 //     {
 // #ifdef DEBUG
 //         log_file << "[PF_HANDLER] Deallocating page table frames: " << page_table_frames << std::endl;
@@ -167,7 +167,7 @@
 // #ifdef DEBUG
 //             log_file << "[PF_HANDLER] Deallocating page table frame: " << frames[i] << std::endl;
 // #endif
-//             //upcast allocator to hash-based allocator
+//             //upcast allocator to revelator allocator
 //              allocator->deallocate(frames[i], core_id);
 //         }
 //     }

@@ -140,6 +140,7 @@ VOID emulateSyscallFunc(THREADID threadid, CONTEXT *ctxt)
                tidptrs.push_back(tidptr);
                PIN_ReleaseLock(&new_threadid_lock);
                /* New thread */
+               std::cerr << "[SIFT_RECORDER] SYS_clone CLONE_THREAD from thread " << threadid << " -> NewThread()" << std::endl;
                thread_data[threadid].output->NewThread();
             }
             else

@@ -177,6 +177,15 @@ namespace ParametricDramDirectoryMSI
 		void updatePageMetrics(IntPtr virtual_address, SubsecondTime translation_latency, bool performed_ptw, SubsecondTime translation_start_time, UInt64 translation_index, SubsecondTime walk_latency, SubsecondTime tlb_hit_latency, SubsecondTime tlb_miss_latency);
 		void dumpPerPageLogs();
 		void initializePerPageLogs();
+
+	private:
+		bool m_per_page_logs_dumped = false;
+		static SInt64 hook_pre_stat_write(UInt64 user, UInt64 args)
+		{
+			((MemoryManagementUnit*)user)->dumpPerPageLogs();
+			return 0;
+		}
+
 	};
 
 }

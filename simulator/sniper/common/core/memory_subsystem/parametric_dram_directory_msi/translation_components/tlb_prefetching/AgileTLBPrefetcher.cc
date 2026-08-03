@@ -115,7 +115,8 @@ AgileTLBPrefetcher::AgileTLBPrefetcher(
 	uint32_t enable_pref_bits, uint32_t select1_bits,
 	uint32_t select2_bits,
 	uint32_t masp_entries, uint32_t masp_assoc,
-	uint32_t page_shift)
+	uint32_t page_shift,
+	uint32_t masp_lookahead, uint32_t masp_degree)
 	: TLBPrefetcherBase(_core, _memory_manager, _shmem_perf_model, name)
 	, m_sampler_size(sampler_size)
 	, m_fpq_size(fpq_size)
@@ -147,6 +148,8 @@ AgileTLBPrefetcher::AgileTLBPrefetcher(
 	, m_masp_sets(masp_entries / masp_assoc)
 	, m_masp_assoc(masp_assoc)
 	, m_masp_rr_ptr(masp_entries / masp_assoc, 0)
+	, m_masp_lookahead(masp_lookahead == 0 ? 1 : masp_lookahead)
+	, m_masp_degree(masp_degree == 0 ? 1 : masp_degree)
 	, m_current_instruction(false)
 {
 	(void)pq_size; // pq_size is no longer used; the TLB subsystem owns the PQ
@@ -434,11 +437,16 @@ std::vector<uint64_t> AgileTLBPrefetcher::predictMASP(uint64_t vpn, uint64_t eip
 		const MASPEntry &e = m_masp_table[base + w];
 		if (e.valid && e.pc_tag == eip)
 		{
-			// predict A + S
+			// predict A + (lookahead + i) * S, for i in [0, degree)
+			// (matches the baseline ASP lookahead/degree stride fan-out)
 			if (e.stride_valid && e.stride != 0)
 			{
-				int64_t p = static_cast<int64_t>(vpn) + e.stride;
-				if (p > 0) preds.push_back(static_cast<uint64_t>(p));
+				for (uint32_t i = 0; i < m_masp_degree; i++)
+				{
+					int64_t off = static_cast<int64_t>(m_masp_lookahead + i) * e.stride;
+					int64_t p = static_cast<int64_t>(vpn) + off;
+					if (p > 0) preds.push_back(static_cast<uint64_t>(p));
+				}
 			}
 			// predict A + d(A, E)
 			int64_t d = static_cast<int64_t>(vpn) - static_cast<int64_t>(e.last_miss_vpn);
@@ -752,7 +760,7 @@ AgileTLBPrefetcher::ATPChild AgileTLBPrefetcher::chooseATPChild() const
 std::vector<query_entry> AgileTLBPrefetcher::performPrefetch(
 	IntPtr address, IntPtr eip, Core::lock_signal_t lock,
 	bool modeled, bool count, PageTable *pt,
-	bool instruction, bool tlb_hit, bool pq_hit)
+	bool instruction, bool tlb_hit, bool pq_hit, int page_size)
 {
 	std::vector<query_entry> result;
 

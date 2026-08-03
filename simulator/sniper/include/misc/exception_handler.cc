@@ -32,7 +32,7 @@
 //         log_file << "[EXCEPTION_HANDLER] Frames used: " << frames_used << std::endl;
 // #endif
 
-//     // TODO @vlnitu: migrate deallocation allocators as well
+//     // TODO @vlnitu: migrate deallocation allocators as well (i.e., reveleator, revelator_open, etc.)
 //     int frames_requested = frames_already_allocated_by_virtuos.size();
 // #if DEBUG_EXCEPTION_HANDLER >= DEBUG_DETAILED
 //     log_file << "[EXCEPTION_HANDLER] Frames requested: " <<  frames_requested << std::endl;

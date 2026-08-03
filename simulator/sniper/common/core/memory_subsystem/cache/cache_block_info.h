@@ -12,6 +12,7 @@ public:
 	{
 		PREFETCH,
 		WARMUP,
+		PREFETCH_FROM_DRAM,   // Set alongside PREFETCH when the fill came from DRAM (vs NUCA/LLC)
 		NUM_OPTIONS
 	};
 
@@ -23,6 +24,7 @@ public:
 		UTOPIA_TAR,          // Utopia Tag Array metadata
 		UTOPIA_RADIX_INTERNAL, // Utopia RadixWay internal node (pointer array)
 		UTOPIA_RADIX_LEAF,     // Utopia RadixWay leaf node (valid+way bitmap)
+		VICTIMA_TLB_BLOCK,   // Victima: leaf PTE cache line acting as a TLB block (8 PTEs/64B)
 		INSTRUCTION,         // Instruction fetches
 		DATA,                // Regular data accesses
 		NUM_BLOCK_TYPES
@@ -30,12 +32,13 @@ public:
 
 	// Helper function to check if a block type is metadata (any translation-related block)
 	static inline bool isMetadataBlockType(block_type_t block_type) {
-		return (block_type == PAGE_TABLE_DATA || 
+		return (block_type == PAGE_TABLE_DATA ||
 		        block_type == PAGE_TABLE_INSTRUCTION ||
-		        block_type == UTOPIA_FP || 
+		        block_type == UTOPIA_FP ||
 		        block_type == UTOPIA_TAR ||
 		        block_type == UTOPIA_RADIX_INTERNAL ||
-		        block_type == UTOPIA_RADIX_LEAF);
+		        block_type == UTOPIA_RADIX_LEAF ||
+		        block_type == VICTIMA_TLB_BLOCK);
 	}
 	
 	// For backward compatibility - PAGE_TABLE is an alias for PAGE_TABLE_DATA
@@ -49,13 +52,14 @@ private:
 
 	// @kanellok for TLB: added ppn to store the physical page number
 	IntPtr ppn;
-	bool m_tlb_entry;	  // @kanellok for caches that store TLB entries: flag to indicate if this is a TLB entry
+	bool m_tlb_entry;	  // @kanellok for caches that store TLB entries: flag to indicate if this is a TLB entry: this was used only in [Kanellopoulos et al. Victima MICRO 2023]
 	int m_page_size;	  //@kanellok for TLBs: hold page size for each cache block
 
 	IntPtr m_tag;
 	CacheState::cstate_t m_cstate;
 	UInt64 m_owner;
 	BitsUsedType m_used;
+	BitsUsedType m_prefetch_pending; // per-8B-element: sub-regions of an MMU-prefetched line not yet demand-credited
 	UInt8 m_options; // large enough to hold a bitfield for all available option_t's
 	block_type_t m_block_type;
 	int m_reuse; //@kanellok tracking reuse
@@ -107,6 +111,13 @@ public:
 	BitsUsedType getUsage() const { return m_used; };
 	bool updateUsage(UInt32 offset, UInt32 size);
 	bool updateUsage(BitsUsedType used);
+
+	// MMU sub-line prefetch tracking: a 64B prefetched PTE line exposes up to 8
+	// PTEs "for free". markPrefetchedLine() marks all 8-byte sub-regions as
+	// pending-credit; consumePrefetch(offset,size) credits + clears the
+	// sub-region(s) the first time a demand consumes them (true iff any pending).
+	void markPrefetchedLine() { m_prefetch_pending = (BitsUsedType)~0; }
+	bool consumePrefetch(UInt32 offset, UInt32 size);
 
 	static const char *getOptionName(option_t option);
 

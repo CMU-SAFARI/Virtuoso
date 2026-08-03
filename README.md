@@ -11,8 +11,29 @@ Virtuoso integrates with diverse architectural simulators, each specializing in 
 
 > Konstantinos Kanellopoulos, Konstantinos Sgouras, F. Nisa Bostanci, Andreas Kosmas Kakolyris, Berkin Kerim Konar, Rahul Bera, Mohammad Sadrosadati, Rakesh Kumar, Nandita Vijaykumar, and Onur Mutlu, "Virtuoso: Enabling Fast and Accurate Virtual Memory Research via an Imitation-based Operating System Simulation Methodology," **ASPLOS 2025**. [[Paper]](https://arxiv.org/pdf/2403.04635v2)
 
+---
+
+## 🔬 Revelator — Hash-Based Speculative Address Translation (ISCA '26)
+
+**This is the `revelator-artifact-release` branch.** It ships Revelator: a
+hash-based physical memory allocator in MimicOS plus a matching speculative
+translation engine in the MMU, so a physical frame can be guessed straight from
+the virtual address and validated against the parallel page walk.
+
+Start at **[`docs/revelator.md`](docs/revelator.md)** — it maps every engine,
+allocator, exception handler, config, and knob, and shows how to run the
+single-core configs and the multicore suites.
+
+> Also on this branch: the TRAIL TLB prefetcher and its artifact-evaluation
+> harness under [`experiments/ae/`](experiments/ae/README.md), kept because
+> Revelator shares its MimicOS and memory-management infrastructure. TRAIL's own
+> release is the `trail-artifact-release` branch.
+
+---
+
 ## Table of Contents
 
+- [Revelator](docs/revelator.md)
 - [Key Features](#key-features)
 - [Repository Structure](#repository-structure)
 - [Prerequisites](#prerequisites)
@@ -42,6 +63,8 @@ MimicOS is a lightweight userspace kernel that imitates the OS memory management
 | **EagerPaging** | Contiguous physical range allocation for entire VMAs, used by RMM ([Karakostas et al., ISCA '15](https://dl.acm.org/doi/10.1145/2872887.2749471)) |
 | **NUMA ReserveTHP** | Multi-node reservation-based THP with per-node capacity and placement policies |
 | **Buddy** | Power-of-two buddy system allocator (shared foundation for all allocators) |
+| **Revelator** | Hash-based placement so a frame is derivable from the virtual address (Kanellopoulos et al., ISCA '26) — see [docs/revelator.md](docs/revelator.md) |
+| **Revelator THP / Simple / NUMA** | Huge-page-aware, minimal, and multi-node variants of the Revelator allocator |
 
 ### Page Table Formats
 | Page Table | Description |
@@ -77,6 +100,7 @@ MimicOS is a lightweight userspace kernel that imitates the OS memory management
 ### Speculative Translation Engines
 | Engine | Description |
 |--------|-------------|
+| **Revelator** | Hash-based speculative address translation, co-designed with a hash-based allocator (Kanellopoulos et al., ISCA '26) — see [docs/revelator.md](docs/revelator.md). Variants: base, open-addressing, THP-aware, NUMA |
 | **SpOT** | Offset-based speculation exploiting physical contiguity ([Alverti et al., ISCA '20](https://chloe-alverti.github.io/publications/isca2020-contiguity/)) |
 | **Oracle** | Perfect speculation for upper-bound analysis |
 | **SpecTLB** | Speculative address translation mechanism ([Barr et al., ISCA '11](https://dl.acm.org/doi/10.1145/2024723.2000101)) |
@@ -429,6 +453,7 @@ Run smoke tests individually by category:
 ## Website and Documentation
 
 - **Website**: [https://cmu-safari.github.io/Virtuoso](https://cmu-safari.github.io/Virtuoso) -tutorials, documentation, and API reference
+- **Revelator**: [docs/revelator.md](docs/revelator.md) -components, configs, knobs, and how to run
 - **Experiment workflow**: [experiments/README.md](experiments/README.md) -detailed experiment framework documentation
 - **Ramulator2 integration**: [docs/ramulator2_mimicos.md](docs/ramulator2_mimicos.md)
 

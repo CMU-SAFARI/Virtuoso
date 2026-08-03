@@ -47,7 +47,18 @@ namespace ParametricDramDirectoryMSI
 		// Override in prefetchers that need victim info (e.g., recency stack).
 		virtual void notifyVictim(IntPtr /*victim_address*/, int /*page_size*/, IntPtr /*ppn*/) {}
 
+		// Called when a prefetch-queue entry is materialized into the TLB
+		// (i.e., the prefetched translation has been installed).
+		// Override in prefetchers that track in-flight prefetches.
+		virtual void notifyInstall(IntPtr /*address*/, int /*page_size*/) {}
+
 		virtual query_entry PTWTransparent(IntPtr address, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count, PageTable *pt);
-		virtual std::vector<query_entry> performPrefetch(IntPtr address, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count, PageTable *pt, bool instruction = false, bool tlb_hit = false, bool pq_hit = false) = 0;
+		virtual std::vector<query_entry> performPrefetch(IntPtr address, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count, PageTable *pt, bool instruction = false, bool tlb_hit = false, bool pq_hit = false, int page_size = 12) = 0;
+
+		// Called by the MMU AFTER the demand page-table walk completes, so any
+		// PTE cacheline a prefetcher updated this access is now resident.
+		// Prefetchers that model in-PTE payload writes (TRAIL) override this to
+		// mark the updated PTE line(s) dirty -> realistic writeback traffic.
+		virtual void flushPendingPayloadWritebacks(PageTable * /*pt*/) {}
 	};
 }

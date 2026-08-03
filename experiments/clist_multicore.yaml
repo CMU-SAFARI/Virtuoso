@@ -1,0 +1,1323 @@
+# Virtuoso Multicore Experiment Configuration
+# =============================================
+# Each experiment suite specifies a topology (ncores + network overrides),
+# a trace_suite whose tlist has exactly ncores entries, and configs.
+#
+# The create_multicore_experiments.py script builds Sniper commands with:
+#   -n <ncores>
+#   --traces=t0,t1,...,tN-1     (comma-separated, one per core)
+#   -s stop-by-icount-percore:<instruction_count>
+#   --sim-end=last-restart
+#   scheduler/type=static
+#   general/num_host_cores=<ncores>     (barrier release rate)
+#   SLURM -c <2*ncores+2>               (N sim + N trace + main + monitor)
+
+# ============================================================
+# Trace Suites
+# ============================================================
+# Each trace suite points to a tlist with exactly ncores entries.
+# Homogeneous: same trace replicated per core.
+# Heterogeneous: distinct traces per core.
+
+trace_suite:
+  # --- Homogeneous (rnd on all cores) ---
+  homo_2core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_homo_2core.tlist
+
+  homo_4core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_homo_4core.tlist
+
+  homo_8core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_homo_8core.tlist
+
+  homo_16core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_homo_16core.tlist
+
+  # --- Heterogeneous (distinct traces per core) ---
+  hetero_2core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_hetero_2core.tlist
+
+  hetero_4core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_hetero_4core.tlist
+
+  hetero_8core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_hetero_8core.tlist
+
+  hetero_16core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_hetero_16core.tlist
+
+  # --- Top 250 traces: google + victima (no gen/dlrm/sssp/gc), 2 mixes each ---
+  top250_2core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_top250_2core.tlist
+
+  top250_4core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_top250_4core.tlist
+
+  top250_8core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_top250_8core.tlist
+
+  top250_16core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_top250_16core.tlist
+
+  # --- Top 250 Google-only + rnd.sift (no victima graph traces) ---
+  top250_google_2core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_top250_google_2core.tlist
+
+  top250_google_4core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_top250_google_4core.tlist
+
+  top250_google_8core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_top250_google_8core.tlist
+
+  top250_google_16core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - multicore_top250_google_16core.tlist
+
+  # --- Parametric multicore mixes (6 mixes, rnd.sift core 0 + Google) ---
+  parametric_2core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - parametric_2core.tlist
+
+  parametric_4core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - parametric_4core.tlist
+
+  parametric_8core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - parametric_8core.tlist
+
+  parametric_16core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - parametric_16core.tlist
+
+  # --- Prefetcher comparison: 15 mixes from top-20 Trail (best) traces ---
+  prefetcher_top20_4core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - prefetcher_top20_4core.tlist
+
+  # --- v4-substrate DIVERSE mixes (16): CVP-int/fp + SPEC + Google + graph,
+  #     anchored on strong single-core TRAIL gainers (3.3-6%+ band) ---
+  prefetcher_v4_diverse_4core:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - prefetcher_v4_diverse_4core.tlist
+
+  # 60 additional mixes from the same 30-trace gainer pool (distinct from the original 40)
+  prefetcher_v4_diverse_4core_x60:
+    tracelist_base_path: "vm_tlist/"
+    tracelists:
+      - prefetcher_v4_diverse_4core_x60.tlist
+
+# ============================================================
+# Topologies
+# ============================================================
+# Each topology defines ncores and Sniper -g overrides for
+# total_cores, network model, scheduler, and host cores.
+
+topologies:
+  2core:
+    ncores: 2
+    description: "2-core, emesh_hop_counter"
+    overrides:
+      - "--general/total_cores=2"
+      - "--network/memory_model_1=emesh_hop_counter"
+
+  4core:
+    ncores: 4
+    description: "4-core, emesh_hop_counter, 2x2 mesh"
+    overrides:
+      - "--general/total_cores=4"
+      - "--network/memory_model_1=emesh_hop_counter"
+
+  8core:
+    ncores: 8
+    description: "8-core, emesh_hop_counter, 2x4 mesh"
+    overrides:
+      - "--general/total_cores=8"
+      - "--network/memory_model_1=emesh_hop_counter"
+
+  16core:
+    ncores: 16
+    description: "16-core, emesh_hop_counter, 4x4 mesh"
+    overrides:
+      - "--general/total_cores=16"
+      - "--network/memory_model_1=emesh_hop_counter"
+
+# ============================================================
+# Configs
+# ============================================================
+configs:
+  configs_base_path: "../simulator/sniper/config/address_translation_schemes/"
+
+  reservethp-full-fragmentation:
+    name: "reservethp-frag0.0"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Reservation-based THP allocator with full fragmentation (baseline)"
+
+  reservethp-no-fragmentation:
+    name: "reservethp-frag1.0"
+    file: "reservethp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+    description: "Reservation-based THP allocator with no fragmentation"
+
+  # --- Fast Detailed configs (simplified tag-only caches, no coherence) ---
+  # Each core count has a full-fragmentation and no-fragmentation variant.
+
+  fast-detailed-2c-full-frag:
+    name: "fd-2c-frag0.0"
+    file: "multicore/fast_detailed_baseline_2c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Fast detailed 2-core, 8MB L3, full fragmentation"
+
+  fast-detailed-2c-no-frag:
+    name: "fd-2c-frag1.0"
+    file: "multicore/fast_detailed_baseline_2c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+    description: "Fast detailed 2-core, 8MB L3, no fragmentation"
+
+  fast-detailed-4c-full-frag:
+    name: "fd-4c-frag0.0"
+    file: "multicore/fast_detailed_baseline_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Fast detailed 4-core, 16MB L3, full fragmentation"
+
+  fast-detailed-4c-no-frag:
+    name: "fd-4c-frag1.0"
+    file: "multicore/fast_detailed_baseline_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+    description: "Fast detailed 4-core, 16MB L3, no fragmentation"
+
+  fast-detailed-8c-full-frag:
+    name: "fd-8c-frag0.0"
+    file: "multicore/fast_detailed_baseline_8c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Fast detailed 8-core, 32MB L3, full fragmentation"
+
+  fast-detailed-8c-no-frag:
+    name: "fd-8c-frag1.0"
+    file: "multicore/fast_detailed_baseline_8c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+    description: "Fast detailed 8-core, 32MB L3, no fragmentation"
+
+  fast-detailed-16c-full-frag:
+    name: "fd-16c-frag0.0"
+    file: "multicore/fast_detailed_baseline_16c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Fast detailed 16-core, 64MB L3, full fragmentation"
+
+  fast-detailed-16c-no-frag:
+    name: "fd-16c-frag1.0"
+    file: "multicore/fast_detailed_baseline_16c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=1.0"
+    description: "Fast detailed 16-core, 64MB L3, no fragmentation"
+
+  # --- Fast Detailed frag=0.005 configs ---
+  fast-detailed-2c-frag0.005:
+    name: "fd-2c-frag0.005"
+    file: "multicore/fast_detailed_baseline_2c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.005"
+    description: "Fast detailed 2-core, 8MB L3, frag 0.005"
+
+  fast-detailed-4c-frag0.005:
+    name: "fd-4c-frag0.005"
+    file: "multicore/fast_detailed_baseline_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.005"
+    description: "Fast detailed 4-core, 16MB L3, frag 0.005"
+
+  fast-detailed-8c-frag0.005:
+    name: "fd-8c-frag0.005"
+    file: "multicore/fast_detailed_baseline_8c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.005"
+    description: "Fast detailed 8-core, 32MB L3, frag 0.005"
+
+  fast-detailed-16c-frag0.005:
+    name: "fd-16c-frag0.005"
+    file: "multicore/fast_detailed_baseline_16c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.005"
+    description: "Fast detailed 16-core, 64MB L3, frag 0.005"
+
+  # --- Revelator 4KB-only configs (fast_detailed caching protocol) ---
+
+  revelator-4kb-2c:
+    name: "rev4kb-2c"
+    file: "multicore/fast_detailed_revelator_4kb_2c.cfg"
+    extends:
+      - "--clock_skew_minimization/barrier/quantum=1000000000000"
+    description: "Revelator 4KB-only, 2-core, 8MB L3"
+
+  revelator-4kb-4c:
+    name: "rev4kb-4c"
+    file: "multicore/fast_detailed_revelator_4kb_4c.cfg"
+    extends:
+      - "--clock_skew_minimization/barrier/quantum=1000000000000"
+    description: "Revelator 4KB-only, 4-core, 16MB L3"
+
+  revelator-4kb-8c:
+    name: "rev4kb-8c"
+    file: "multicore/fast_detailed_revelator_4kb_8c.cfg"
+    extends:
+      - "--clock_skew_minimization/barrier/quantum=1000000000000"
+    description: "Revelator 4KB-only, 8-core, 32MB L3"
+
+  revelator-4kb-16c:
+    name: "rev4kb-16c"
+    file: "multicore/fast_detailed_revelator_4kb_16c.cfg"
+    extends:
+      - "--clock_skew_minimization/barrier/quantum=1000000000000"
+    description: "Revelator 4KB-only, 16-core, 64MB L3"
+
+  # --- ReserveTHP Fragmentation Sweep (2x memory for multicore) ---
+  fd-fragsweep-2c:
+    name: "fd-2c-fragsweep"
+    file: "multicore/fast_detailed_baseline_2c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/memory_size=262144"
+      - "--perf_model/reserve_thp/kernel_size=65536"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/reserve_thp/target_fragmentation="
+        values: [0.005, 0.006, 0.007, 0.008, 0.009, 0.01]
+    description: "2-core ReserveTHP frag sweep, 256GB mem"
+
+  fd-fragsweep-4c:
+    name: "fd-4c-fragsweep"
+    file: "multicore/fast_detailed_baseline_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/memory_size=262144"
+      - "--perf_model/reserve_thp/kernel_size=65536"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/reserve_thp/target_fragmentation="
+        values: [0.005, 0.006, 0.007, 0.008, 0.009, 0.01]
+    description: "4-core ReserveTHP frag sweep, 256GB mem"
+
+  fd-fragsweep-8c:
+    name: "fd-8c-fragsweep"
+    file: "multicore/fast_detailed_baseline_8c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/memory_size=262144"
+      - "--perf_model/reserve_thp/kernel_size=65536"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/reserve_thp/target_fragmentation="
+        values: [0.005, 0.006, 0.007, 0.008, 0.009, 0.01]
+    description: "8-core ReserveTHP frag sweep, 256GB mem"
+
+  # --- Revelator Utilization Sweep (2x memory for multicore) ---
+  # target_fragmentation: 1.0 = 0% utilized, 0.0 = 100% utilized
+  rev-utilsweep-2c:
+    name: "rev4kb-2c-util"
+    file: "multicore/fast_detailed_revelator_4kb_2c.cfg"
+    extends:
+      - "--perf_model/revelator/memory_size=262144"
+      - "--perf_model/revelator/kernel_size=65536"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/revelator/target_fragmentation="
+        values: [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
+    description: "2-core Revelator utilization sweep, 256GB mem"
+
+  rev-utilsweep-4c:
+    name: "rev4kb-4c-util"
+    file: "multicore/fast_detailed_revelator_4kb_4c.cfg"
+    extends:
+      - "--perf_model/revelator/memory_size=262144"
+      - "--perf_model/revelator/kernel_size=65536"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/revelator/target_fragmentation="
+        values: [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
+    description: "4-core Revelator utilization sweep, 256GB mem"
+
+  rev-utilsweep-8c:
+    name: "rev4kb-8c-util"
+    file: "multicore/fast_detailed_revelator_4kb_8c.cfg"
+    extends:
+      - "--perf_model/revelator/memory_size=262144"
+      - "--perf_model/revelator/kernel_size=65536"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/revelator/target_fragmentation="
+        values: [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
+    description: "8-core Revelator utilization sweep, 256GB mem"
+
+  # --- Parametric baseline configs (parametric_dram_directory_msi, no fast_detailed) ---
+  param-bl-2c:
+    name: "param-bl-2c"
+    file: "multicore/parametric_baseline_2c.cfg"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/reserve_thp/target_fragmentation="
+        values: [0.0, 0.005, 0.1]
+    description: "Parametric baseline 2-core, frag sweep"
+
+  param-bl-4c:
+    name: "param-bl-4c"
+    file: "multicore/parametric_baseline_4c.cfg"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/reserve_thp/target_fragmentation="
+        values: [0.0, 0.005, 0.1]
+    description: "Parametric baseline 4-core, frag sweep"
+
+  param-bl-8c:
+    name: "param-bl-8c"
+    file: "multicore/parametric_baseline_8c.cfg"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/reserve_thp/target_fragmentation="
+        values: [0.0, 0.005, 0.1]
+    description: "Parametric baseline 8-core, frag sweep"
+
+  param-bl-16c:
+    name: "param-bl-16c"
+    file: "multicore/parametric_baseline_16c.cfg"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/reserve_thp/target_fragmentation="
+        values: [0.0, 0.005, 0.1]
+    description: "Parametric baseline 16-core, frag sweep"
+
+  # --- Parametric revelator configs (parametric_dram_directory_msi, no fast_detailed) ---
+  param-rev-2c:
+    name: "param-rev-2c"
+    file: "multicore/parametric_revelator_4kb_2c.cfg"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/revelator/target_fragmentation="
+        values: [1.0, 0.8, 0.6]
+    description: "Parametric revelator 2-core, frag sweep"
+
+  param-rev-4c:
+    name: "param-rev-4c"
+    file: "multicore/parametric_revelator_4kb_4c.cfg"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/revelator/target_fragmentation="
+        values: [1.0, 0.8, 0.6]
+    description: "Parametric revelator 4-core, frag sweep"
+
+  param-rev-8c:
+    name: "param-rev-8c"
+    file: "multicore/parametric_revelator_4kb_8c.cfg"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/revelator/target_fragmentation="
+        values: [1.0, 0.8, 0.6]
+    description: "Parametric revelator 8-core, frag sweep"
+
+  param-rev-16c:
+    name: "param-rev-16c"
+    file: "multicore/parametric_revelator_4kb_16c.cfg"
+    sweeps:
+      - identifier: "frag"
+        option: "--perf_model/revelator/target_fragmentation="
+        values: [1.0, 0.8, 0.6]
+    description: "Parametric revelator 16-core, frag sweep"
+
+  # --- Prefetcher Comparison 4-core configs (parametric caching protocol) ---
+
+  param-4c-no-prefetch:
+    name: "param-4c-nopf"
+    file: "multicore/parametric_baseline_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Parametric 4-core, no TLB prefetching, frag=0.0"
+
+  param-4c-asp:
+    name: "param-4c-asp"
+    file: "multicore/parametric_asp_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Parametric 4-core, ASP (PC-Stride) TLB prefetcher, frag=0.0"
+
+  param-4c-dp:
+    name: "param-4c-dp"
+    file: "multicore/parametric_distance_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Parametric 4-core, Distance TLB prefetcher, frag=0.0"
+
+  param-4c-dp-asp:
+    name: "param-4c-dp-asp"
+    file: "multicore/parametric_asp_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/number_of_prefetchers=2"
+      - "--perf_model/mmu/tlb_prefetch/pq1/prefetcher_list=dp,asp"
+    description: "Parametric 4-core, Distance + ASP combo, frag=0.0"
+
+  param-4c-recency:
+    name: "param-4c-recency"
+    file: "multicore/parametric_recency_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Parametric 4-core, Recency TLB prefetcher, frag=0.0"
+
+  param-4c-berti:
+    name: "param-4c-berti"
+    file: "multicore/parametric_asp_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/prefetcher_list=berti"
+    description: "Parametric 4-core, Berti TLB prefetcher, frag=0.0"
+
+  param-4c-atp:
+    name: "param-4c-atp"
+    file: "multicore/parametric_atp_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+    description: "Parametric 4-core, ATP TLB prefetcher, frag=0.0"
+
+  param-4c-l2tlb-32k:
+    name: "param-4c-l2tlb32k"
+    file: "multicore/parametric_baseline_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_level_2/tlb1/size=32768"
+      - "--perf_model/mmu/tlb_level_2/tlb1/assoc=16"
+    description: "Parametric 4-core, L2 TLB 32K entries (no prefetching), frag=0.0"
+
+  param-4c-l2tlb-64k:
+    name: "param-4c-l2tlb64k"
+    file: "multicore/parametric_baseline_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_level_2/tlb1/size=65536"
+      - "--perf_model/mmu/tlb_level_2/tlb1/assoc=16"
+    description: "Parametric 4-core, L2 TLB 64K entries (no prefetching), frag=0.0"
+
+  param-4c-trail-best:
+    name: "param-4c-trail-best"
+    file: "multicore/parametric_temporal_pte_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.75"
+    description: "Parametric 4-core, Trail (best) TLB prefetcher, frag=0.0"
+
+  param-4c-perfect-l2:
+    name: "param-4c-perfect-l2"
+    file: "multicore/parametric_baseline_4c.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/perfect_l2_tlb=true"
+    description: "Parametric 4-core, Perfect L2 TLB (upper bound), frag=0.0"
+
+# === v4-substrate 4-core configs (IP-Stride@L1D + Streamer@L2 + CHiRP@L2-TLB, 2MB NUCA) ===
+  mc-v4-nopf:
+    name: "mc-v4-nopf"
+    file: "trail_comparison_v4/v4_noprefetch.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-nopf"
+  mc-v4-asp:
+    name: "mc-v4-asp"
+    file: "trail_comparison_v4/v4_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp"
+  mc-v4-asp-dp:
+    name: "mc-v4-asp-dp"
+    file: "trail_comparison_v4/v4_asp_dp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp-dp"
+  mc-v4-asp-recency:
+    name: "mc-v4-asp-recency"
+    file: "trail_comparison_v4/v4_asp_recency.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp-recency"
+  mc-v4-asp-atp:
+    name: "mc-v4-asp-atp"
+    file: "trail_comparison_v4/v4_asp_atp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp-atp"
+  mc-v4-asp-berti:
+    name: "mc-v4-asp-berti"
+    file: "trail_comparison_v4/v4_asp_berti.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp-berti"
+  mc-v4-asp-l2tlb32k:
+    name: "mc-v4-asp-l2tlb32k"
+    file: "trail_comparison_v4/v4_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+      - "--perf_model/mmu/tlb_level_2/tlb1/size=32768"
+      - "--perf_model/mmu/tlb_level_2/tlb1/assoc=16"
+    description: "v4-substrate 4-core: mc-v4-asp-l2tlb32k"
+  mc-v4-asp-l2tlb64k:
+    name: "mc-v4-asp-l2tlb64k"
+    file: "trail_comparison_v4/v4_asp.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+      - "--perf_model/mmu/tlb_level_2/tlb1/size=65536"
+      - "--perf_model/mmu/tlb_level_2/tlb1/assoc=16"
+    description: "v4-substrate 4-core: mc-v4-asp-l2tlb64k"
+  mc-v4-trail:
+    name: "mc-v4-trail"
+    file: "trail_comparison_v4/v4_trail.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4-substrate 4-core: mc-v4-trail"
+  mc-v4-perfect:
+    name: "mc-v4-perfect"
+    file: "trail_comparison_v4/v4_perfect_l2tlb.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-perfect"
+
+  # --- Trail + ASAP orthogonality configs ---
+
+  param-4c-asap:
+    name: "param-4c-asap"
+    file: "multicore/parametric_asap_4c.cfg"
+    extends:
+      - "--perf_model/asap_allocator/target_fragmentation=0.0"
+      - "--perf_model/asap_allocator/threshold_for_promotion=0.0"
+    description: "Parametric 4-core, ASAP eager THP allocator (no prefetching), frag=0.0"
+
+  param-4c-trail-asap:
+    name: "param-4c-trail-asap"
+    file: "multicore/parametric_trail_asap_4c.cfg"
+    extends:
+      - "--perf_model/mmu/type=spec"
+      - "--perf_model/asap_allocator/target_fragmentation=0.0"
+      - "--perf_model/asap_allocator/threshold_for_promotion=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.75"
+    description: "Parametric 4-core, Trail (best) + ASAP combo, frag=0.0"
+
+# ============================================================
+# Experiment Suites
+# ============================================================
+# Each suite ties together: topology, trace_suite, configs, instruction_count.
+# The suite name is used as prefix for the experiment directory.
+
+experiment_suites:
+
+  # --- 2-core ---
+  multicore_2core_homo:
+    description: "2-core homogeneous (rnd on both cores)"
+    topology: 2core
+    configs: [reservethp-full-fragmentation, reservethp-no-fragmentation]
+    trace_suite: homo_2core
+    instruction_count: 100000000  # 100M per core
+
+  multicore_2core_hetero:
+    description: "2-core heterogeneous (rnd + bfs)"
+    topology: 2core
+    configs: [reservethp-full-fragmentation, reservethp-no-fragmentation]
+    trace_suite: hetero_2core
+    instruction_count: 200000000  # 200M per core
+
+  # --- 4-core ---
+  multicore_4core_homo:
+    description: "4-core homogeneous (rnd on all cores)"
+    topology: 4core
+    configs: [reservethp-full-fragmentation, reservethp-no-fragmentation]
+    trace_suite: homo_4core
+    instruction_count: 100000000  # 100M per core
+
+  multicore_4core_hetero:
+    description: "4-core heterogeneous (rnd, bfs, pr, dlrm)"
+    topology: 4core
+    configs: [reservethp-full-fragmentation, reservethp-no-fragmentation]
+    trace_suite: hetero_4core
+    instruction_count: 100000000  # 100M per core
+
+  # --- 8-core ---
+  multicore_8core_homo:
+    description: "8-core homogeneous (rnd on all cores)"
+    topology: 8core
+    configs: [reservethp-full-fragmentation, reservethp-no-fragmentation]
+    trace_suite: homo_8core
+    instruction_count: 100000000  # 100M per core
+
+  multicore_8core_hetero:
+    description: "8-core heterogeneous (rnd, bfs, pr, dlrm, cc, sssp, xs, bc)"
+    topology: 8core
+    configs: [reservethp-full-fragmentation, reservethp-no-fragmentation]
+    trace_suite: hetero_8core
+    instruction_count: 60000000  # 60M per core
+
+  # --- 16-core ---
+  multicore_16core_homo:
+    description: "16-core homogeneous (rnd on all cores)"
+    topology: 16core
+    configs: [reservethp-full-fragmentation, reservethp-no-fragmentation]
+    trace_suite: homo_16core
+    instruction_count: 100000000  # 100M per core
+
+  multicore_16core_hetero:
+    description: "16-core heterogeneous (11 unique traces, wraps to 16)"
+    topology: 16core
+    configs: [reservethp-full-fragmentation, reservethp-no-fragmentation]
+    trace_suite: hetero_16core
+    instruction_count: 30000000  # 30M per core
+
+  # =========================================
+  # Fast Detailed experiment suites
+  # =========================================
+
+  # --- 2-core fast-detailed ---
+  fast_detailed_2core_homo:
+    description: "2-core fast-detailed homogeneous"
+    topology: 2core
+    configs: [fast-detailed-2c-full-frag, fast-detailed-2c-no-frag]
+    trace_suite: homo_2core
+    instruction_count: 100000000  # 100M per core
+
+  fast_detailed_2core_hetero:
+    description: "2-core fast-detailed heterogeneous"
+    topology: 2core
+    configs: [fast-detailed-2c-full-frag, fast-detailed-2c-no-frag]
+    trace_suite: hetero_2core
+    instruction_count: 100000000  # 100M per core
+
+  # --- 4-core fast-detailed ---
+  fast_detailed_4core_homo:
+    description: "4-core fast-detailed homogeneous"
+    topology: 4core
+    configs: [fast-detailed-4c-full-frag, fast-detailed-4c-no-frag]
+    trace_suite: homo_4core
+    instruction_count: 50000000  # 50M per core
+
+  fast_detailed_4core_hetero:
+    description: "4-core fast-detailed heterogeneous"
+    topology: 4core
+    configs: [fast-detailed-4c-full-frag, fast-detailed-4c-no-frag]
+    trace_suite: hetero_4core
+    instruction_count: 50000000  # 50M per core
+
+  # --- 8-core fast-detailed ---
+  fast_detailed_8core_homo:
+    description: "8-core fast-detailed homogeneous"
+    topology: 8core
+    configs: [fast-detailed-8c-full-frag, fast-detailed-8c-no-frag]
+    trace_suite: homo_8core
+    instruction_count: 25000000  # 25M per core
+
+  fast_detailed_8core_hetero:
+    description: "8-core fast-detailed heterogeneous"
+    topology: 8core
+    configs: [fast-detailed-8c-full-frag, fast-detailed-8c-no-frag]
+    trace_suite: hetero_8core
+    instruction_count: 25000000  # 25M per core
+
+  fast_detailed_16core_homo:
+    description: "16-core fast-detailed homogeneous"
+    topology: 16core
+    configs: [fast-detailed-16c-full-frag, fast-detailed-16c-no-frag]
+    trace_suite: homo_16core
+    instruction_count: 10000000  # 10M per core
+
+  fast_detailed_16core_hetero:
+    description: "16-core fast-detailed heterogeneous"
+    topology: 16core
+    configs: [fast-detailed-16c-full-frag, fast-detailed-16c-no-frag]
+    trace_suite: hetero_16core
+    instruction_count: 10000000  # 10M per core
+
+  # =========================================
+  # Revelator 4KB-only experiment suites
+  # =========================================
+
+  # --- 2-core revelator 4KB ---
+  revelator_4kb_2core_homo:
+    description: "2-core Revelator 4KB-only homogeneous"
+    topology: 2core
+    configs: [revelator-4kb-2c]
+    trace_suite: homo_2core
+    instruction_count: 100000000  # 100M per core
+
+  revelator_4kb_2core_hetero:
+    description: "2-core Revelator 4KB-only heterogeneous"
+    topology: 2core
+    configs: [revelator-4kb-2c]
+    trace_suite: hetero_2core
+    instruction_count: 100000000  # 100M per core
+
+  # --- 4-core revelator 4KB ---
+  revelator_4kb_4core_homo:
+    description: "4-core Revelator 4KB-only homogeneous"
+    topology: 4core
+    configs: [revelator-4kb-4c]
+    trace_suite: homo_4core
+    instruction_count: 50000000  # 50M per core
+
+  revelator_4kb_4core_hetero:
+    description: "4-core Revelator 4KB-only heterogeneous"
+    topology: 4core
+    configs: [revelator-4kb-4c]
+    trace_suite: hetero_4core
+    instruction_count: 50000000  # 50M per core
+
+  # --- 8-core revelator 4KB ---
+  revelator_4kb_8core_homo:
+    description: "8-core Revelator 4KB-only homogeneous"
+    topology: 8core
+    configs: [revelator-4kb-8c]
+    trace_suite: homo_8core
+    instruction_count: 25000000  # 25M per core
+
+  revelator_4kb_8core_hetero:
+    description: "8-core Revelator 4KB-only heterogeneous"
+    topology: 8core
+    configs: [revelator-4kb-8c]
+    trace_suite: hetero_8core
+    instruction_count: 25000000  # 25M per core
+
+  # =========================================
+  # ReserveTHP Fragmentation Sweep (multicore, 2x memory)
+  # =========================================
+  # Fine-grained sweep near fully-fragmented end.
+  # Memory doubled: 262144 MB total, 65536 MB kernel.
+
+  fragsweep_2core_homo:
+    description: "2-core ReserveTHP frag sweep, homogeneous"
+    topology: 2core
+    configs: [fd-fragsweep-2c]
+    trace_suite: homo_2core
+    instruction_count: 100000000
+
+  fragsweep_2core_hetero:
+    description: "2-core ReserveTHP frag sweep, heterogeneous"
+    topology: 2core
+    configs: [fd-fragsweep-2c]
+    trace_suite: hetero_2core
+    instruction_count: 100000000
+
+  fragsweep_4core_homo:
+    description: "4-core ReserveTHP frag sweep, homogeneous"
+    topology: 4core
+    configs: [fd-fragsweep-4c]
+    trace_suite: homo_4core
+    instruction_count: 50000000
+
+  fragsweep_4core_hetero:
+    description: "4-core ReserveTHP frag sweep, heterogeneous"
+    topology: 4core
+    configs: [fd-fragsweep-4c]
+    trace_suite: hetero_4core
+    instruction_count: 50000000
+
+  fragsweep_8core_homo:
+    description: "8-core ReserveTHP frag sweep, homogeneous"
+    topology: 8core
+    configs: [fd-fragsweep-8c]
+    trace_suite: homo_8core
+    instruction_count: 25000000
+
+  fragsweep_8core_hetero:
+    description: "8-core ReserveTHP frag sweep, heterogeneous"
+    topology: 8core
+    configs: [fd-fragsweep-8c]
+    trace_suite: hetero_8core
+    instruction_count: 25000000
+
+  # =========================================
+  # Revelator Utilization Sweep (multicore, 2x memory)
+  # =========================================
+  # target_fragmentation: 1.0 = 0% utilized, 0.0 = 100% utilized.
+  # Memory doubled: 262144 MB total, 65536 MB kernel.
+
+  rev_utilsweep_2core_homo:
+    description: "2-core Revelator utilization sweep, homogeneous"
+    topology: 2core
+    configs: [rev-utilsweep-2c]
+    trace_suite: homo_2core
+    instruction_count: 100000000
+
+  rev_utilsweep_2core_hetero:
+    description: "2-core Revelator utilization sweep, heterogeneous"
+    topology: 2core
+    configs: [rev-utilsweep-2c]
+    trace_suite: hetero_2core
+    instruction_count: 100000000
+
+  rev_utilsweep_4core_homo:
+    description: "4-core Revelator utilization sweep, homogeneous"
+    topology: 4core
+    configs: [rev-utilsweep-4c]
+    trace_suite: homo_4core
+    instruction_count: 50000000
+
+  rev_utilsweep_4core_hetero:
+    description: "4-core Revelator utilization sweep, heterogeneous"
+    topology: 4core
+    configs: [rev-utilsweep-4c]
+    trace_suite: hetero_4core
+    instruction_count: 50000000
+
+  rev_utilsweep_8core_homo:
+    description: "8-core Revelator utilization sweep, homogeneous"
+    topology: 8core
+    configs: [rev-utilsweep-8c]
+    trace_suite: homo_8core
+    instruction_count: 25000000
+
+  rev_utilsweep_8core_hetero:
+    description: "8-core Revelator utilization sweep, heterogeneous"
+    topology: 8core
+    configs: [rev-utilsweep-8c]
+    trace_suite: hetero_8core
+    instruction_count: 25000000
+
+  # =========================================
+  # Top 250 multicore (google + victima, no restart)
+  # =========================================
+  # Uses fast-detailed baseline configs (full-frag + no-frag).
+  # sim_end=last means traces run once — no restart when a core finishes.
+
+  top250_2core:
+    description: "2-core top250, google + victima (no gen/dlrm/sssp/gc)"
+    topology: 2core
+    configs: [fast-detailed-2c-full-frag, fast-detailed-2c-no-frag]
+    trace_suite: top250_2core
+    instruction_count: 100000000
+    sim_end: last
+
+  top250_4core:
+    description: "4-core top250, google + victima (no gen/dlrm/sssp/gc)"
+    topology: 4core
+    configs: [fast-detailed-4c-full-frag, fast-detailed-4c-no-frag]
+    trace_suite: top250_4core
+    instruction_count: 50000000
+    sim_end: last
+
+  top250_8core:
+    description: "8-core top250, google + victima (no gen/dlrm/sssp/gc)"
+    topology: 8core
+    configs: [fast-detailed-8c-full-frag, fast-detailed-8c-no-frag]
+    trace_suite: top250_8core
+    instruction_count: 25000000
+    sim_end: last
+
+  top250_16core:
+    description: "16-core top250, google + victima (no gen/dlrm/sssp/gc)"
+    topology: 16core
+    configs: [fast-detailed-16c-full-frag, fast-detailed-16c-no-frag]
+    trace_suite: top250_16core
+    instruction_count: 10000000
+    sim_end: last
+
+  # =========================================
+  # Top 250 multicore — Revelator 4KB-only
+  # =========================================
+  # Same mixes as baseline top250, but using Revelator address translation.
+  # sim_end=last means traces run once — no restart when a core finishes.
+
+  rev_top250_2core:
+    description: "Revelator 4KB 2-core top250, google + victima (no gen/dlrm/sssp/gc)"
+    topology: 2core
+    configs: [revelator-4kb-2c]
+    trace_suite: top250_2core
+    instruction_count: 100000000
+    sim_end: last
+
+  rev_top250_4core:
+    description: "Revelator 4KB 4-core top250, google + victima (no gen/dlrm/sssp/gc)"
+    topology: 4core
+    configs: [revelator-4kb-4c]
+    trace_suite: top250_4core
+    instruction_count: 50000000
+    sim_end: last
+
+  rev_top250_8core:
+    description: "Revelator 4KB 8-core top250, google + victima (no gen/dlrm/sssp/gc)"
+    topology: 8core
+    configs: [revelator-4kb-8c]
+    trace_suite: top250_8core
+    instruction_count: 25000000
+    sim_end: last
+
+  rev_top250_16core:
+    description: "Revelator 4KB 16-core top250, google + victima (no gen/dlrm/sssp/gc)"
+    topology: 16core
+    configs: [revelator-4kb-16c]
+    trace_suite: top250_16core
+    instruction_count: 10000000
+    sim_end: last
+
+  # =========================================
+  # Top 250 multicore — Revelator 4KB, Google-only + rnd.sift
+  # =========================================
+  # Same as rev_top250 but without victima graph traces (bfs/cc/pr/xs/bc/tc).
+  # All non-rnd cores use Google DPC traces from the top 250 list.
+
+  rev_top250_google_2core:
+    description: "Revelator 4KB 2-core, Google-only + rnd.sift"
+    topology: 2core
+    configs: [revelator-4kb-2c]
+    trace_suite: top250_google_2core
+    instruction_count: 100000000
+    sim_end: last
+
+  rev_top250_google_4core:
+    description: "Revelator 4KB 4-core, Google-only + rnd.sift"
+    topology: 4core
+    configs: [revelator-4kb-4c]
+    trace_suite: top250_google_4core
+    instruction_count: 50000000
+    sim_end: last
+
+  rev_top250_google_8core:
+    description: "Revelator 4KB 8-core, Google-only + rnd.sift"
+    topology: 8core
+    configs: [revelator-4kb-8c]
+    trace_suite: top250_google_8core
+    instruction_count: 25000000
+    sim_end: last
+
+  rev_top250_google_16core:
+    description: "Revelator 4KB 16-core, Google-only + rnd.sift"
+    topology: 16core
+    configs: [revelator-4kb-16c]
+    trace_suite: top250_google_16core
+    instruction_count: 10000000
+    sim_end: last
+
+  # =========================================
+  # Top 250 multicore — Baseline (fast-detailed), Google-only + rnd.sift
+  # =========================================
+  # Baseline counterpart to the Revelator Google-only suites above.
+  # Uses fast-detailed configs with frag=0.0 (full fragmentation) and
+  # frag=1.0 (no fragmentation).
+
+  baseline_top250_google_2core:
+    description: "Baseline 2-core, Google-only + rnd.sift, frag 0.0 + 0.005 + 1.0"
+    topology: 2core
+    configs: [fast-detailed-2c-full-frag, fast-detailed-2c-frag0.005, fast-detailed-2c-no-frag]
+    trace_suite: top250_google_2core
+    instruction_count: 100000000
+    sim_end: last
+
+  baseline_top250_google_4core:
+    description: "Baseline 4-core, Google-only + rnd.sift, frag 0.0 + 0.005 + 1.0"
+    topology: 4core
+    configs: [fast-detailed-4c-full-frag, fast-detailed-4c-frag0.005, fast-detailed-4c-no-frag]
+    trace_suite: top250_google_4core
+    instruction_count: 50000000
+    sim_end: last
+
+  baseline_top250_google_8core:
+    description: "Baseline 8-core, Google-only + rnd.sift, frag 0.0 + 0.005 + 1.0"
+    topology: 8core
+    configs: [fast-detailed-8c-full-frag, fast-detailed-8c-frag0.005, fast-detailed-8c-no-frag]
+    trace_suite: top250_google_8core
+    instruction_count: 25000000
+    sim_end: last
+
+  baseline_top250_google_16core:
+    description: "Baseline 16-core, Google-only + rnd.sift, frag 0.0 + 0.005 + 1.0"
+    topology: 16core
+    configs: [fast-detailed-16c-full-frag, fast-detailed-16c-frag0.005, fast-detailed-16c-no-frag]
+    trace_suite: top250_google_16core
+    instruction_count: 10000000
+    sim_end: last
+
+  # =========================================
+  # Parametric multicore — Baseline + Revelator
+  # =========================================
+  # Uses parametric_dram_directory_msi (no fast_detailed).
+  # NUCA as shared LLC, no explicit L3.
+  # 6 mixes per core count, rnd.sift always on core 0.
+
+  parametric_baseline_2core:
+    description: "Parametric baseline 2-core, frag 0.0 / 0.005 / 0.1"
+    topology: 2core
+    configs: [param-bl-2c]
+    trace_suite: parametric_2core
+    instruction_count: 50000000
+    sim_end: last
+
+  parametric_baseline_4core:
+    description: "Parametric baseline 4-core, frag 0.0 / 0.005 / 0.1"
+    topology: 4core
+    configs: [param-bl-4c]
+    trace_suite: parametric_4core
+    instruction_count: 30000000
+    sim_end: last
+
+  parametric_baseline_8core:
+    description: "Parametric baseline 8-core, frag 0.0 / 0.005 / 0.1"
+    topology: 8core
+    configs: [param-bl-8c]
+    trace_suite: parametric_8core
+    instruction_count: 20000000
+    sim_end: last
+
+  parametric_baseline_16core:
+    description: "Parametric baseline 16-core, frag 0.0 / 0.005 / 0.1"
+    topology: 16core
+    configs: [param-bl-16c]
+    trace_suite: parametric_16core
+    instruction_count: 10000000
+    sim_end: last
+
+  parametric_revelator_2core:
+    description: "Parametric revelator 2-core, frag 1.0 / 0.8 / 0.6"
+    topology: 2core
+    configs: [param-rev-2c]
+    trace_suite: parametric_2core
+    instruction_count: 50000000
+    sim_end: last
+
+  parametric_revelator_4core:
+    description: "Parametric revelator 4-core, frag 1.0 / 0.8 / 0.6"
+    topology: 4core
+    configs: [param-rev-4c]
+    trace_suite: parametric_4core
+    instruction_count: 30000000
+    sim_end: last
+
+  parametric_revelator_8core:
+    description: "Parametric revelator 8-core, frag 1.0 / 0.8 / 0.6"
+    topology: 8core
+    configs: [param-rev-8c]
+    trace_suite: parametric_8core
+    instruction_count: 20000000
+    sim_end: last
+
+  parametric_revelator_16core:
+    description: "Parametric revelator 16-core, frag 1.0 / 0.8 / 0.6"
+    topology: 16core
+    configs: [param-rev-16c]
+    trace_suite: parametric_16core
+    instruction_count: 10000000
+    sim_end: last
+
+  # =========================================
+  # Prefetcher Comparison — 4-core multicore
+  # =========================================
+  # Best single-core prefetcher variants from the prefetcher_comparison_v3
+  # notebook, now evaluated on 4-core mixes drawn from the top-20 traces
+  # where Trail (best) thrives.
+
+  prefetcher_comparison_4core:
+    description: "4-core prefetcher comparison: best-of-each family, 15 mixes from top-20 Trail traces"
+    topology: 4core
+    configs:
+      # Baseline (no prefetching)
+      - param-4c-no-prefetch
+      # ASP (PC-Stride)
+      - param-4c-asp
+      # Distance Prefetcher
+      - param-4c-dp
+      # Distance + ASP combo
+      - param-4c-dp-asp
+      # Recency
+      - param-4c-recency
+      # Berti
+      - param-4c-berti
+      # ATP
+      - param-4c-atp
+      # L2 TLB 32K
+      - param-4c-l2tlb-32k
+      # L2 TLB 64K
+      - param-4c-l2tlb-64k
+      # Trail (best): region_shift=5, chain_edge_decay=0.75
+      - param-4c-trail-best
+      # Perfect L2 TLB (upper bound)
+      - param-4c-perfect-l2
+    trace_suite: prefetcher_top20_4core
+    instruction_count: 50000000
+    sim_end: last
+
+  prefetcher_v4_diverse_4core:
+    description: "v4-substrate 4-core prefetcher comparison: 16 diverse mixes (CVP/SPEC/Google/graph), TRAIL gainers, 2MB NUCA"
+    topology: 4core
+    configs:
+      - mc-v4-nopf
+      - mc-v4-asp
+      - mc-v4-asp-dp
+      - mc-v4-asp-recency
+      - mc-v4-asp-atp
+      - mc-v4-asp-berti
+      - mc-v4-asp-l2tlb32k
+      - mc-v4-asp-l2tlb64k
+      - mc-v4-trail
+      - mc-v4-perfect
+    trace_suite: prefetcher_v4_diverse_4core
+    instruction_count: 50000000
+    sim_end: last
+
+  prefetcher_v4_diverse_4core_x60:
+    description: "60 ADDITIONAL v4-substrate 4-core mixes (same 30-trace gainer pool, distinct from original 40). 2MB NUCA, readwrite DRAM. Combine with prefetcher_v4_diverse_4core for the 100-mix MC study."
+    topology: 4core
+    configs:
+      - mc-v4-nopf
+      - mc-v4-asp
+      - mc-v4-asp-dp
+      - mc-v4-asp-recency
+      - mc-v4-asp-atp
+      - mc-v4-asp-berti
+      - mc-v4-asp-l2tlb32k
+      - mc-v4-asp-l2tlb64k
+      - mc-v4-trail
+      - mc-v4-perfect
+    trace_suite: prefetcher_v4_diverse_4core_x60
+    instruction_count: 50000000
+    sim_end: last
+
+  prefetcher_v4_diverse_4core_simfirst:
+    description: "Equal-work variant of prefetcher_v4_diverse_4core: sim_end=first so every core stops at exactly 50M instructions (no overshoot). Strict equal-work for the rebuttal MC numbers."
+    topology: 4core
+    configs:
+      - mc-v4-nopf
+      - mc-v4-asp
+      - mc-v4-asp-dp
+      - mc-v4-asp-recency
+      - mc-v4-asp-atp
+      - mc-v4-asp-berti
+      - mc-v4-asp-l2tlb32k
+      - mc-v4-asp-l2tlb64k
+      - mc-v4-trail
+      - mc-v4-perfect
+    trace_suite: prefetcher_v4_diverse_4core
+    instruction_count: 50000000
+    sim_end: first

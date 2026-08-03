@@ -1671,10 +1671,18 @@ private:
     mutable UInt64 region_way_hits = 0;        ///< Times region preferred way succeeded (new alloc)
     mutable UInt64 region_way_relearns = 0;    ///< Times preference was cleared due to failures
     
+    // ============ Phase 1b: Tiered Hashing ============
+    // When enabled, the allocator bypasses region_way_pref + global_way and
+    // always tries way 0 first, then way 1, ..., via findFreeWay().  This
+    // skews the population so way 0 is densest, enabling Revelator's way-0
+    // prediction in MMUFullstack to be high-accuracy.
+    bool m_tiered_hashing_enabled = false;
+    std::vector<UInt64> placement_per_way;  ///< Count of placements landing in each way
+
     // ============ Global Way Preference (RLE-friendly placement) ============
     // Tracks per-way availability and maintains a global preferred way
     // that is shifted when it becomes congested.
-    
+
     std::vector<UInt32> free_sets_per_way;  ///< Count of sets where each way is free (size=associativity)
     int global_way = 0;                      ///< Current preferred way index
     UInt64 global_way_rotations = 0;         ///< Number of times global_way was rotated
@@ -1764,6 +1772,11 @@ public:
         // Initially all ways are free in all sets
         free_sets_per_way.assign(associativity, num_sets);
         global_way = 0;
+
+        // Phase 1b: tiered-hashing flag + per-way placement counters
+        m_tiered_hashing_enabled = Sim()->getCfg()->getBoolDefault(
+            "perf_model/utopia/tiered_hashing/enabled", false);
+        placement_per_way.assign(associativity, 0);
         
         // Initialize per-app radix way table manager WITHOUT allocator
         // The allocator will be set via setRadixAllocator() from the parent Utopia class
@@ -1943,9 +1956,18 @@ private:
     }
     
 public:
-    
+
+    // ============ Phase 1b accessors ============
+    bool isTieredHashingEnabled() const { return m_tiered_hashing_enabled; }
+    UInt64 getPlacementsForWay(UInt32 way) const {
+        return (way < placement_per_way.size()) ? placement_per_way[way] : 0;
+    }
+    UInt64* getPlacementPtr(UInt32 way) {
+        return (way < placement_per_way.size()) ? &placement_per_way[way] : nullptr;
+    }
+
     // ============ Core Operations ============
-    
+
     /**
      * @brief Check if a page is present in this RestSeg
      * @param address Virtual address to look up
@@ -2159,7 +2181,19 @@ public:
         UInt64 evicted_tag = 0;
         UInt64 evicted_owner_val = 0;
         bool success_from_region_pref = false;
-        
+
+        // Phase 1b: tiered-hashing mode — skip region/global-way heuristics
+        // and rely solely on insert()'s findFreeWay() which scans 0..N-1.
+        if (m_tiered_hashing_enabled) {
+            auto result = sets[set_index].insert(tag, owner, fp, force_evict, -1, used_way);
+            success = std::get<0>(result);
+            evicted = std::get<1>(result);
+            evicted_tag = std::get<2>(result);
+            evicted_owner_val = std::get<3>(result);
+            was_hit = std::get<5>(result);
+            used_free_way = std::get<6>(result);
+        }
+        else
         // Priority 1: Try region preferred way if available
         if (region_pref_way >= 0) {
             region_way_attempts++;
@@ -2219,12 +2253,17 @@ public:
         // ================================================================
         if (!was_hit) {
             allocations++;
-            
+
             // Update free_sets_per_way if we consumed an invalid (free) entry
             if (used_free_way && used_way >= 0 && used_way < static_cast<int>(associativity)) {
                 if (free_sets_per_way[used_way] > 0) {
                     free_sets_per_way[used_way]--;
                 }
+            }
+
+            // Phase 1b: per-way placement count (for verifying tiered hashing skew)
+            if (used_way >= 0 && used_way < static_cast<int>(associativity)) {
+                placement_per_way[used_way]++;
             }
             
             // ================================================================

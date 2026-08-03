@@ -264,6 +264,7 @@ namespace ParametricDramDirectoryMSI
          bool m_perfect;
          bool m_passthrough;
          bool m_coherent;
+         bool m_zero_miss_tag_lat;  // Skip the tag-check time charge on a miss.  Used by Perfect-translation cell so the demand path enters the next-level cache at the same time the MMU prefetcher would, removing the L1-tag-check asymmetry between demand and prefetch paths.
          bool m_prefetch_on_prefetch_hit;
          bool m_l1_mshr;
          bool m_l1_metadata_mshr;
@@ -280,11 +281,12 @@ namespace ParametricDramDirectoryMSI
            UInt64 loads_state[CacheState::NUM_CSTATE_STATES][CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES], stores_state[CacheState::NUM_CSTATE_STATES][CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES];
            UInt64 loads_where[CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES][HitWhere::NUM_HITWHERES];
            UInt64 stores_where[CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES][HitWhere::NUM_HITWHERES];
-           UInt64 spec_prefetch_hits, spec_prefetch_total_preds;
+           UInt64 revelator_hits,revelator_total_preds;
 
 
            UInt64 load_misses_state[CacheState::NUM_CSTATE_STATES][CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES], store_misses_state[CacheState::NUM_CSTATE_STATES][CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES];
            UInt64 loads_prefetch[CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES], stores_prefetch[CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES];
+           UInt64 hits_prefetch_subline; // per-PTE (8B sub-region) first-demand hits to MMU-prefetched lines (region-prefetch fair)
            UInt64 hits_prefetch, // lines which were prefetched and subsequently used by a non-prefetch access
                   evict_prefetch, // lines which were prefetched and evicted before being used
                   invalidate_prefetch; // lines which were prefetched and invalidated before being used
@@ -295,6 +297,10 @@ namespace ParametricDramDirectoryMSI
            UInt64 evict[CacheState::NUM_CSTATE_STATES];
            UInt64 backinval[CacheState::NUM_CSTATE_STATES];
            UInt64 hits_warmup, evict_warmup, invalidate_warmup;
+           // Per-block-type eviction counters (e.g., evict-DATA, evict-VICTIMA_TLB_BLOCK,
+           // evict-PAGE_TABLE_DATA, ...) used to verify a metadata-stickifying replacement
+           // policy isn't starving DATA lines in L2/LLC.
+           UInt64 evict_by_block_type[CacheBlockInfo::block_type_t::NUM_BLOCK_TYPES];
            SubsecondTime total_latency;
            SubsecondTime total_data_latency;
            SubsecondTime total_metadata_latency;
@@ -310,6 +316,11 @@ namespace ParametricDramDirectoryMSI
            UInt64 prefetches_fillup; // We track only the prefetches that actually caused a fillup in the L2 cache
            UInt64 late_metadata_prefetches;
 
+           // Per-fill-source useful/wasted (Stat 2)
+           UInt64 hits_prefetch_dram;     // useful prefetch fills sourced from DRAM
+           UInt64 hits_prefetch_nuca;     // useful prefetch fills sourced from NUCA/LLC
+           UInt64 evict_prefetch_dram;    // wasted prefetch fills sourced from DRAM
+           UInt64 evict_prefetch_nuca;    // wasted prefetch fills sourced from NUCA/LLC
 
            UInt64 spec_evict_total;    // L2 evictions caused by speculative prefetches
            UInt64 spec_evict_harmful;  // of those, demand misses within access window
@@ -369,9 +380,20 @@ namespace ParametricDramDirectoryMSI
          void copyDataFromNextLevel(Core::mem_op_t mem_op_type, IntPtr address, bool modeled, SubsecondTime t_start, CacheBlockInfo::block_type_t block_type);
          void trainPrefetcher(IntPtr eip, IntPtr address, Core::mem_op_t mem_op_type,  bool cache_hit, bool prefetch_hit, SubsecondTime t_issue);
          void Prefetch(IntPtr eip, SubsecondTime t_start);
-         bool specDoPrefetch(IntPtr eip, IntPtr prefetch_address, SubsecondTime t_start);
+         bool revelatordoPrefetch(IntPtr eip, IntPtr prefetch_address, SubsecondTime t_start);
          // Cache meta-data operationsz
          SharedCacheBlockInfo* getCacheBlockInfo(IntPtr address);
+         // Tag-only residency check.  No fill on miss.  On hit, updates the
+         // replacement state of the line (promotes in SRRIP/LRU) -- this is
+         // important for speculative parallel-probe paths so frequently-probed
+         // lines don't age out and trigger cold-cache walks.
+         bool isLinePresent(IntPtr address) override
+         {
+            return m_master->m_cache->accessSingleLine(
+                       address, Cache::LOAD, /*buff=*/nullptr, /*bytes=*/0,
+                       getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD),
+                       /*update_replacement=*/true) != nullptr;
+         }
          CacheBlockInfo::block_type_t getCacheBlockType(IntPtr address);
          CacheState::cstate_t getCacheState(IntPtr address);
          CacheState::cstate_t getCacheState(CacheBlockInfo *cache_block_info);
@@ -469,6 +491,7 @@ namespace ParametricDramDirectoryMSI
                Byte* data_buf, UInt32 data_length,
                bool modeled,
                bool count,CacheBlockInfo::block_type_t block_type,SubsecondTime TLB_latency,UtopiaCache *shadow_cache = NULL,
+               IntPtr prefetch_virtual_address = INVALID_ADDRESS,
                Core::mem_origin_t mem_origin = Core::mem_origin_t::NORMAL);
 
          // MMUCacheInterface overrides — delegate to the concrete methods
@@ -490,8 +513,70 @@ namespace ParametricDramDirectoryMSI
                CacheBlockInfo::block_type_t block_type = CacheBlockInfo::block_type_t::DATA) override
          {
             m_doing_spec_prefetch = true;
+            // Propagate to L2 (and deeper) so evictions during this prefetch
+            // are tracked by spec-evict counters
+            if (m_next_cache_cntlr)
+               m_next_cache_cntlr->m_doing_spec_prefetch = true;
             doPrefetch(eip, prefetch_address, t_start, block_type);
+            if (m_next_cache_cntlr)
+               m_next_cache_cntlr->m_doing_spec_prefetch = false;
             m_doing_spec_prefetch = false;
+         }
+
+         void tagMMUPrefetch(IntPtr cache_address, HitWhere::where_t hit_where = HitWhere::UNKNOWN) override
+         {
+            // Only tag with PREFETCH when the walk actually brought data into
+            // L2 from beyond L2 (LLC, DRAM, etc.).  If the line was already in
+            // L1 or L2 the prefetch was redundant — tagging it would inflate
+            // L2.hits-prefetch because every subsequent demand walk that hits
+            // the same (already-resident) line would be counted as a useful
+            // prefetch hit.
+            if (hit_where == HitWhere::L1_OWN || hit_where == HitWhere::L2_OWN)
+               return;
+
+            SharedCacheBlockInfo* info = getCacheBlockInfo(cache_address);
+            if (info) {
+               info->setOption(CacheBlockInfo::PREFETCH);
+               info->markPrefetchedLine();   // per-PTE (sub-line) credit tracking
+               ++stats.prefetches;
+               bool from_dram = (hit_where == HitWhere::DRAM_LOCAL || hit_where == HitWhere::DRAM_REMOTE || hit_where == HitWhere::DRAM);
+               if (from_dram) {
+                  info->setOption(CacheBlockInfo::PREFETCH_FROM_DRAM);
+                  ++stats.prefetches_fillup;
+               } else {
+                  info->clearOption(CacheBlockInfo::PREFETCH_FROM_DRAM);
+               }
+            }
+         }
+
+         // Mark an MMU-prefetched line for per-PTE (sub-line) hit accounting on
+         // the level demand walks land (L1D).  Same "only if brought in from
+         // beyond this cache" guard as tagMMUPrefetch, so redundant prefetches
+         // (line already resident) are not credited.
+         void markMMUPrefetchSubline(IntPtr cache_address, HitWhere::where_t hit_where = HitWhere::UNKNOWN) override
+         {
+            if (hit_where == HitWhere::L1_OWN || hit_where == HitWhere::L2_OWN)
+               return;
+            SharedCacheBlockInfo* info = getCacheBlockInfo(cache_address);
+            if (info)
+               info->markPrefetchedLine();
+         }
+
+         // Mark a resident PTE line dirty to model the writeback caused by an
+         // in-PTE prefetch-payload (TRAIL delta) update.  Dirty-if-present: if
+         // the line is resident and clean (or shared/exclusive), upgrade it to
+         // MODIFIED so the existing eviction path writes it back to DRAM.  No
+         // fetch on miss (we conservatively model only updates that hit in the
+         // cache).  Returns true if a clean line was newly dirtied.
+         int markMMUPayloadDirty(IntPtr cache_address) override
+         {
+            SharedCacheBlockInfo* info = getCacheBlockInfo(cache_address);
+            if (!info || info->getCState() == CacheState::INVALID)
+               return 0;                       // not resident -> no writeback modeled
+            if (info->getCState() == CacheState::MODIFIED)
+               return 2;                       // already dirty -> write coalesced
+            info->setCState(CacheState::MODIFIED);
+            return 1;                           // clean line newly dirtied
          }
 
          void updateHits(Core::mem_op_t mem_op_type, UInt64 hits);

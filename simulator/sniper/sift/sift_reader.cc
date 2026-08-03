@@ -14,8 +14,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "../../../../ChampSim/inc/trace_instruction.h"
-#include "../../../../ChampSim/inc/inf_stream.h"
+#include "champsim/trace_instruction.h"
+#include "champsim/inf_stream.h"
 
 // Enable (>0) to print out everything we read
 #define VERBOSE 0
@@ -285,9 +285,10 @@ bool Reader::Read(Instruction &inst)
    // Initialise stream once (for either SIFT or ChampSim)
    if (input == NULL && !m_champsim_stream)
    {
+      std::cerr << "[SIFT:" << m_id << "] Read() calling initStream for file: " << m_filename << std::endl;
       if (!initStream())
       {
-         std::cerr << "[SIFT:" << m_id << "] Error: initStream failed\n";
+         std::cerr << "[SIFT:" << m_id << "] Error: initStream failed for file: " << m_filename << std::endl;
          return false;
       }
    }

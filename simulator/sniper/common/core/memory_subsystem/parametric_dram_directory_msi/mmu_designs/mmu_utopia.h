@@ -422,6 +422,22 @@ namespace ParametricDramDirectoryMSI
 		
 		// RestSeg Walk methods
 		virtual std::tuple<int, IntPtr, SubsecondTime> RestSegWalk(IntPtr address, bool instruction, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count);
+
+		/**
+		 * @brief FlexSeg page-table walk hook.
+		 *
+		 * Default implementation performs the standard radix walk
+		 * (initializeWalk → filterPTWResult → calculatePTWCycles).
+		 * Subclasses (e.g., Fullstack with Victima) override to inject
+		 * leaf-probe-first behaviour.  Returns the walk latency; out
+		 * parameters carry ppn / page_size / fault.
+		 */
+		virtual SubsecondTime walkFlexSeg(IntPtr address, bool count, bool modeled,
+		                                  IntPtr eip, Core::lock_signal_t lock,
+		                                  PageTable* page_table, bool instruction,
+		                                  int& out_page_size, IntPtr& out_ppn,
+		                                  bool& out_fault, int& out_requested_frames);
+
 		
 		/**
 		 * @brief Functional RestSeg lookup - no cache accesses, no latency charged

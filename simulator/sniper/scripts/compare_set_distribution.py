@@ -4,7 +4,6 @@ Analyze cache set distribution from simulator address traces.
 Compares no_translation (VA=PA) vs reservethp (translated PA).
 """
 
-import os
 import sys
 from collections import defaultdict
 import math
@@ -125,9 +124,8 @@ def compare_distributions(no_trans_counts, reservethp_counts):
         print(f"  Set {s:4d}: no_trans={nt:5d}, reservethp={rt:5d}, diff={d:+5d}")
 
 def main():
-    _sniper_root = os.environ.get("SNIPER_ROOT", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-    no_trans_path = os.path.join(_sniper_root, "results/addr_trace_debug/no_translation/telemetry/address_trace.csv")
-    reservethp_path = os.path.join(_sniper_root, "results/addr_trace_debug/reservethp/telemetry/address_trace.csv")
+    no_trans_path = "/mnt/panzer/kanellok/virtuoso_artifact/simulator/sniper/results/addr_trace_debug/no_translation/telemetry/address_trace.csv"
+    reservethp_path = "/mnt/panzer/kanellok/virtuoso_artifact/simulator/sniper/results/addr_trace_debug/reservethp/telemetry/address_trace.csv"
     
     print("=" * 60)
     print("RIGOROUS CACHE SET DISTRIBUTION ANALYSIS")

@@ -63,6 +63,48 @@ class TraceThread : public Runnable
 
       bool m_trace_has_pa;
       bool m_champsim_trace;
+
+      /* App reader replay (for injected traces only).  When a trace's
+         app reader EOFs, a new Reader can be opened on the same file
+         to let the TraceThread continue simulation.  Live apps set
+         the path to empty — EOF on a live app reader means the live
+         app finished and we should stop the simulation. */
+      String m_app_trace_path;
+
+      /* Live-app injected-app tracking (Stage 1, Apr 18 2026).  When
+         injectForkedApp installs an app reader into a *kernel* pthread's
+         TraceThread (m_app_id == 0), the injected live app has its own
+         app_id (e.g. 1, 2, ...) that newly-spawned app threads must
+         inherit.  handleNewThreadFunc uses this when current==app so a
+         pthread_create inside the live app creates a TraceThread in the
+         RIGHT application — not in app 0 (the kernel). */
+      app_id_t m_injected_app_id = (app_id_t)-1;
+
+      /* Stage 3 (Apr 18 2026): the currently-scheduled app_thread_id on
+         this TraceThread (the pool id of whatever reader is in the
+         app_reader slot).  Needed at preemption time so we can tell the
+         kernel which user thread just got preempted, and so we can stash
+         its (inst, next_inst) pair back into the right pool entry for
+         resumption on a later SimContextSwitchTo. */
+      uint64_t m_running_app_tid = 0;
+
+      /* Stage 4 (Apr 18 2026): marks TraceThreads that represent MimicOS
+         kernel pthreads (one per core) rather than dedicated app threads.
+         Every kernel pthread is registered under Sniper app_id=0 for
+         compatibility with the existing Sniper trace model, so the
+         legacy app_id-based "same app = same group" heuristic in
+         TraceManager::endApplication wrongly stops unrelated cores when
+         ANY live app's SYS_exit_group fires.  This flag lets us exclude
+         kernel pthreads from that sweep without a global config check. */
+      bool m_is_kernel_pthread = false;
+
+      /* Stage 3 (Apr 18 2026): scheduling quantum in DETAIL-mode app
+         instructions.  When m_instrs_this_quantum hits this threshold,
+         the run-func calls preemptToKernel() to yield back to the
+         kernel for rescheduling.  Default is 10000 instructions; can be
+         overridden via the scheduler/quantum_instructions config. */
+      uint64_t m_quantum_instrs       = 10000;
+      uint64_t m_instrs_this_quantum  = 0;
       UInt32 m_champsim_access_size;
       bool m_address_randomization;
       bool m_appid_from_coreid;
@@ -238,6 +280,79 @@ class TraceThread : public Runnable
 
       Sift::Reader* getCurrentSiftReader() { return m_current_sift_reader; }
       void setCurrentSiftReader(Sift::Reader *reader) { m_current_sift_reader = reader; }
+
+      /* Mark the app reader as replayable (trace) by storing its file path.
+         Empty path = non-replayable (live app). */
+      void setAppTracePath(const String& path) { m_app_trace_path = path; }
+      const String& getAppTracePath() const { return m_app_trace_path; }
+
+      /* The app_id of the live app whose reader is currently injected into
+         THIS kernel pthread's TraceThread.  (app_id_t)-1 means "no live app
+         injected — this TraceThread is either a plain kernel pthread or
+         has only a trace-file app reader." */
+      void setInjectedAppId(app_id_t id) { m_injected_app_id = id; }
+      app_id_t getInjectedAppId() const { return m_injected_app_id; }
+
+      void setIsKernelPthread(bool v) { m_is_kernel_pthread = v; }
+      bool isKernelPthread() const { return m_is_kernel_pthread; }
+
+      /* Stage 3 (Apr 18 2026): which pool id the TraceThread is currently
+         running.  Updated by the SimContextSwitchTo handler. */
+      void setRunningAppTid(uint64_t atid) {
+         m_running_app_tid = atid;
+         m_instrs_this_quantum = 0;
+      }
+      uint64_t getRunningAppTid() const { return m_running_app_tid; }
+
+      /* Stage 4 (Apr 18 2026): app-thread EOF transition.
+         Called from the mimicos run-func when the currently-scheduled
+         app reader returns EOF and is not replayable (a live app has
+         exited).  Posts a thread_exit event to this core's kernel,
+         unregisters the atid from AppReaderPool, clears
+         m_running_app_tid, swaps current_reader back to kernel_reader,
+         and sends a response-after-context-switch to wake the kernel
+         pthread.  Caller should `continue` the outer while-loop so the
+         next Read comes from the kernel pipe — the kernel will process
+         thread_exit (popping the runqueue) and decide what to schedule
+         next (if anything).  If the runqueue has more work, the kernel
+         issues SimContextSwitchTo and we flip back to app mode; if not,
+         this TraceThread stays in kernel mode indefinitely (or until
+         a new_thread event arrives from another core, or simulation
+         shutdown). */
+      void notifyAppExitAndSwitchToKernel();
+
+      /* Stage 3 (Apr 18 2026): quantum expired — yield back to the kernel.
+         Saves current app (inst,next_inst) to the pool so the next
+         SimContextSwitchTo to the same id resumes correctly, posts a
+         "quantum_expired" event to this core's kernel message slot,
+         switches current_reader to kernel_reader, and sends a response-
+         after-context-switch to unblock the PIN-side kernel Writer.
+         Caller must `continue` the outer loop after invoking this so the
+         next Read is from the kernel pipe. */
+      void preemptToKernel(const Sift::Instruction& inst_app,
+                           const Sift::Instruction& next_inst_app);
+
+      /* Stage 3 (Apr 18 2026): setter for resumption-after-preemption.
+         SimContextSwitchTo handler uses this to restore a previously-
+         preempted thread's (inst, next_inst) pair onto the to-be-replayed
+         slots, so the mimicos run-func's existing fault-replay branch
+         picks them up on the next iteration. */
+      void setToBeReplayed(const Sift::Instruction& inst,
+                           const Sift::Instruction& next_inst) {
+         to_be_replayed_inst      = inst;
+         to_be_replayed_next_inst = next_inst;
+      }
+
+      /* Called when the app reader returns EOF.  If the app is a replayable
+         trace (m_app_trace_path non-empty), opens a new Reader on the same
+         file, installs it as the app reader, and returns true.  Otherwise
+         returns false (caller should exit the loop). */
+      bool tryReplayAppReader();
+
+      /* Convenience for mimicos run-func: on EOF of app reader, replay
+         and read the (inst, next_inst) pair from the start of the trace.
+         Returns false if not replayable or if the fresh Reader fails. */
+      bool replayAndReadPair(Sift::Instruction &inst, Sift::Instruction &next_inst);
 };
 
 #endif // __TRACE_THREAD_H
