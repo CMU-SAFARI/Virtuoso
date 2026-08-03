@@ -88,12 +88,16 @@ the trace-lists into `experiments/vm_tlist/` for you.
 
 | suite           | what it measures                                                        | configs | output |
 |-----------------|-------------------------------------------------------------------------|--------:|--------|
-| `revelator`     | Revelator (4KB) vs ReserveTHP floor, SpOT, SpecTLB, ASAP, and the ceilings |       9 | `revelator.pdf` |
+| `revelator`     | Revelator (4KB) vs ReserveTHP floor, SpecTLB, ASAP, and the ceilings       |       8 | `revelator.pdf` |
 | `revelator_thp` | Revelator-THP vs the floor, ASAP, 4KB Revelator, and the ceilings          |       7 | `revelator_thp.pdf` |
 | `utilsweep`     | both variants as memory fills (0% → 80% occupied)                          |    16\* | `utilsweep.pdf` |
 | `multicore`     | 4-core Revelator vs the ReserveTHP baseline, top-250 mixes                 |       2 | `multicore.pdf` |
 
 \* one baseline + three variants × five occupancy points.
+
+**SpOT is not in the default comparison** — it needs per-trace VMA data that the
+public trace bundle does not carry for every workload. See
+[Why SpOT is left out](#why-spot-is-left-out) below.
 
 Job count is `configs × traces` (single-core, 300 M instructions each) and
 `configs × mixes` (multicore, 50 M/core). The trace suite is `top250`, so expect
@@ -164,7 +168,7 @@ The shape to look for, in each suite:
 
 | suite | what should hold |
 |-------|------------------|
-| `revelator` | Revelator beats the ReserveTHP floor and the prior speculative designs (SpOT, SpecTLB, ASAP). 3 hashes ≥ 1 hash. Both stay **below** `Revelator (oracle)`, which stays below `Oracle spec.` and `No translation` — those three are upper bounds, and a design beating its own oracle means a broken run, not a good result. |
+| `revelator` | Revelator beats the ReserveTHP floor and the prior speculative designs (SpecTLB, ASAP). 3 hashes ≥ 1 hash. Both stay **below** `Revelator (oracle)`, which stays below `Oracle spec.` and `No translation` — those three are upper bounds, and a design beating its own oracle means a broken run, not a good result. |
 | `revelator_thp` | Revelator-THP beats both the floor and 4KB Revelator, since huge pages cut the number of translations the hash has to get right. Same ceilings apply. |
 | `utilsweep` | The win is largest at 0% occupancy and decays monotonically as memory fills — that decay *is* the result. More hashes should decay more gracefully, since the allocator has more placements to choose from. |
 | `multicore` | Revelator's 4-core speedup should be at least its single-core one; translation pressure grows with core count. STP, aggIPC and HM-IPC should agree to within a point or two — a large gap between them means the mixes are badly unbalanced. |
@@ -174,6 +178,86 @@ The multicore parser uses the **equal-work per-core heartbeat** method rather th
 past the stop point and systematically flatters whichever config finishes its cores
 most unevenly. `--target auto` picks the largest instruction count every run in the
 suite actually reached, so a short `--icount` run still parses.
+
+---
+
+## Why SpOT is left out
+
+SpOT (Alverti et al., ISCA '20) is the natural third prior-art comparison
+alongside SpecTLB and ASAP, and the repo implements it — but it is **not** in the
+`revelator` suite, because it cannot be run honestly across this trace set.
+
+SpOT speculates from *physical contiguity*: it allocates each virtual memory area
+as one contiguous physical range, then predicts a translation as
+`VMA base + offset`. That requires knowing the workload's VMA layout. The
+simulator looks for it in three places, in order:
+
+1. `<trace>.vma` — the plain hex-range format
+2. `<trace>.vma.json` — `vma_infer` output sitting next to the trace
+3. `<vma_json_dir>/<trace-stem>.vma.json` — a central directory, set with
+   `--perf_model/mimicos_host/vma_json_dir`
+
+**Not every trace in the public bundle ships one.** Traces recorded without VMA
+capture have no layout to recover, and inferring one after the fact (`vma_infer`)
+is a reconstruction, not ground truth.
+
+The reason this matters more than a missing data point: **SpOT does not fail when
+the VMA is absent.** `ApplicationContext` prints a warning to stderr and the
+allocator falls back to plain buddy allocation, one page at a time:
+
+```cpp
+// include/memory_management/physical_memory_allocators/spot.h
+// No VMA found for this address — fall back to buddy allocation
+if (vma_index == -1)
+{
+    final_ppn = buddy_allocator->allocate(4096);
+    return make_pair(final_ppn, 12);
+}
+```
+
+The simulation completes, writes a valid `sim.stats`, and passes the harness's
+completion check — so the suite would report a **buddy-allocator baseline under
+SpOT's name**, silently, for whichever fraction of the workloads lacked VMAs. A
+number that looks plausible and means something else is worse than no number, so
+the row is omitted rather than qualified in a footnote.
+
+### Running it anyway
+
+If your traces do have VMA data, re-enable it in two places — they must stay in
+sync:
+
+1. `experiments/clist_revelator.yaml` — uncomment `rev-spot` under
+   `revelator_headtohead`
+2. `experiments/ae/parse/parse_revelator.py` — uncomment the `("SpOT", "rev-spot")`
+   row in `ORDER["base"]`
+
+Then confirm the VMAs are actually being read, rather than trusting the run:
+
+```bash
+# before launching: how many traces have a VMA sidecar at all?
+ls ae_bundle/traces/*.vma ae_bundle/traces/*.vma.json 2>/dev/null | wc -l
+ls ae_bundle/traces/*.sift ae_bundle/traces/*.champsim.gz 2>/dev/null | wc -l
+```
+
+The loader prints `[ApplicationContext] Parsed N VMAs …` on success and
+`[ApplicationContext] WARNING: No VMA source found for trace: …` on failure. Where
+that lands depends on the mode:
+
+```bash
+# SLURM mode — the generated jobfile redirects per run dir
+grep -h "Parsed .* VMAs"    experiments/exp_ae_revelator/results/rev-spot_*/slurm.out | head
+grep -l "No VMA source found" experiments/exp_ae_revelator/results/rev-spot_*/slurm.err
+
+# local mode — ae_run_all discards job output (>/dev/null), so run one by hand:
+cd simulator/sniper
+./run-sniper -c config/address_translation_schemes/spot.cfg \
+             --traces=/path/to/one.sift -d /tmp/spotcheck 2>&1 | grep ApplicationContext
+```
+
+A run whose log carries `WARNING: No VMA source found` is a buddy baseline,
+whatever the config is called. The same caveat applies to the `spot` entry in the
+framework's `smoke-test-allocators` suite on `main`: that suite checks SpOT
+*runs*, not that it ran as SpOT.
 
 ---
 

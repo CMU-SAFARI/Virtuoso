@@ -44,10 +44,27 @@ configs:
       - "--perf_model/reserve_thp/target_fragmentation=0.0"
     description: "Floor: 4-level radix + ReserveTHP, no speculation"
 
+  # ------------------------------------------------------------------
+  # OPT-IN — not in any suite below. See the note in experiments/ae/README.md.
+  #
+  # SpOT allocates each VMA as one contiguous physical range, so it needs the
+  # trace's VMA layout. The simulator looks for <trace>.vma, <trace>.vma.json,
+  # or perf_model/mimicos_host/vma_json_dir. Not every trace in the public
+  # bundle ships one, and when the lookup fails SpOT does NOT abort: it falls
+  # back to plain buddy allocation per page (spot.h, "No VMA found for this
+  # address"). The run finishes, sim.stats is valid, and the row is a buddy
+  # baseline wearing SpOT's name — so it is left out of the default comparison
+  # rather than quietly reported.
+  #
+  # To include it, add `rev-spot` back to revelator_headtohead below and
+  # uncomment the matching line in experiments/ae/parse/parse_revelator.py.
+  # First confirm your traces have VMAs:
+  #     ls <trace>.vma <trace>.vma.json 2>/dev/null
+  # and check the run log for "[ApplicationContext] Parsed N VMAs".
   rev-spot:
     name: "rev-spot"
     file: "spot.cfg"
-    description: "Prior art: SpOT — offset-based speculation from physical contiguity"
+    description: "Prior art: SpOT — offset-based speculation from physical contiguity (needs per-trace VMAs)"
 
   rev-spectlb:
     name: "rev-spectlb"
@@ -152,7 +169,7 @@ experiment_suites:
     description: "Revelator (4KB) vs ReserveTHP floor, prior speculative designs, and the ceilings"
     configs:
       - rev-baseline
-      - rev-spot
+      # - rev-spot        # opt-in: needs per-trace VMAs, see the note above
       - rev-spectlb
       - rev-asap
       - rev-revelator

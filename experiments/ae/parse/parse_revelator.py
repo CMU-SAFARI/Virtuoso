@@ -15,7 +15,10 @@ from _common import load, gm
 # (display name, config name in clist_revelator.yaml)
 ORDER = {
     "base": [("ReserveTHP (baseline)", "rev-baseline"),
-             ("SpOT",                  "rev-spot"),
+             # SpOT is opt-in: it silently degrades to buddy allocation on traces
+             # with no VMA file, so it is not in the default suite. Re-enable here
+             # AND in clist_revelator.yaml together. See experiments/ae/README.md.
+             # ("SpOT",                "rev-spot"),
              ("SpecTLB",               "rev-spectlb"),
              ("ASAP",                  "rev-asap"),
              ("Revelator (1 hash)",    "rev-revelator"),
