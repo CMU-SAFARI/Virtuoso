@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Revelator — translation you can compute | Virtuoso</title>
+  <meta name="description" content="How Revelator works: hash-based speculative address translation. The allocator places each page where a hash of its virtual address says, and the MMU replays that hash to guess the frame while the page walk runs. A code walkthrough in the Virtuoso / Sniper + MimicOS simulator.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" href="img/favicon.ico">
+  <style>
+    :root{
+      --primary-color:#475569; --secondary-color:#f1f5f9; --text-color:#333;
+      --heading-color:#1a1a1a; --border-color:#e0e0e0; --white-color:#fff;
+      --badge-bg:#e2e8f0; --accent-color:#64748b;
+      --shadow:0 4px 12px rgba(0,0,0,0.08);
+      /* code (dark block) syntax tones */
+      --c-com:#8592a3; --c-kw:#9ec1e6; --c-typ:#b8cbe0; --c-lit:#a6cf9f;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth;font-size:16px}
+    body{font-family:'Poppins',sans-serif;margin:0;padding:0;background:var(--secondary-color);color:var(--text-color);line-height:1.7}
+    .container{max-width:960px;margin:0 auto;padding:0 1rem}
+    h1,h2,h3,h4{font-weight:700;color:var(--heading-color);line-height:1.2;margin-top:0}
+    h2{font-size:2rem;border-bottom:2px solid var(--primary-color);padding-bottom:.5rem;margin-bottom:2rem}
+    h3{font-size:1.25rem;color:var(--primary-color)}
+    p{margin:0 0 1rem}
+    a{color:var(--primary-color);text-decoration:none;transition:color .2s}
+    a:hover{text-decoration:underline}
+    code{font-family:'Courier New',Courier,monospace}
+    p code,li code,td code{background:var(--badge-bg);color:var(--primary-color);padding:.08em .4em;border-radius:5px;font-size:.86em;white-space:nowrap}
+
+    /* header / nav — matches the landing */
+    .site-header{background:var(--white-color);padding:1rem 0;position:sticky;top:0;z-index:1000;box-shadow:0 2px 8px rgba(0,0,0,.05);border-bottom:1px solid var(--border-color)}
+    .nav-container{display:flex;justify-content:space-between;align-items:center;max-width:960px;margin:0 auto;padding:0 1rem}
+    .nav-logo{font-weight:700;font-size:1.2rem;color:var(--heading-color)}
+    .nav-logo:hover{text-decoration:none}
+    .main-nav ul{margin:0;padding:0;list-style:none;display:flex;gap:1.5rem}
+    .main-nav a{font-weight:600;font-size:.95rem;position:relative}
+    .main-nav a::after{content:'';position:absolute;bottom:-3px;left:0;width:0;height:2px;background:var(--primary-color);border-radius:1px;transition:width .3s ease}
+    .main-nav a:hover::after{width:100%}
+    .main-nav a:hover{text-decoration:none}
+    .main-nav a.active{color:var(--primary-color)}
+    .main-nav a.active::after{width:100%}
+
+    /* hero */
+    .hero{background:#fff;padding:4rem 1rem 3rem;text-align:center;position:relative;overflow:hidden;border-bottom:1px solid var(--border-color)}
+    .hero::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle at 30% 40%,rgba(71,85,105,.03) 0%,transparent 50%),radial-gradient(circle at 70% 60%,rgba(100,116,139,.04) 0%,transparent 50%);pointer-events:none}
+    .hero .eyebrow{font-size:.78rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-color);font-weight:700;margin-bottom:.6rem}
+    .hero h1{font-size:2.9rem;margin-bottom:.4rem}
+    .hero .subtitle{font-size:1.3rem;font-weight:600;color:var(--primary-color);margin-bottom:.9rem}
+    .hero .desc{font-size:.98rem;color:#555;max-width:640px;margin:0 auto 1.5rem;line-height:1.65}
+    .hero .desc b{color:var(--heading-color)}
+    .cta-row{display:flex;gap:.8rem;justify-content:center;flex-wrap:wrap}
+    .btn{display:inline-block;padding:.7rem 1.4rem;border-radius:10px;border:1px solid var(--primary-color);background:var(--primary-color);color:#fff;font-weight:700;font-family:inherit;font-size:.95rem;transition:filter .2s,transform .2s}
+    .btn:hover{filter:brightness(.92);text-decoration:none;transform:translateY(-1px)}
+    .btn-outline{background:#fff;color:var(--primary-color)}
+    .tags{margin-top:1.4rem;display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap;font-family:'Courier New',monospace;font-size:.75rem}
+    .tag{border:1px solid var(--border-color);border-radius:999px;padding:.28rem .7rem;color:#555;background:var(--white-color)}
+    .tag b{color:var(--primary-color)}
+
+    section.block{padding:3rem 0}
+    .lead{color:#444;max-width:760px}
+    .kicker{font-family:'Courier New',monospace;font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-color);margin:0 0 .8rem;font-weight:700}
+
+    /* schematic */
+    figure.diagram{margin:2rem 0 0;padding:1.4rem 1.1rem;background:var(--white-color);border:1px solid var(--border-color);border-radius:12px;box-shadow:var(--shadow);overflow-x:auto}
+    figure.diagram svg{display:block;width:100%;min-width:580px;height:auto}
+    figure.diagram svg text{font-family:'Courier New',monospace}
+    figure.diagram figcaption{font-size:.8rem;color:#667085;margin-top:.9rem;text-align:center}
+    .dg-box{fill:var(--secondary-color);stroke:var(--border-color)}
+    .dg-pte{fill:var(--white-color);stroke:var(--primary-color)}
+    .dg-slot{fill:var(--badge-bg);stroke:var(--border-color)}
+    .dg-cell{fill:var(--white-color);stroke:var(--border-color)}
+    .dg-pred{fill:var(--white-color);stroke:var(--primary-color);stroke-dasharray:4 3}
+    .dg-arw{stroke:#94a3b8;stroke-width:1.6;fill:none}
+    .dg-carw{stroke:var(--primary-color);stroke-width:1.8;fill:none}
+    .dg-mk{fill:var(--primary-color)}
+    .t-mut{fill:#64748b}.t-txt{fill:var(--heading-color)}.t-pri{fill:var(--primary-color)}.t-faint{fill:#94a3b8}
+    /* figure step-through */
+    .pf-stage{transition:opacity .45s ease,filter .45s ease}
+    figure.diagram.stepped .pf-stage{opacity:.16}
+    figure.diagram.stepped .pf-stage.on{opacity:1}
+    figure.diagram.stepped .pf-stage.current .dg-box,
+    figure.diagram.stepped .pf-stage.current .dg-pte,
+    figure.diagram.stepped .pf-stage.current .dg-pred{filter:drop-shadow(0 0 4px rgba(71,85,105,.45))}
+    .pf-arw{stroke-dasharray:200}
+    @keyframes pfDraw{from{stroke-dashoffset:200}to{stroke-dashoffset:0}}
+    @keyframes pfFlash{0%,100%{fill:var(--badge-bg)}45%{fill:var(--primary-color)}}
+    figure.diagram.stepped .pf-stage.current .pf-arw{animation:pfDraw .55s ease both}
+    figure.diagram.stepped .pf-stage.current .dg-slot{animation:pfFlash .5s ease}
+    .pf-controls{display:flex;align-items:center;justify-content:center;gap:1rem;margin-top:1.2rem}
+    .pf-nav{font-size:.9rem;padding:.5rem 1.15rem}
+    .pf-ind{font-family:'Courier New',monospace;font-size:.8rem;color:var(--accent-color);min-width:66px;text-align:center}
+    .pf-explain{max-width:640px;margin:1rem auto 0;background:var(--white-color);border:1px solid var(--border-color);border-left:4px solid var(--primary-color);border-radius:0 8px 8px 0;padding:.9rem 1.1rem;box-shadow:var(--shadow);font-size:.92rem;text-align:left;line-height:1.6;min-height:3.4em}
+    .pf-explain b{color:var(--primary-color)}
+    .pf-nav:disabled{opacity:.38;cursor:default;transform:none!important;filter:none!important}
+    /* reading progress — scaleX only (compositor-friendly, no layout work) */
+    .progress{position:fixed;top:0;left:0;height:3px;width:100%;z-index:2000;background:linear-gradient(90deg,var(--primary-color),var(--accent-color));transform:scaleX(0);transform-origin:left;will-change:transform}
+    /* snippet copy button */
+    .cap-copy{margin-left:.8rem;background:none;border:1px solid var(--border-color);color:#667085;border-radius:6px;padding:.12rem .55rem;font-family:'Poppins',sans-serif;font-size:.68rem;font-weight:600;cursor:pointer;transition:color .2s,border-color .2s}
+    .cap-copy:hover{color:var(--primary-color);border-color:var(--primary-color)}
+    .cap-copy.copied{color:#4d7d69;border-color:#4d7d6966}
+    @media (prefers-reduced-motion:reduce){.pf-stage{transition-duration:.01s}figure.diagram.stepped .pf-stage.current .pf-arw,figure.diagram.stepped .pf-stage.current .dg-slot{animation:none}}
+
+    /* code map + tables */
+    .tblwrap{overflow-x:auto}
+    table.tbl{width:100%;border-collapse:collapse;font-size:.9rem;margin-top:.4rem;background:var(--white-color);border:1px solid var(--border-color);border-radius:10px;overflow:hidden}
+    table.tbl th,table.tbl td{text-align:left;padding:.7rem .85rem;border-bottom:1px solid var(--border-color);vertical-align:top}
+    table.tbl tr:last-child td{border-bottom:none}
+    table.tbl th{background:var(--secondary-color);font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--primary-color);font-weight:700}
+    table.tbl td.f,table.tbl td.k{font-family:'Courier New',monospace;color:var(--primary-color);white-space:nowrap;font-size:.84rem}
+    table.tbl td.v{font-family:'Courier New',monospace;color:var(--heading-color);white-space:nowrap;font-size:.84rem}
+    table.tbl td.d{color:#555}
+
+    /* stages */
+    .stages{position:relative;margin-top:1rem}
+    .stages::before{content:'';position:absolute;left:16px;top:8px;bottom:8px;width:2px;background:linear-gradient(var(--primary-color),var(--accent-color));opacity:.35}
+    .stage{position:relative;padding:0 0 2.5rem 54px}
+    .stage:last-child{padding-bottom:.3rem}
+    .stage .node{position:absolute;left:0;top:-2px;width:34px;height:34px;border-radius:50%;background:var(--white-color);border:2px solid var(--primary-color);color:var(--primary-color);display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;font-weight:700;box-shadow:var(--shadow)}
+    .stage h3{font-size:1.2rem;margin:.2rem 0 .5rem;color:var(--heading-color)}
+    .stage p.sub{color:#667085;font-size:.94rem}
+
+    /* code figure — dark block in the site's .code-block style */
+    figure.code{margin:1rem 0;border-radius:8px;overflow:hidden;border:1px solid var(--border-color);box-shadow:var(--shadow)}
+    figure.code .cap{display:flex;align-items:center;gap:.5rem;padding:.5rem .9rem;background:var(--secondary-color);border-bottom:1px solid var(--border-color);font-family:'Courier New',monospace;font-size:.74rem;color:#667085}
+    figure.code .cap .dot{width:8px;height:8px;border-radius:50%;background:var(--primary-color);flex:none}
+    figure.code .cap .path{color:var(--heading-color);font-weight:600}
+    figure.code .cap .ln{margin-left:auto;color:#94a3b8}
+    figure.code pre{margin:0;background:var(--heading-color);color:#e2e8f0;padding:1rem 1.2rem;overflow-x:auto;font-family:'Courier New',Courier,monospace;font-size:.82rem;line-height:1.65}
+    figure.code code{font-family:inherit;white-space:pre;background:none;color:inherit;padding:0}
+    .c-com{color:var(--c-com);font-style:italic}.c-kw{color:var(--c-kw)}.c-typ{color:var(--c-typ)}.c-lit{color:var(--c-lit)}
+
+    .note{border-left:4px solid var(--primary-color);background:var(--white-color);padding:.9rem 1.1rem;border-radius:0 8px 8px 0;margin:1.1rem 0;font-size:.94rem;box-shadow:var(--shadow)}
+    .note b{color:var(--primary-color)}
+
+    .compare{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem}
+    .cc{background:var(--white-color);border:1px solid var(--border-color);border-radius:10px;padding:1.1rem;box-shadow:var(--shadow)}
+    .cc .h{font-family:'Courier New',monospace;font-size:.72rem;letter-spacing:.04em;color:var(--primary-color);text-transform:uppercase;font-weight:700}
+    .cc h3{font-size:1.05rem;margin:.35rem 0 .5rem;color:var(--heading-color)}
+    .cc p{margin:0;color:#555;font-size:.92rem}
+    @media (max-width:640px){.compare{grid-template-columns:1fr}}
+
+    .site-footer{background:var(--heading-color);color:var(--secondary-color);text-align:center;padding:2rem 1rem;font-size:.9rem;margin-top:2rem}
+    .site-footer p{margin:.3rem 0}
+    .site-footer a{color:var(--white-color)}
+    .footer-links{display:flex;gap:1.5rem;justify-content:center;margin-bottom:.5rem}
+    .back-to-top{position:fixed;bottom:2rem;right:2rem;width:44px;height:44px;border-radius:50%;background:var(--primary-color);color:#fff;border:none;font-size:1.2rem;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2);opacity:0;visibility:hidden;transition:opacity .3s,visibility .3s,transform .3s;z-index:999;display:flex;align-items:center;justify-content:center}
+    .back-to-top.show{opacity:1;visibility:visible}
+    .fade-in{opacity:0;transform:translateY(14px);transition:opacity .6s ease,transform .6s ease}
+    .fade-in.visible{opacity:1;transform:none}
+    @media (max-width:600px){.nav-container{flex-direction:column;gap:.5rem}.main-nav ul{gap:.75rem;flex-wrap:wrap;justify-content:center;font-size:.85rem}.hero h1{font-size:2.1rem}}
+    @media (prefers-reduced-motion:reduce){.fade-in{opacity:1;transform:none;transition:none}*{scroll-behavior:auto}}
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="nav-container">
+      <a class="nav-logo" href="index.html">Virtuoso</a>
+      <nav class="main-nav">
+        <ul>
+          <li><a href="index.html#features">Features</a></li>
+          <li><a href="index.html#components">Components</a></li>
+          <li><a href="index.html#workshop">Workshop</a></li>
+          <li><a href="trail.html">TRAIL</a></li>
+          <li><a href="revelator.html" class="active">Revelator</a></li>
+          <li><a href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container">
+        <p class="eyebrow">Code walkthrough</p>
+        <h1>Translation you can compute,<br>then check</h1>
+        <p class="subtitle">Revelator</p>
+        <p class="desc">Revelator makes the physical frame a <b>function of the virtual address</b>. The
+          allocator places each page where a hash says it belongs; the MMU replays the same hash to guess
+          the frame and starts fetching the data <b>while the page walk is still running</b>. The walk stays
+          the arbiter &mdash; it just no longer sits on the critical path.</p>
+        <div class="cta-row">
+          <a class="btn" href="https://github.com/CMU-SAFARI/Virtuoso/tree/revelator-artifact-release/experiments/ae" target="_blank" rel="noopener">Artifact &amp; reproduce</a>
+          <a class="btn btn-outline" href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener">Source on GitHub</a>
+        </div>
+        <div class="tags">
+          <span class="tag">class <b>Revelator</b></span>
+          <span class="tag">engine key <b>revelator</b></span>
+          <span class="tag">allocator <b>revelator</b></span>
+          <span class="tag">Kanellopoulos et&nbsp;al., <b>ISCA&nbsp;'26</b></span>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 600 240" role="img" aria-label="A page fault hashes the virtual address to pick a physical frame. Later, a TLB miss starts a page walk while the MMU replays the same hash to prefetch the frame; the two are compared.">
+            <defs>
+              <marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path class="dg-mk" d="M0 0 L10 5 L0 10 z"/>
+              </marker>
+            </defs>
+
+            <!-- lane label -->
+            <text class="t-faint" x="6" y="12" font-size="9">1. page fault &#8212; placement</text>
+
+            <g class="pf-stage" data-i="0">
+              <rect class="dg-box" x="6" y="22" width="92" height="44" rx="8"/>
+              <text class="t-mut" x="52" y="42" text-anchor="middle" font-size="11">page fault</text>
+              <text class="t-txt" x="52" y="58" text-anchor="middle" font-size="12">VA</text>
+              <line class="dg-arw pf-arw" x1="102" y1="44" x2="140" y2="44" marker-end="url(#arw)"/>
+              <text class="t-faint" x="121" y="36" text-anchor="middle" font-size="9">hash</text>
+            </g>
+
+            <g class="pf-stage" data-i="1">
+              <rect class="dg-pte" x="146" y="20" width="120" height="48" rx="9"/>
+              <text class="t-pri" x="206" y="14" text-anchor="middle" font-size="9.5">CityHash64 % N</text>
+              <g class="t-txt" font-size="10" text-anchor="middle">
+                <rect class="dg-slot" x="154" y="32" width="32" height="26" rx="5"/><text x="170" y="49">h1</text>
+                <rect class="dg-slot" x="190" y="32" width="32" height="26" rx="5"/><text x="206" y="49">h2</text>
+                <rect class="dg-slot" x="226" y="32" width="32" height="26" rx="5"/><text x="242" y="49">h3</text>
+              </g>
+              <line class="dg-carw pf-arw" x1="270" y1="44" x2="306" y2="44" marker-end="url(#arw)"/>
+              <rect class="dg-box" x="310" y="18" width="284" height="52" rx="8"/>
+              <text class="t-mut" x="452" y="12" text-anchor="middle" font-size="9">physical memory</text>
+              <g>
+                <rect class="dg-cell" x="318" y="32" width="28" height="26" rx="4"/>
+                <rect class="dg-cell" x="352" y="32" width="28" height="26" rx="4"/>
+                <rect class="dg-cell" x="386" y="32" width="28" height="26" rx="4"/>
+                <rect class="dg-slot" x="420" y="32" width="28" height="26" rx="4"/>
+                <rect class="dg-cell" x="454" y="32" width="28" height="26" rx="4"/>
+                <rect class="dg-cell" x="488" y="32" width="28" height="26" rx="4"/>
+                <rect class="dg-cell" x="522" y="32" width="28" height="26" rx="4"/>
+                <rect class="dg-cell" x="556" y="32" width="28" height="26" rx="4"/>
+              </g>
+              <text class="t-pri" x="434" y="84" text-anchor="middle" font-size="9">frame = h(VA), not wherever was convenient</text>
+            </g>
+
+            <text class="t-faint" x="6" y="112" font-size="9">2. later access &#8212; the guess races the walk</text>
+
+            <g class="pf-stage" data-i="2">
+              <rect class="dg-box" x="6" y="152" width="92" height="44" rx="8"/>
+              <text class="t-mut" x="52" y="172" text-anchor="middle" font-size="11">TLB miss</text>
+              <text class="t-txt" x="52" y="188" text-anchor="middle" font-size="12">VA</text>
+              <line class="dg-arw pf-arw" x1="102" y1="182" x2="140" y2="200" marker-end="url(#arw)"/>
+              <rect class="dg-box" x="146" y="180" width="132" height="40" rx="8"/>
+              <text class="t-mut" x="212" y="199" text-anchor="middle" font-size="10.5">page-table walk</text>
+              <text class="t-txt" x="212" y="213" text-anchor="middle" font-size="10">&#8594; true frame</text>
+            </g>
+
+            <g class="pf-stage" data-i="3">
+              <line class="dg-carw pf-arw" x1="102" y1="166" x2="140" y2="146" marker-end="url(#arw)"/>
+              <rect class="dg-pte" x="146" y="122" width="132" height="46" rx="9"/>
+              <text class="t-pri" x="212" y="141" text-anchor="middle" font-size="10.5">replay the hash</text>
+              <text class="t-txt" x="212" y="156" text-anchor="middle" font-size="10">&#8594; k candidates</text>
+              <line class="dg-carw pf-arw" x1="282" y1="145" x2="330" y2="145" marker-end="url(#arw)"/>
+              <rect class="dg-pred" x="334" y="122" width="122" height="46" rx="8"/>
+              <text class="t-txt" x="395" y="141" text-anchor="middle" font-size="10.5">prefetch guess</text>
+              <text class="t-faint" x="395" y="156" text-anchor="middle" font-size="9">into L2</text>
+            </g>
+
+            <g class="pf-stage" data-i="4">
+              <line class="dg-carw pf-arw" x1="460" y1="145" x2="486" y2="158" marker-end="url(#arw)"/>
+              <line class="dg-arw pf-arw" x1="282" y1="200" x2="486" y2="184" marker-end="url(#arw)"/>
+              <rect class="dg-pte" x="490" y="146" width="104" height="48" rx="9"/>
+              <text class="t-pri" x="542" y="166" text-anchor="middle" font-size="11">guess = true?</text>
+              <text class="t-faint" x="542" y="181" text-anchor="middle" font-size="9">hit / discard</text>
+              <text class="t-pri" x="300" y="234" text-anchor="middle" font-size="9.5">the guess races the walk &#8212; the walk always decides</text>
+            </g>
+          </svg>
+          <figcaption>Placement is a hash of the virtual address, so the frame can be recomputed on demand and validated against the walk.</figcaption>
+          <div class="pf-controls">
+            <button class="btn btn-outline pf-nav" id="pfPrev" type="button">&#8249;&nbsp;Back</button>
+            <span class="pf-ind" id="pfInd">1 / 5</span>
+            <button class="btn pf-nav" id="pfNext" type="button">Next&nbsp;&#8250;</button>
+          </div>
+          <div class="pf-explain" id="pfExplain"></div>
+        </figure>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="container fade-in">
+        <p class="kicker">Orientation</p>
+        <h2>Where the code lives</h2>
+        <p class="lead">Revelator is two halves that have to agree: an allocator inside MimicOS and a
+          speculation engine inside the MMU. Everything else &mdash; the page walk, the caches, the TLBs
+          &mdash; is stock Virtuoso.</p>
+        <div class="tblwrap">
+          <table class="tbl">
+            <thead><tr><th>File</th><th>Role</th></tr></thead>
+            <tbody>
+              <tr><td class="f">spec_engine_designs/revelator.{h,cc}</td><td class="d">the engine &mdash; <code>predict()</code> and <code>invokeSpecEngine()</code></td></tr>
+              <tr><td class="f">physical_memory_allocators/revelator.h</td><td class="d">the allocator &mdash; <code>allocate()</code> places a page at its hash</td></tr>
+              <tr><td class="f">policies/revelator_policy.h</td><td class="d">the Sniper-side policy: when to swap a victim out to make room</td></tr>
+              <tr><td class="f">exception_handling/revelator_exception_handler.{h,cc}</td><td class="d">routes page faults through the hash-based placement path</td></tr>
+              <tr><td class="f">spec_engine_designs/spec_engine_factory.h</td><td class="d">config &rarr; object; dispatch on <code>"revelator"</code></td></tr>
+              <tr><td class="f">mmu_designs/mmu_spec.cc</td><td class="d">calls the engine after the walk and scores the race</td></tr>
+              <tr><td class="f">spec_engine_configs/spec_engine_revelator.cfg</td><td class="d">the knobs (hashes, predictions, memory size, filters)</td></tr>
+              <tr><td class="f">address_translation_schemes/revelator.cfg</td><td class="d">the assembled scheme: allocator + engine + radix + swap</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" style="background:var(--white-color);border-top:1px solid var(--border-color);border-bottom:1px solid var(--border-color)">
+      <div class="container fade-in">
+        <p class="kicker">The mechanism &middot; place &rarr; predict &rarr; race &rarr; validate</p>
+        <h2>The implementation, stage by stage</h2>
+        <div class="stages">
+
+          <article class="stage">
+            <div class="node">1</div>
+            <h3>Placement: the allocator obeys the hash</h3>
+            <p>On a page fault the allocator computes <em>k</em> candidate frames from the faulting address
+              and takes the first one that is free. It does not look for a convenient frame &mdash; the frame
+              is dictated by the hash, and the index it lands on <b>is</b> the physical page number, shifted
+              past the kernel's reserved region.</p>
+            <script type="text/plain" class="snip" data-path="physical_memory_allocators/revelator.h" data-ln="allocate() &middot; hash placement">
+UInt64 to_hash  = (is_pagetable_allocation) ? address >> 21 : address >> 12;
+
+for (int i = 1; i <= number_of_hashes; i++)
+{
+    hash_stats.tries[i-1]++;
+    hash = hashFunction(i * to_hash, m_total_pages);
+    auto &entry = memory_allocations[hash];
+
+    if (entry.is_free && !entry.is_poisoned)
+    {
+        entry.address = address;
+        entry.is_free = false;
+        entry.app_id  = app_id;
+        entry.is_pagetable_allocation = is_pagetable_allocation;
+
+        UInt64 page_address = (hash + (m_kernel_size * 1024 / 4));
+        number_of_pages_used++;
+        hash_stats.hits[i-1]++;
+        return std::make_pair(page_address, 12);
+    }
+    // ... swap-mode path: evict a victim to reclaim this slot ...
+}
+            </script>
+            <p class="sub">Page-table pages hash on <code>address &gt;&gt; 21</code> rather than
+              <code>&gt;&gt; 12</code>, so a whole 2&nbsp;MB region's PTEs share one hashed frame &mdash;
+              which is what lets the engine speculate on the <em>walk</em> as well as on the data.</p>
+          </article>
+
+          <article class="stage">
+            <div class="node">2</div>
+            <h3>Prediction: the engine replays the same arithmetic</h3>
+            <p>The engine never consults a table. It re-derives the candidates from the virtual address with
+              the identical hash, adds the kernel offset, shifts back to a byte address and re-attaches the
+              page offset.</p>
+            <script type="text/plain" class="snip" data-path="spec_engine_designs/revelator.cc" data-ln="predict()">
+std::vector<IntPtr> predictions;
+UInt64 to_hash = (is_page_table) ? address >> 21 : address >> 12;
+UInt64 offset = (is_page_table) ? ((address >> 12) & 0x1ff) * 8 : address & 0xFFF;
+
+for (int i = 0; i < (number_of_hashes); i++)
+{
+    UInt64 hash = hashFunction(to_hash * (i + 1), m_total_pages);
+    hash = hash + m_kernel_pages;
+    hash = hash << 12;
+    hash = hash + offset;
+    predictions.push_back(hash);
+}
+return predictions;
+            </script>
+            <p>Both halves call the same one-liner, so the two sides cannot drift apart by accident:</p>
+            <script type="text/plain" class="snip" data-path="revelator.cc / revelator.h" data-ln="hashFunction() &mdash; identical in engine and allocator">
+UInt64 Revelator::hashFunction(IntPtr address, int table_size)
+{
+    uint64 result = CityHash64((const char *)&address, 8) % table_size;
+    return result;
+}
+            </script>
+            <div class="note"><b>The invariant.</b> The allocator hashes <code>i &middot; to_hash</code> for
+              <code>i = 1&hellip;k</code>; the engine hashes <code>to_hash &middot; (i+1)</code> for
+              <code>i = 0&hellip;k&minus;1</code>. Same multiplier set, same order &mdash; so candidate
+              <em>j</em> means the same frame on both sides. Change one and you must change the other; there
+              is no cross-check at runtime, the predictions just stop landing.</div>
+          </article>
+
+          <article class="stage">
+            <div class="node">3</div>
+            <h3>The race: prefetch the guesses while the walk runs</h3>
+            <p>Each candidate is aligned to a cache line and handed to the L2 controller as an MMU prefetch,
+              tagged <code>PAGE_TABLE_DATA</code> or <code>DATA</code> so it lands in the right MSHR map. The
+              engine records the <em>earliest</em> completion, then upgrades that to the specific completion
+              of whichever candidate turns out to be right.</p>
+            <script type="text/plain" class="snip" data-path="spec_engine_designs/revelator.cc" data-ln="invokeSpecEngine() &middot; issue and score">
+// Prefetch the address while the translation is being performed
+l2_cntlr->handleMMUPrefetch(eip, cache_address, invoke_start_time, spec_block_type);
+
+// Capture prefetch completion time
+SubsecondTime this_prefetch_completion = l2_cntlr->getLastPrefetchCompletion();
+
+// Track the earliest prefetch completion (first hash to arrive)
+if (m_last_spec_completion == SubsecondTime::Zero() || this_prefetch_completion < m_last_spec_completion)
+    m_last_spec_completion = this_prefetch_completion;
+
+if (predictions[k] == physical_address)
+{
+    m_last_prediction_correct = true;
+    // For correct prediction, use its specific completion time
+    m_last_spec_completion = this_prefetch_completion;
+    ...
+}
+            </script>
+            <p class="sub">With <code>k</code> hashes the engine issues up to <code>k</code> prefetches, at
+              most one of which is right &mdash; so more hashes buy placement freedom at the cost of wasted
+              memory traffic. The optional filters exist to spend that traffic more carefully:
+              <code>filter</code> drops candidate <em>j&gt;0</em> when hash <em>j</em> is barely used, or
+              when the modelled DRAM latency for that address already exceeds a per-hash threshold.</p>
+          </article>
+
+          <article class="stage">
+            <div class="node">4</div>
+            <h3>Validation: the walk is still the authority</h3>
+            <p>The MMU calls the engine only <em>after</em> a successful walk, passing the true physical
+              address &mdash; speculation never installs a translation, it only warms the cache. A guess that
+              arrives after the walk already finished bought nothing, and is counted as such.</p>
+            <script type="text/plain" class="snip" data-path="mmu_designs/mmu_spec.cc" data-ln="performPTW() &middot; invoke and score the race">
+IntPtr physical_addr = (ppn_result << 12) | (address & ((1 << page_size) - 1));
+if (!had_page_fault)
+    spec_engine->invokeSpecEngine(address, count, lock, eip, modeled, time_for_pt, physical_addr);
+
+// ---- Track misspeculated prefetches arriving after PTW resolved ----
+if (!had_page_fault && count)
+{
+    SubsecondTime ptw_end_stat = time_for_pt + delay + total_walk_latency;
+    SubsecondTime spec_end_stat = spec_engine->getLastSpecCompletionTime();
+    bool prediction_wrong = !spec_engine->wasLastPredictionCorrect();
+    // Count wrong predictions whose prefetch arrived AFTER the PTW completed
+    if (prediction_wrong && spec_end_stat != SubsecondTime::Zero() && spec_end_stat > ptw_end_stat)
+        translation_stats.spec_late_mispredict++;
+}
+            </script>
+            <p class="sub">A wrong guess therefore costs bandwidth and cache pressure, never correctness.
+              That asymmetry is why the design can afford to be aggressive when memory is empty.</p>
+          </article>
+
+          <article class="stage">
+            <div class="node">5</div>
+            <h3>Degradation: what happens when every hash is taken</h3>
+            <p>This is the part that decides whether the idea holds up. If all <em>k</em> candidate slots are
+              occupied and swapping does not free one, the allocator falls back to a linear scan and puts the
+              page <b>somewhere the hash does not point</b>.</p>
+            <script type="text/plain" class="snip" data-path="physical_memory_allocators/revelator.h" data-ln="allocate() &middot; fallback linear scan">
+// === fallback linear scan ===
+IntPtr index = hash;
+for (UInt64 i = 0; i < memory_allocations.size(); i++)
+{
+    index = (index + 1) % memory_allocations.size();
+    auto &entry = memory_allocations[index];
+
+    if (entry.is_free || entry.is_poisoned)
+    {
+        entry.address = address;
+        entry.is_free = false;
+        ...
+        UInt64 page_address = (index + (m_kernel_size * 1024 / 4));
+        number_of_pages_used++;
+        return std::make_pair(page_address, 12);
+    }
+}
+            </script>
+            <p>That page is now permanently unpredictable: the engine will keep proposing its <em>k</em>
+              hashed frames and keep missing. The fraction of such pages grows with occupancy &mdash; which is
+              why the artifact sweeps <code>target_fragmentation</code> from an empty pool to 80% full rather
+              than reporting a single number. More hashes push the fallback further out; swap mode buys room
+              by evicting a victim instead of giving up on the hash.</p>
+            <div class="note"><b>Read the stats, not just the IPC.</b> <code>hits_per_hash[i]</code> against
+              <code>prefetches_per_hash[i]</code> tells you how much each additional hash actually earns, and
+              <code>spec_late_mispredict</code> how often a guess was both wrong and late. If hash 2 and 3
+              show hits near zero, the extra memory traffic is pure cost.</div>
+          </article>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="container fade-in">
+        <p class="kicker">Variants</p>
+        <h2>Four engines, one idea</h2>
+        <p class="lead">All four are registered in <code>spec_engine_factory.h</code> and selected with
+          <code>[perf_model/mmu/spec] type</code>. Each has a matching allocator, and the pairing is not
+          optional &mdash; see the note below.</p>
+        <div class="compare">
+          <div class="cc">
+            <div class="h">revelator</div>
+            <h3>Base</h3>
+            <p>k independent hashes, first free slot wins. The default is 1 hash, 1 prediction. Pairs with
+              the <code>revelator</code> allocator.</p>
+          </div>
+          <div class="cc">
+            <div class="h">revelator_open_addressing</div>
+            <h3>Open addressing</h3>
+            <p>Linear probing instead of independent hashes, so the fallback becomes part of the scheme
+              rather than a cliff. Pairs with <code>revelator_alloc_open</code>.</p>
+          </div>
+          <div class="cc">
+            <div class="h">revelator_thp</div>
+            <h3>Huge-page aware</h3>
+            <p>Hashes at huge-page granularity, so one correct guess covers 2&nbsp;MB &mdash; fewer
+              translations to get right. Pairs with the <code>revelator_thp</code> allocator.</p>
+          </div>
+          <div class="cc">
+            <div class="h">numa_revelator</div>
+            <h3>Multi-node</h3>
+            <p>Adds per-node placement on top of the hash, so the candidate set respects NUMA locality.
+              Pairs with <code>numa_revelator</code>.</p>
+          </div>
+        </div>
+        <div class="note"><b>The engine checks its partner, and gives up if it is wrong.</b> The base
+          engine's constructor reads the allocator's name and, if it is anything other than
+          <code>revelator</code> or <code>revelator_simple</code>, prints a warning, sets
+          <code>m_disabled</code> and turns every method into a no-op. So &ldquo;Revelator over
+          ReserveTHP&rdquo; does not run a degraded Revelator &mdash; it runs <em>no</em> Revelator, and the
+          results will look exactly like the baseline. Always confirm the scheme pulled in the matching
+          <code>physical_memory_allocators/revelator*.cfg</code>.</div>
+        <script type="text/plain" class="snip" data-path="spec_engine_designs/revelator.cc" data-ln="Revelator::Revelator() &middot; allocator guard">
+String allocator_name = Sim()->getMimicOS()->getMemoryAllocator()->getName();
+if (allocator_name != "revelator" && allocator_name != "revelator_simple")
+{
+    std::cout << "[Revelator] Memory allocator is not revelator or revelator_simple (got: "
+              << allocator_name << ") — engine soft-disabled." << std::endl;
+    m_disabled = true;
+    return;
+}
+        </script>
+      </div>
+    </section>
+
+    <section class="block" style="background:var(--white-color);border-top:1px solid var(--border-color)">
+      <div class="container fade-in">
+        <p class="kicker">Configuration &amp; wiring</p>
+        <h2>What the config sets</h2>
+        <p class="lead">Every knob is read once in the engine constructor from the
+          <code>[perf_model/revelator]</code> section; the allocator reads the same section, which is how the
+          two halves stay consistent. Defaults ship in
+          <code>config/spec_engine_configs/revelator_engine_params.cfg</code>.</p>
+        <div class="tblwrap">
+          <table class="tbl">
+            <thead><tr><th>Key</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td class="k">number_of_hashes</td><td class="v">1</td><td class="d">candidate frames the allocator may use, and the engine will guess</td></tr>
+              <tr><td class="k">number_of_predictions</td><td class="v">1</td><td class="d">how many to actually prefetch (must be &le; hashes &mdash; the engine exits if not)</td></tr>
+              <tr><td class="k">memory_size</td><td class="v">131072</td><td class="d">total memory in MB; with <code>kernel_size</code> it fixes the hash table size</td></tr>
+              <tr><td class="k">kernel_size</td><td class="v">32768</td><td class="d">MB reserved for the kernel &mdash; hashed frames start above it</td></tr>
+              <tr><td class="k">target_fragmentation</td><td class="v">1.0</td><td class="d">1.0 = empty pool, 0.0 = fully occupied. The sensitivity axis</td></tr>
+              <tr><td class="k">type</td><td class="v">0</td><td class="d">0 = data and page-table speculation, 1 = data only, 2 = translation only</td></tr>
+              <tr><td class="k">oracle</td><td class="v">false</td><td class="d">prefetch the true address &mdash; isolates the rest of the design from hash accuracy</td></tr>
+              <tr><td class="k">perfect_filtering</td><td class="v">false</td><td class="d">issue only the correct candidate &mdash; an upper bound on filtering</td></tr>
+              <tr><td class="k">filter</td><td class="v">false</td><td class="d">drop low-yield or too-slow candidates before issuing them</td></tr>
+              <tr><td class="k">hash1_usage_threshold</td><td class="v">0.7</td><td class="d">occupancy at which the allocator stops relying on hash 1 alone</td></tr>
+              <tr><td class="k">enable_aggressive_swapouts</td><td class="v">false</td><td class="d">evict a victim to keep a page on its hash instead of falling back</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="sub" style="color:#667085;font-size:.93rem;margin-top:1rem">A scheme is assembled by
+          including one allocator config and one engine config. <code>revelator.cfg</code> is the reference
+          wiring: <code>revelator_alloc.cfg</code> + <code>spec_engine_revelator.cfg</code> + a 4-level radix
+          table + swap space, on <code>mmu_spec</code>.</p>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="container fade-in">
+        <p class="kicker">Evaluation</p>
+        <h2>What the artifact measures</h2>
+        <p class="lead">The harness on the <code>revelator-artifact-release</code> branch runs four suites
+          against a no-speculation ReserveTHP baseline. Single-core numbers are geometric means of IPC over
+          the workload suite; the 4-core suite uses an equal-work per-core heartbeat rather than the global
+          cycle count, which overshoots.</p>
+        <div class="tblwrap">
+          <table class="tbl">
+            <thead><tr><th>Suite</th><th>Compares against</th><th>Reads out</th></tr></thead>
+            <tbody>
+              <tr><td class="f">revelator</td><td class="d">ReserveTHP floor, SpecTLB, ASAP</td><td class="d">geomean IPC speedup, plus oracle and no-translation ceilings</td></tr>
+              <tr><td class="f">revelator_thp</td><td class="d">the floor, ASAP, and 4&nbsp;KB Revelator</td><td class="d">what huge-page granularity is worth</td></tr>
+              <tr><td class="f">utilsweep</td><td class="d">the same floor at every fill level</td><td class="d">how fast the win decays from an empty pool to 80% full</td></tr>
+              <tr><td class="f">multicore</td><td class="d">ReserveTHP baseline, 4-core mixes</td><td class="d">STP, aggregate IPC, harmonic-mean IPC</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note"><b>No numbers on this page.</b> These suites have not been run to completion in the
+          public artifact, so it deliberately quotes none. Two sanity conditions to apply when you do run
+          them: Revelator must land <em>below</em> its own oracle configuration, and the utilization curve
+          must fall monotonically. A design beating its own upper bound means a broken run, not a good
+          result.</div>
+        <div class="note"><b>SpOT is not in the comparison.</b> It speculates from physical contiguity, so it
+          needs each trace's VMA layout &mdash; and when that is missing the allocator silently falls back to
+          per-page buddy allocation instead of failing, which would report a buddy baseline under SpOT's
+          name. The reasoning, and how to re-enable it, are in the
+          <a href="https://github.com/CMU-SAFARI/Virtuoso/tree/revelator-artifact-release/experiments/ae" target="_blank" rel="noopener">artifact README</a>.</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-links">
+      <a href="index.html">Virtuoso</a>
+      <a href="trail.html">TRAIL</a>
+      <a href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/CMU-SAFARI/Virtuoso/tree/revelator-artifact-release/experiments/ae" target="_blank" rel="noopener">Artifact</a>
+    </div>
+    <p>A walkthrough of the <code style="background:none;color:inherit">Revelator</code> engine and its
+      allocator in the Sniper + MimicOS simulator.</p>
+    <p style="font-size:.82rem;opacity:.75">Snippets are excerpted from the implementation and lightly
+      abridged for reading (ellipses mark elided lines). Revelator is described in Kanellopoulos et al.,
+      ISCA 2026.</p>
+  </footer>
+
+  <button class="back-to-top" id="backToTop" aria-label="Back to top">&#x2191;</button>
+
+  <script>
+    // fade-in on scroll
+    var io = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('visible'); io.unobserve(e.target); } });
+    }, { threshold:0.1 });
+    document.querySelectorAll('.fade-in').forEach(function(el){ io.observe(el); });
+
+    // back to top
+    var btn = document.getElementById('backToTop');
+    window.addEventListener('scroll', function(){ btn.classList.toggle('show', window.scrollY > 400); });
+    btn.addEventListener('click', function(){ window.scrollTo({ top:0, behavior:'smooth' }); });
+
+    // step-through the schematic, one stage at a time, with an explanation
+    var STEPS = [
+      '<b>1 &middot; A page faults.</b> The first touch of a page traps into MimicOS. Instead of handing back whatever frame is free, the allocator hashes the faulting virtual address.',
+      '<b>2 &middot; The hash picks the frame.</b> <code>CityHash64(VA) % N</code> gives up to <em>k</em> candidate frames; the first free one wins, and the page is placed there. Placement is now a <b>function of the address</b>, not of allocator state.',
+      '<b>3 &middot; Later, that page is touched again.</b> The access misses the TLB, so the hardware starts a page-table walk &mdash; the slow path, and the one that always produces the correct answer.',
+      '<b>4 &middot; The MMU replays the same hash.</b> In parallel with the walk, the engine recomputes the same <em>k</em> candidates and issues a prefetch for each, pulling the data into L2 before the translation is even resolved.',
+      '<b>5 &middot; The walk decides.</b> When it completes, the true frame is compared against the guesses. A match means the data is already in L2 and the memory access is served immediately; a miss costs bandwidth, never correctness.'
+    ];
+    var pfFig = document.querySelector('figure.diagram');
+    var pfStages = pfFig ? [].slice.call(pfFig.querySelectorAll('.pf-stage')) : [];
+    var pfPrev = document.getElementById('pfPrev'), pfNext = document.getElementById('pfNext'),
+        pfInd = document.getElementById('pfInd'), pfExp = document.getElementById('pfExplain');
+    if (pfFig && pfStages.length && pfPrev && pfNext) {
+      var pfCur = 0, pfLast = STEPS.length - 1;
+      function pfRender(){
+        pfStages.forEach(function(s, i){ s.classList.toggle('on', i <= pfCur); s.classList.remove('current'); });
+        var cur = pfStages[pfCur];
+        if (cur){ void cur.offsetWidth; cur.classList.add('current'); }   // reflow -> restart the stage animation
+        pfInd.textContent = (pfCur + 1) + ' / ' + STEPS.length;
+        pfExp.innerHTML = STEPS[pfCur];
+        pfPrev.disabled = pfCur === 0;
+        pfNext.innerHTML = pfCur === pfLast ? '&#8635;&nbsp;Restart' : 'Next&nbsp;&#8250;';
+      }
+      pfFig.classList.add('stepped');
+      pfPrev.addEventListener('click', function(){ if (pfCur > 0){ pfCur--; pfRender(); } });
+      pfNext.addEventListener('click', function(){ pfCur = pfCur === pfLast ? 0 : pfCur + 1; pfRender(); });
+      // arrow keys step through when the figure is in view
+      document.addEventListener('keydown', function(ev){
+        if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
+        var r = pfFig.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > window.innerHeight) return;   // figure off-screen
+        if (ev.key === 'ArrowRight' && pfCur < pfLast) { pfCur++; pfRender(); ev.preventDefault(); }
+        if (ev.key === 'ArrowLeft'  && pfCur > 0)     { pfCur--; pfRender(); ev.preventDefault(); }
+      });
+      pfPrev.title = 'Left arrow'; pfNext.title = 'Right arrow';
+      pfRender();
+    }
+
+    // tiny safe C++ highlighter (comments & strings win by alternation order)
+    var KW = "if|else|for|while|return|struct|class|const|constexpr|static|bool|true|false|"
+      + "void|auto|new|delete|nullptr|namespace|template|sizeof|this|break|continue|float|"
+      + "double|unsigned|int|long|short|char";
+    var re = new RegExp(
+      "(\\/\\/[^\\n]*)"
+      + "|(\"(?:[^\"\\\\]|\\\\.)*\")"
+      + "|\\b(0x[0-9a-fA-F]+|\\d+(?:\\.\\d+)?[uUlLfF]*)\\b"
+      + "|\\b(" + KW + ")\\b"
+      + "|\\b([A-Z]\\w*|\\w+_t|SubsecondTime|UInt64|IntPtr|String)\\b", "g");
+    function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+    function hl(code){
+      var out="", last=0, m;
+      while((m=re.exec(code))){
+        out += esc(code.slice(last, m.index));
+        var cls = m[1]?"c-com":m[2]?"c-lit":m[3]?"c-lit":m[4]?"c-kw":"c-typ";
+        out += '<span class="'+cls+'">'+esc(m[0])+"</span>";
+        last = m.index + m[0].length;
+      }
+      return out + esc(code.slice(last));
+    }
+    document.querySelectorAll("script.snip").forEach(function(s){
+      var code = s.textContent.replace(/^\n/,"").replace(/\s+$/,"");
+      // strip the common leading indentation introduced by the surrounding markup
+      var ind = code.split("\n").filter(function(l){ return l.trim(); })
+                    .map(function(l){ return l.match(/^ */)[0].length; });
+      var cut = ind.length ? Math.min.apply(null, ind) : 0;
+      if (cut) code = code.split("\n").map(function(l){ return l.slice(cut); }).join("\n");
+      var fig = document.createElement("figure"); fig.className = "code";
+      var cap = document.createElement("div"); cap.className = "cap";
+      cap.innerHTML = '<span class="dot"></span><span class="path">'
+        + esc(s.dataset.path||"") + '</span><span class="ln">' + esc(s.dataset.ln||"") + '</span>';
+      var cp = document.createElement("button");
+      cp.className = "cap-copy"; cp.type = "button"; cp.textContent = "Copy";
+      cp.addEventListener("click", function(){
+        navigator.clipboard.writeText(code).then(function(){
+          cp.textContent = "Copied ✓"; cp.classList.add("copied");
+          setTimeout(function(){ cp.textContent = "Copy"; cp.classList.remove("copied"); }, 1600);
+        });
+      });
+      cap.appendChild(cp);
+      var pre = document.createElement("pre"); var c = document.createElement("code");
+      c.innerHTML = hl(code); pre.appendChild(c);
+      fig.appendChild(cap); fig.appendChild(pre);
+      s.parentNode.replaceChild(fig, s);
+    });
+
+    // reading progress bar — rAF-throttled, transform-only updates
+    var prog = document.createElement("div"); prog.className = "progress"; document.body.appendChild(prog);
+    var progTick = false;
+    function progUpdate(){
+      progTick = false;
+      var h = document.documentElement;
+      var max = h.scrollHeight - h.clientHeight;
+      prog.style.transform = "scaleX(" + (max > 0 ? h.scrollTop / max : 0) + ")";
+    }
+    window.addEventListener("scroll", function(){
+      if (!progTick) { progTick = true; requestAnimationFrame(progUpdate); }
+    }, { passive: true });
+    progUpdate();
+  </script>
+</body>
+</html>

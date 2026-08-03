@@ -75,6 +75,7 @@
 
         /* --- Hero news pill --- */
         .hero-pill { display: inline-flex; align-items: center; gap: 0.5rem; background: var(--white-color); border: 1px solid var(--border-color); border-radius: 999px; padding: 0.35rem 1rem 0.35rem 0.45rem; font-size: 0.82rem; font-weight: 600; color: var(--text-color); box-shadow: var(--shadow); margin-bottom: 1.4rem; transition: transform 0.2s, box-shadow 0.2s; }
+        .hero-pills { display: flex; gap: 0.6rem; justify-content: center; flex-wrap: wrap; }
         .hero-pill:hover { text-decoration: none; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(30,41,59,0.12); }
         .hero-pill .new { background: var(--primary-color); color: #fff; border-radius: 999px; padding: 0.12rem 0.6rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
         .hero-pill .arr { color: var(--accent-color); }
@@ -173,6 +174,7 @@
                     <li><a href="#components">Components</a></li>
                     <li><a href="#workshop">Workshop</a></li>
                     <li><a href="trail.html">TRAIL</a></li>
+                    <li><a href="revelator.html">Revelator</a></li>
                     <li><a href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener">GitHub</a></li>
                 </ul>
             </nav>
@@ -185,7 +187,7 @@
             <img src="img/virtuoso-logo.png" alt="Virtuoso" width="2804" height="728" style="max-width:420px; height:auto; margin-bottom:0.5rem;">
             <p class="subtitle">Fast and Accurate Virtual Memory Research via Imitation-based OS Simulation</p>
             <p class="desc">Rapid prototyping of hardware/OS co-designs for virtual memory. Powered by MimicOS, a lightweight userspace kernel that imitates only the necessary OS functionalities.</p>
-            <div><a class="hero-pill" href="trail.html"><span class="new">New</span> TRAIL: translation prefetching via page-table-embedded deltas <span class="arr">&rarr;</span></a></div>
+            <div class="hero-pills"><a class="hero-pill" href="revelator.html"><span class="new">New</span> Revelator: hash-based speculative address translation <span class="arr">&rarr;</span></a><a class="hero-pill" href="trail.html">TRAIL: translation prefetching via page-table-embedded deltas <span class="arr">&rarr;</span></a></div>
             <div class="cta-row">
                 <a class="btn" href="https://github.com/CMU-SAFARI/Virtuoso#readme" target="_blank" rel="noopener">Get Started</a>
                 <a class="btn btn-outline" href="https://arxiv.org/abs/2403.04635" target="_blank" rel="noopener">ASPLOS 2025 Paper</a>
@@ -343,7 +345,7 @@
                     <div class="comp-card">
                         <h3>Speculative Translation Engines <span class="comp-count">5</span></h3>
                         <ul>
-                            <li><strong>Revelator</strong> : Hash-based speculative address translation (Kanellopoulos et al., ISCA '26)</li>
+                            <li><strong>Revelator</strong> : Hash-based speculative address translation &mdash; the allocator places each page where a hash of its virtual address says, and the MMU replays that hash to guess the frame (Kanellopoulos et al., ISCA '26) (<a href="revelator.html">code walkthrough &rarr;</a>)</li>
                             <li><strong>SpOT</strong> : Offset-based speculation exploiting physical contiguity (<a href="https://chloe-alverti.github.io/publications/isca2020-contiguity/" target="_blank" rel="noopener">Alverti et al., ISCA '20</a>)</li>
                             <li><strong>Oracle</strong> : Perfect speculation engine for upper-bound analysis</li>
                             <li><strong>SpecTLB</strong> : Speculative address translation mechanism (<a href="https://dl.acm.org/doi/10.1145/2024723.2000101" target="_blank" rel="noopener">Barr et al., ISCA '11</a>)</li>
