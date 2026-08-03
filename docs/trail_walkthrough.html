@@ -473,9 +473,10 @@ if (m_payload_in_side_table && !result.empty())
     <h2>The knobs, and how they're read.</h2>
     <p>Defaults live in <code>config/mmu_configs/mmu_temporal_pte.cfg</code>; the factory turns them into
       an object when <code>prefetcher_list</code> names <code>"temporal_pte"</code>
-      (<code>tlb_prefetcher_factory.h</code>). Per-experiment "best" points override the defaults in
-      <code>experiments/clist_prefetcher_v3.yaml</code> — that YAML is the <em>only</em> place the in-PTE
-      and side-car variants diverge; the two <code>.cfg</code> wrappers are otherwise identical.</p>
+      (<code>tlb_prefetcher_factory.h</code>). Per-experiment "best" points override the defaults from the
+      experiment YAML — that YAML is the <em>only</em> place the in-PTE and side-car variants diverge; the
+      two <code>.cfg</code> wrappers are otherwise identical. It ships with TRAIL's artifact on the
+      <code>trail-artifact-release</code> branch, not here.</p>
     <div class="tblwrap">
     <table class="tbl">
       <thead><tr><th>Key</th><th>Value</th><th>Meaning</th></tr></thead>

@@ -207,5 +207,7 @@ Experiment definitions live outside this directory:
 `experiments/clist_revelator.yaml` (the three single-core suites) and the
 `ae_revelator_4core` suite in `experiments/clist_multicore.yaml`.
 
-Component-level documentation for Revelator itself — engines, allocators, configs,
-knobs — is in [`docs/revelator.md`](../../docs/revelator.md).
+Documentation for Revelator itself: a code walkthrough in
+[`docs/revelator_walkthrough.html`](../../docs/revelator_walkthrough.html) (open in a
+browser) and the component map — engines, allocators, configs, knobs — in
+[`docs/revelator.md`](../../docs/revelator.md).

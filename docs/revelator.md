@@ -11,9 +11,11 @@ hash says it should be — so Revelator is a **co-design**: a hash-based physica
 memory allocator in MimicOS plus a speculation engine in the MMU that replays the
 same hash.
 
-This page is the map of what ships in this branch — a component inventory. For the
-reviewer-facing reproduction flow (build, traces, suites, figures) see
-[`experiments/ae/README.md`](../experiments/ae/README.md).
+This page is the map of what ships in this branch — a component inventory. For a
+narrative walk through the actual code (placement, prediction, the race, and how it
+degrades) open [`revelator_walkthrough.html`](revelator_walkthrough.html) in a
+browser. For the reviewer-facing reproduction flow (build, traces, suites, figures)
+see [`experiments/ae/README.md`](../experiments/ae/README.md).
 
 ---
 
@@ -84,9 +86,17 @@ Multicore variants (2/4/8/16 cores) of the last two live in
 | `core_configs/` | `revelator_core.cfg` |
 | `virtuoso_configs/` | `revelator_virt.cfg` |
 
-`revelator_engine_params.cfg` exists so the engine can run **standalone** over a
-non-Revelator allocator (e.g. `reserve_thp`, `utopia`) — it carries the same hash
-and prediction knobs the allocator would otherwise supply.
+`revelator_engine_params.cfg` carries the same hash and prediction knobs the
+allocator reads, so the `[perf_model/revelator]` section is present even when the
+scheme does not pull in a Revelator allocator config.
+
+> **The engine requires its allocator.** Its comment header claims it lets the
+> engine run standalone over `reserve_thp` or `utopia`, but the code disagrees:
+> `Revelator::Revelator()` reads the allocator's name and, if it is not
+> `revelator` or `revelator_simple`, prints a warning, sets `m_disabled` and makes
+> every method a no-op. "Revelator over ReserveTHP" therefore measures the
+> baseline, not a degraded Revelator. `RevelatorTHP` has no such guard and pairs
+> with the `revelator_thp` allocator via `revelator_thp.cfg`.
 
 ### Key knobs (`[perf_model/revelator]`)
 

@@ -24,8 +24,11 @@ the virtual address and validated against the parallel page walk.
 the one-command setup, and running each suite — are in
 **[`experiments/ae/README.md`](experiments/ae/README.md)**. Start there.
 
-For the design itself — every engine, allocator, exception handler, config and
-knob — see **[`docs/revelator.md`](docs/revelator.md)**.
+For the design itself, there are two docs: a self-contained HTML **code
+walkthrough** at [`docs/revelator_walkthrough.html`](docs/revelator_walkthrough.html)
+(open it in a browser), and the component map at
+**[`docs/revelator.md`](docs/revelator.md)** — every engine, allocator, exception
+handler, config and knob.
 
 > The TRAIL TLB prefetcher's *implementation* is still on this branch, because
 > Revelator shares its MimicOS and memory-management infrastructure. TRAIL's
@@ -37,7 +40,8 @@ knob — see **[`docs/revelator.md`](docs/revelator.md)**.
 ## Table of Contents
 
 - [Artifact Evaluation — Revelator](experiments/ae/README.md)
-- [Revelator design notes](docs/revelator.md)
+- [Revelator code walkthrough](docs/revelator_walkthrough.html)
+- [Revelator component map](docs/revelator.md)
 - [Key Features](#key-features)
 - [Repository Structure](#repository-structure)
 - [Prerequisites](#prerequisites)
@@ -457,7 +461,8 @@ Run smoke tests individually by category:
 ## Website and Documentation
 
 - **Website**: [https://cmu-safari.github.io/Virtuoso](https://cmu-safari.github.io/Virtuoso) -tutorials, documentation, and API reference
-- **Revelator**: [docs/revelator.md](docs/revelator.md) -components, configs, knobs, and how to run
+- **Revelator walkthrough**: [docs/revelator_walkthrough.html](docs/revelator_walkthrough.html) -how the code works, stage by stage
+- **Revelator components**: [docs/revelator.md](docs/revelator.md) -engines, allocators, configs, knobs
 - **Experiment workflow**: [experiments/README.md](experiments/README.md) -detailed experiment framework documentation
 - **Ramulator2 integration**: [docs/ramulator2_mimicos.md](docs/ramulator2_mimicos.md)
 
