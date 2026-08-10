@@ -18,8 +18,10 @@ a separate, trace-free step.
 ## Requirements
 
 **Software**
-- Linux (Debian/Ubuntu recommended; tested on Ubuntu 20.04 and 22.04). Other
-  distributions work if you install the equivalent packages.
+- Linux (Debian/Ubuntu recommended; tested on Ubuntu 20.04, 22.04 and 24.04).
+  Other distributions work if you install the equivalent packages. On 24.04 all
+  harness Python runs from a self-contained virtualenv, so PEP 668
+  ("externally-managed-environment") never gets in the way.
 - A C++17 toolchain and Python 3.8+. All packages — plus the Hugging Face CLI
   (trace download) and matplotlib (figures) — are installed by
   `experiments/ae/lib/install_deps.sh`. No license-gated or proprietary tools are
