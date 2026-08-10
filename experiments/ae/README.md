@@ -29,7 +29,9 @@ a separate, trace-free step.
   SLURM everything still runs locally.
 
 **Hardware**
-- **Disk:** ~300 GB free (≈250 GB of traces, plus the build and results).
+- **Disk:** ~300 GB free (≈250 GB of traces, plus the build and results). If the
+  traces are already staged for you at `<parent-of-clone>/ae_bundle`, only a few
+  GB are needed — see Step 2.
 - **RAM:** 8 GB is enough for the build and the sanity check. Each simulation
   uses a few GB, so budget more if you run many in parallel.
 - **CPU:** any x86-64 machine. More cores (or a cluster) only reduce wall time.
@@ -59,7 +61,8 @@ shows progress and then **stops**:
 ```
 [1/4] system build dependencies       (skipped — done in Step 1)
 [2/4] build the simulator             (~2-3 min)
-[3/4] download traces + trace-lists    (public dataset; ~250 GB; resumable)
+[3/4] traces + trace-lists             (skipped if ../ae_bundle is already there;
+                                        else public dataset; ~250 GB; resumable)
 [4/4] validate on 3 random traces      ->  [PASS] <trace> IPC=...
       "Setup is validated. You are ready to run the experiments."
 ```
@@ -68,9 +71,27 @@ Every phase is resumable — re-run the command after an interruption and it ski
 whatever is already done. **This step alone is enough to confirm the artifact
 builds and runs;** the full paper numbers come from Step 3.
 
+**If the traces are already on the machine, there is no download.** When a valid
+bundle sits one level *above* the clone — `<parent-of-Virtuoso>/ae_bundle`, with
+`traces/` and `vm_tlist/` inside — Step 2 detects it, prints
+
+```
+found a pre-staged trace bundle: /path/to/ae_bundle
+(251 traces, 10 trace-lists) — the download is not needed.
+```
+
+and uses it **in place**, writing nothing. This is the normal case when your host
+has already fetched the dataset for you: Step 2 then costs only the build plus the
+sanity check. Nothing else changes — the trace-lists are resolved to absolute paths,
+so the bundle does not have to live inside the clone. Use `--bundle-mode link` to
+drop a symlink at `Virtuoso/ae_bundle` instead, or `--bundle-mode copy` to take a
+full private copy (this duplicates the whole ~250 GB trace set — only do it if you
+need the bundle on faster local storage).
+
 Useful flags: `--n N` (number of validation traces), `--skip-download` (reuse an
-existing download), `--bundle DIR` (where to download). Traces are the public
-dataset
+existing download), `--bundle DIR` (where to download), `--bundle-mode
+reuse|link|copy` (how to consume a pre-staged bundle; default `reuse`). Traces are
+the public dataset
 [`konkanello/trail_traces`](https://huggingface.co/datasets/konkanello/trail_traces)
 (`traces/` + `vm_tlist/`); `build_and_validate.sh` downloads it and wires the trace-lists
 into `experiments/vm_tlist/` for you.

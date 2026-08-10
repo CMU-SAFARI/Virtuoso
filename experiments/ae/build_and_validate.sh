@@ -12,14 +12,24 @@
 #
 #     [1/4] install system build dependencies      (apt; uses sudo if not root)
 #     [2/4] build the trace-replay simulator       (no Pin/SDE/libtorch)
-#     [3/4] download traces + trace-lists           (Hugging Face dataset)
+#     [3/4] traces + trace-lists                    (pre-staged bundle, else HF)
 #     [4/4] validate the setup on N random traces   (short sims -> valid IPC)
 #
 # Every phase is resumable: a finished phase is detected and skipped on re-run.
 #
+# PRE-STAGED TRACES
+#   If a valid bundle already sits one level ABOVE the artifact root — i.e.
+#   <artifact>/../ae_bundle — phase [3/4] uses it and skips the download
+#   entirely. This is the normal case on a machine where the traces were
+#   fetched once and shared between clones. Override with --bundle DIR.
+#
 # Options (env var or flag):
 #   --hf-repo   REPO   Hugging Face dataset      (default: $HF_REPO or konkanello/trail_traces)
 #   --bundle    DIR    where to download traces  (default: <artifact>/ae_bundle)
+#   --bundle-mode MODE how to consume a pre-staged ../ae_bundle:
+#                        reuse (default) read it in place, nothing is written
+#                        link            symlink <artifact>/ae_bundle -> it
+#                        copy            full byte-for-byte copy (needs the space)
 #   --n         N      random traces to validate (default: 3)
 #   --skip-deps        do not run install_deps.sh (deps already installed)
 #   --skip-download    reuse an existing bundle (no HF download)
@@ -33,18 +43,25 @@ source "$HERE/lib/venv.sh"                        # put the AE Python venv on PA
 
 HF_REPO="${HF_REPO:-konkanello/trail_traces}"
 BUNDLE="$ROOT/ae_bundle"
+BUNDLE_SET=0                                      # did the user pass --bundle?
+BUNDLE_MODE="${AE_BUNDLE_MODE:-reuse}"            # reuse | link | copy
 NVAL=3
 SKIP_DEPS=0
 SKIP_DL=0
 while [ $# -gt 0 ]; do case "$1" in
   --hf-repo) HF_REPO="$2"; shift 2;;
-  --bundle) BUNDLE="$2"; shift 2;;
+  --bundle) BUNDLE="$2"; BUNDLE_SET=1; shift 2;;
+  --bundle-mode) BUNDLE_MODE="$2"; shift 2;;
   --n) NVAL="$2"; shift 2;;
   --skip-deps) SKIP_DEPS=1; shift;;
   --skip-download) SKIP_DL=1; shift;;
-  -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+  # print only the leading header block, not every comment in the body
+  -h|--help) awk 'NR>1 && !/^#/{exit} NR>1{sub(/^# ?/,""); print}' "$0"; exit 0;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
+case "$BUNDLE_MODE" in reuse|link|copy) ;; *)
+  echo "unknown --bundle-mode: $BUNDLE_MODE (expected reuse, link or copy)"; exit 2;;
+esac
 
 C_G=$'\033[1;32m'; C_Y=$'\033[1;33m'; C_R=$'\033[1;31m'; C_0=$'\033[0m'
 step() { echo; echo "${C_G}==== $* ====${C_0}"; }
@@ -53,7 +70,7 @@ die()  { echo "${C_R}ERROR: $*${C_0}" >&2; exit 1; }
 echo "TRAIL artifact reproduction"
 echo "  artifact root : $ROOT"
 echo "  HF dataset    : $HF_REPO"
-echo "  trace bundle  : $BUNDLE"
+echo "  trace bundle  : $BUNDLE  (a pre-staged ../ae_bundle takes precedence — see [3/4])"
 
 # --- [1/4] dependencies ------------------------------------------------------
 step "[1/4] System build dependencies"
@@ -90,10 +107,50 @@ fi
 echo "  ${C_G}lib/sniper ready.${C_0}"
 
 # --- [3/4] traces ------------------------------------------------------------
-step "[3/4] Download traces + trace-lists"
+step "[3/4] Traces + trace-lists"
+
+# A bundle staged one level above the artifact root is the pre-downloaded copy on
+# a shared machine. Use it and skip the (hundreds of GB) download. setup_tlists.sh
+# resolves __TRACE_ROOT__ to an ABSOLUTE path, so the bundle does not have to live
+# inside the clone for anything downstream to work.
+bundle_ok() {
+  [ -d "$1/traces" ] && [ -d "$1/vm_tlist" ] && ls "$1"/vm_tlist/*.tlist >/dev/null 2>&1
+}
+PARENT_BUNDLE="$(cd "$ROOT/.." 2>/dev/null && pwd)/ae_bundle"
+
+if [ "$SKIP_DL" -eq 0 ] && [ "$BUNDLE_SET" -eq 0 ] && \
+   [ "$PARENT_BUNDLE" != "$BUNDLE" ] && bundle_ok "$PARENT_BUNDLE"; then
+  echo "  ${C_G}found a pre-staged trace bundle:${C_0} $PARENT_BUNDLE"
+  echo "  ($(find "$PARENT_BUNDLE/traces" -type f | wc -l) traces, $(ls "$PARENT_BUNDLE"/vm_tlist/*.tlist | wc -l) trace-lists) — the download is not needed."
+  case "$BUNDLE_MODE" in
+    reuse)
+      echo "  --bundle-mode reuse: reading it in place (nothing is copied)."
+      BUNDLE="$PARENT_BUNDLE"
+      ;;
+    link)
+      if [ -e "$BUNDLE" ] && [ ! -L "$BUNDLE" ]; then
+        die "$BUNDLE already exists and is not a symlink — remove it, or use --bundle-mode reuse."
+      fi
+      ln -sfn "$PARENT_BUNDLE" "$BUNDLE" || die "could not symlink $BUNDLE -> $PARENT_BUNDLE"
+      echo "  --bundle-mode link: $BUNDLE -> $PARENT_BUNDLE"
+      ;;
+    copy)
+      echo "  ${C_Y}--bundle-mode copy: copying the whole bundle into $BUNDLE.${C_0}"
+      echo "  ${C_Y}This duplicates the full trace set on disk and can take a long time.${C_0}"
+      mkdir -p "$BUNDLE"
+      if command -v rsync >/dev/null 2>&1; then
+        rsync -a --info=progress2 "$PARENT_BUNDLE"/ "$BUNDLE"/ || die "copying the bundle failed."
+      else
+        cp -a "$PARENT_BUNDLE"/. "$BUNDLE"/ || die "copying the bundle failed."
+      fi
+      ;;
+  esac
+  SKIP_DL=1
+fi
+
 mkdir -p "$BUNDLE"
 if [ "$SKIP_DL" -eq 1 ]; then
-  echo "  --skip-download: reusing $BUNDLE"
+  echo "  using trace bundle: $BUNDLE  (no download)"
 else
   command -v hf >/dev/null 2>&1 || {
     echo "  hf not found — creating the local venv and installing huggingface_hub ..."
