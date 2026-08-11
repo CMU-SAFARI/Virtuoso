@@ -1,7 +1,7 @@
 #!/bin/bash
 # ===========================================================================
 # build_and_validate.sh — one-command Artifact-Evaluation entry point for TRAIL.
-# (installs deps, builds the trace-replay simulator, downloads traces, validates)
+# (installs deps, builds the trace-replay simulator, stages the datasets, validates)
 #
 # A reviewer just clones the repo and runs:
 #
@@ -12,16 +12,27 @@
 #
 #     [1/4] install system build dependencies      (apt; uses sudo if not root)
 #     [2/4] build the trace-replay simulator       (no Pin/SDE/libtorch)
-#     [3/4] traces + trace-lists                    (pre-staged bundle, else HF)
+#     [3/4] traces + trace-lists, then the PTW      (pre-staged bundles, else HF)
+#           dumps for the motivation figures
 #     [4/4] validate the setup on N random traces   (short sims -> valid IPC)
 #
-# Every phase is resumable: a finished phase is detected and skipped on re-run.
+# Every phase is resumable: a finished phase is detected and skipped on re-run,
+# and both downloads resume where they left off.
 #
-# PRE-STAGED TRACES
-#   If a valid bundle already sits one level ABOVE the artifact root — i.e.
-#   <artifact>/../ae_bundle — phase [3/4] uses it and skips the download
-#   entirely. This is the normal case on a machine where the traces were
-#   fetched once and shared between clones. Override with --bundle DIR.
+# THIS IS WHERE ALL DOWNLOADING HAPPENS. The run scripts (ae_* and the motivation
+# suite) only ever read what is already on disk, so once this script succeeds the
+# rest of the artifact works without network access.
+#
+# PRE-STAGED DATA
+#   Both datasets are skipped when a copy is already present, which is the normal
+#   case on a machine that fetched them once and shares them between accounts —
+#   usually as a symlink:
+#     traces     <artifact>/../ae_bundle                    (override: --bundle DIR)
+#     PTW dumps  $HOME/ptw_bundle, <artifact>/../ptw_bundle,
+#                <artifact>/ptw_bundle                      (override: --ptw-bundle DIR)
+#   The dump locations are exactly the ones the motivation suite searches, so it
+#   then needs no arguments. ~250 GB of traces and ~2.9 GB of dumps are not
+#   downloaded twice.
 #
 # Options (env var or flag):
 #   --hf-repo   REPO   Hugging Face dataset      (default: $HF_REPO or konkanello/trail_traces)
@@ -229,34 +240,32 @@ echo "${C_G} Setup is validated. You are ready to run the experiments.${C_0}"
 echo "${C_G}================================================================${C_0}"
 cat <<NEXT
 
-Reproduce the paper results with ONE driver — ae_run_all.sh. It launches every
-suite, tracks them in the background, and writes the tables/figures to
-experiments/ae/ae_out/. You do NOT run anything per-suite.
+Reproduce the paper results with ONE driver — ae_run_all.sh — in THREE passes.
+It launches every suite, tracks them in the background, and writes the tables and
+figures to experiments/ae/ae_out/. You do NOT run anything per-suite, and nothing
+downloads: everything from here on reads what this script just staged.
 
-  On a SLURM cluster (all suites in parallel):
-    bash experiments/ae/ae_run_all.sh --mode slurm [--partitions <p>]   # launch
-    bash experiments/ae/ae_run_all.sh --status                          # progress, any time
-    bash experiments/ae/ae_run_all.sh --results                         # once every suite reads DONE
+  1. launch everything
+       SLURM:   bash experiments/ae/ae_run_all.sh --mode slurm [--partitions <p>]
+       single:  bash experiments/ae/ae_run_all.sh --mode local --jobs \$(nproc)
 
-  On a single machine (no SLURM; one shared scheduler across your cores):
-    bash experiments/ae/ae_run_all.sh --mode local --jobs \$(nproc)      # launch
-    bash experiments/ae/ae_run_all.sh --status
-    bash experiments/ae/ae_run_all.sh --results
+  2. check progress, any time
+       bash experiments/ae/ae_run_all.sh --status
 
-  Subset:  --suites "head8mb multicore"   |   quick test:  --icount 2000000
-  Suites:  head8mb head2mb table5 table6 pqsweep multicore
+  3. tables + figures, once every suite reads DONE
+       bash experiments/ae/ae_run_all.sh --results
 
-Motivation figures (Figures 4, 5, 6, 8, 9 — separate, no simulation):
+Don't run the three back-to-back: launch once, poll --status until every suite
+reads DONE, then --results.
 
-    bash experiments/ae/motivation/run_motivation.sh --mode local --jobs \$(nproc)   # 1. analyse
-    bash experiments/ae/motivation/run_motivation.sh --plot                          # 2. figures
-    #   on a cluster instead:  --mode slurm [--partitions <p>]  — step 1 only submits
-    #   the jobs there, so run step 2 once they finish (it refuses to draw partial
-    #   figures and tells you how many of the workloads are ready).
-    # The dumps were staged above, in [3/4]; step 1 finds them by itself
-    # (\$HOME/ptw_bundle, ../ptw_bundle, ./ptw_bundle) and tells you which it used.
-    # If you passed --skip-ptw-dumps, re-run this script without it first.
+  Suites:  head8mb head2mb table5 table6 pqsweep multicore motivation
+           (all seven by default; 'motivation' produces Figures 4, 5, 6, 8, 9 from
+            the PTW dumps staged in [3/4] and runs alongside the simulations)
+  Subset:  --suites "head8mb motivation"   |   quick test:  --icount 2000000
 
-Don't run launch/status/results back-to-back: launch once, poll --status until
-every suite reads DONE, then --results. Full details: experiments/ae/README.md.
+A suite is DONE when every one of its jobs has produced a valid result on disk,
+even if SLURM still shows jobs clearing the queue (CG). If the queue drains while
+results are missing, those jobs failed and ae_out/<suite>.DONE lists them.
+
+Full details: experiments/ae/README.md.
 NEXT
