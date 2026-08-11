@@ -209,8 +209,8 @@ Motivation figures (Figures 4, 5, 6, 8, 9 — separate, no simulation):
     #   the jobs there, so run step 2 once they finish (it refuses to draw partial
     #   figures and tells you how many of the workloads are ready).
     # Step 1 reuses a pre-staged bundle (\$HOME/ptw_bundle, ../ptw_bundle, ./ptw_bundle)
-    # and tells you so. Only if there is none do you need the 2.9 GB download:
-    #   hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
+    # and tells you so. Only if there is none do you need the 2.9 GB download first:
+    #   bash experiments/ae/motivation/run_motivation.sh --download
 
 Don't run launch/status/results back-to-back: launch once, poll --status until
 every suite reads DONE, then --results. Full details: experiments/ae/README.md.

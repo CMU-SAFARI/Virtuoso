@@ -163,10 +163,11 @@ Step 1 submits and returns immediately — the figures cannot exist until the jo
 finish, so run step 2 afterwards. It refuses to draw incomplete figures and
 reports how many of the 251 workloads are ready (`--allow-partial` overrides).
 
-Only if none of those exists do you need the 2.9 GB download first:
+Only if none of those exists do you need the 2.9 GB download first — as a harness
+command, so you never have to activate the virtualenv `hf` lives in:
 
 ```bash
-hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
+bash experiments/ae/motivation/run_motivation.sh --download    # 0. dumps (resumable)
 ```
 
 ### B) Run on a single machine (no SLURM)
@@ -198,10 +199,11 @@ bash experiments/ae/motivation/run_motivation.sh --mode local --jobs $(nproc)   
 bash experiments/ae/motivation/run_motivation.sh --plot                          # 2. figures
 ```
 
-Only if none of those exists do you need the 2.9 GB download first:
+Only if none of those exists do you need the 2.9 GB download first — as a harness
+command, so you never have to activate the virtualenv `hf` lives in:
 
 ```bash
-hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
+bash experiments/ae/motivation/run_motivation.sh --download    # 0. dumps (resumable)
 ```
 
 ### What you get (either mode)

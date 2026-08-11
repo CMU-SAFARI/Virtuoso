@@ -30,12 +30,19 @@ copy between accounts, symlink it:
 ln -s /path/to/shared/ptw_bundle ~/ptw_bundle
 ```
 
-Otherwise the dumps are a public Hugging Face dataset (~3 GB, 251 workloads):
+Otherwise download them — a public Hugging Face dataset (~3 GB, 251 workloads):
 
 ```bash
-hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
+bash experiments/ae/motivation/run_motivation.sh --download
 #   -> ./ptw_bundle/ptw_dumps/<workload>.csv.gz
 ```
+
+Run it through the script rather than calling `hf` yourself: `hf` lives in the AE
+virtualenv, which the harness puts on its own `PATH` but your interactive shell does
+not have, so a bare `hf download` fails with *command not found*. The download is
+resumable — re-run the same command if it is interrupted. `--dumps <dir>` chooses
+where it lands (default `<artifact>/ptw_bundle`) and `--hf-repo` overrides the
+dataset.
 
 ## 2. Analyse, then plot — two commands
 
