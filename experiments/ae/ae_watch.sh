@@ -42,18 +42,29 @@ fi
 
 # --- daemon: read launch state ----------------------------------------------
 eval "$(grep -E '^(mode|expected|results|jobfile)=' "$LAUNCH")"
-mapfile -t RUNDIRS < <(ae_expected_rundirs "$jobfile")
-# suite's slurm job names (-J), to tell when the suite's jobs are gone
-mapfile -t JOBNAMES < <(grep -oE -- '-J [^ ]+' "$jobfile" | awk '{print $2}' | sort -u)
+RUNDIRS=()
+if [ "$KIND" = "mot" ]; then
+  # motivation: progress is one JSON per workload, and the jobs are named mot_<wl>
+  UNIT="analysed workloads"
+  count_valid() { ls "$results"/*.json 2>/dev/null | wc -l; }
+  count_active_slurm() {
+    squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | grep -c '^mot_'
+  }
+else
+  UNIT="jobs with a valid sim.stats"
+  mapfile -t RUNDIRS < <(ae_expected_rundirs "$jobfile")
+  # suite's slurm job names (-J), to tell when the suite's jobs are gone
+  mapfile -t JOBNAMES < <(grep -oE -- '-J [^ ]+' "$jobfile" | awk '{print $2}' | sort -u)
 
-count_valid() {  # valid sim.stats among expected rundirs
-  local d n=0; for d in "${RUNDIRS[@]}"; do ae_valid_result "$d" && n=$((n+1)); done; echo "$n"
-}
-count_active_slurm() {  # suite jobs still queued/running
-  local active; active=$(comm -12 \
-     <(squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | sort -u) \
-     <(printf '%s\n' "${JOBNAMES[@]}") | wc -l); echo "$active"
-}
+  count_valid() {  # valid sim.stats among expected rundirs
+    local d n=0; for d in "${RUNDIRS[@]}"; do ae_valid_result "$d" && n=$((n+1)); done; echo "$n"
+  }
+  count_active_slurm() {  # suite jobs still queued/running
+    local active; active=$(comm -12 \
+       <(squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | sort -u) \
+       <(printf '%s\n' "${JOBNAMES[@]}") | wc -l); echo "$active"
+  }
+fi
 
 exp="${expected:-${#RUNDIRS[@]}}"; prev_done=-1; plateau=0; idle=0
 while :; do
@@ -76,7 +87,7 @@ while :; do
   {
     echo "suite:   $SUITE        mode: $mode"
     echo "updated: $(date '+%Y-%m-%d %H:%M:%S')"
-    echo "done:    $done / $exp   (jobs with a valid sim.stats)"
+    echo "done:    $done / $exp   ($UNIT)"
     echo "active:  $active   (running/pending)"
     echo "status:  $([ "$active" -gt 0 ] && echo RUNNING || echo FINISHING)"
   } > "$STATUS"
@@ -93,7 +104,10 @@ done=$(count_valid); failed=$(( exp - done )); [ "$failed" -lt 0 ] && failed=0
   echo "status:  DONE"
   echo "passed:  $done / $exp"
   echo "failed:  $failed"
-  if [ "$failed" -gt 0 ]; then
+  if [ "$failed" -gt 0 ] && [ "$KIND" = "mot" ]; then
+    echo "workloads with no JSON (see $results/<workload>.slurm.err):"
+    ls "$results"/*.slurm.err 2>/dev/null | head -50 | sed 's|.*/|  |; s|\.slurm\.err$||'
+  elif [ "$failed" -gt 0 ]; then
     echo "failed jobs (no valid sim.stats):"
     for d in "${RUNDIRS[@]}"; do
       ae_valid_result "$d" || echo "  $(basename "$d")   (see $d/slurm.err)"

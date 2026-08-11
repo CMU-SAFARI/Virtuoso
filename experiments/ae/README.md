@@ -111,10 +111,10 @@ into `experiments/vm_tlist/` for you.
 
 ## Step 3 — Reproduce the paper results
 
-Every row below is one paper artifact. The six **simulation suites** are driven by
-the `ae_*` harness; the **motivation** figures are produced from page-table-walk
-dumps (no simulation). Outputs land in `experiments/ae/ae_out/` (simulation) and
-`experiments/ae/motivation/motivation_out/` (motivation).
+Every row below is one paper artifact, and every row is a **suite** driven by the
+same `ae_run_all.sh` — six of them simulate, while `motivation` analyses
+page-table-walk dumps instead. Outputs land in `experiments/ae/ae_out/` and, for
+the motivation figures, `experiments/ae/motivation/motivation_out/`.
 
 | suite / step | reproduces                                       |  jobs | output |
 |--------------|--------------------------------------------------|------:|--------|
@@ -124,8 +124,8 @@ dumps (no simulation). Outputs land in `experiments/ae/ae_out/` (simulation) and
 | `table6`     | Side-car payload sweep                           |  6275 | **Table 6** |
 | `pqsweep`    | L2-TLB prefetch-queue sensitivity                |  3012 | **Figure 20** |
 | `multicore`  | 4-core, 100-mix head-to-head                     |  1000 | **Figure 22** |
-| `motivation` | Temporal-locality characterization (no simulation) |   — | **Figures 4, 5, 6, 8, 9** |
-| **all sim.** | every simulation suite above                     | **21080** | |
+| `motivation` | Temporal-locality characterization (no simulation) | 251 | **Figures 4, 5, 6, 8, 9** |
+| **all**      | every suite above, the default                   | **21331** | |
 
 The order is the same everywhere: **launch everything, check progress, then
 produce the figures.** Nothing plots by itself, and the plotting passes only work
@@ -138,65 +138,62 @@ below).
 
 ### 3.1 — Launch everything
 
-Two commands: the six simulation suites, then the motivation analysis. On SLURM
-both submit and return immediately; on a single machine the second one blocks
-(see B).
+One command. `motivation` is a suite like any other, so this covers every row of
+the table above — the six simulation suites *and* the temporal-locality analysis.
 
 **A) On a SLURM cluster (recommended):**
 
 ```bash
 bash experiments/ae/ae_run_all.sh --mode slurm --partitions <partition>
-bash experiments/ae/motivation/run_motivation.sh --mode slurm [--partitions <p>]
 ```
 
-Suites are independent and proceed in parallel; the motivation analysis is one
-job per workload alongside them. `--partitions` is optional (omit it to use your
-cluster's default; no `--partition` is passed to `sbatch`). Restrict the set with
-`--suites "head8mb multicore"`.
+Suites are independent and proceed in parallel; `motivation` submits one job per
+workload alongside them. `--partitions` is optional (omit it to use your cluster's
+default; no `--partition` is passed to `sbatch`). Restrict the set with
+`--suites "head8mb motivation"`.
 
 **B) On a single machine (no SLURM):**
 
 ```bash
 bash experiments/ae/ae_run_all.sh --mode local --jobs $(nproc)
-bash experiments/ae/motivation/run_motivation.sh --mode local --jobs $(nproc)
 ```
 
-A single shared scheduler runs the simulations through this machine's cores,
-keeping at most `--jobs` (default: cores − 2) running at a time, so the machine is
-never oversubscribed no matter how many suites you launch. The motivation command
-*does* block until its analysis is done, and it competes for the same cores — on
-one machine, run it after the suites rather than beside them. A full
-300 M-instruction suite is large for a single host: add `--icount 2000000` to
-shrink every job to a minutes-long end-to-end smoke test (the numbers won't match
-the paper at 2 M instructions). `--icount` works in SLURM mode too.
+One shared scheduler runs everything through this machine's cores — simulations
+and motivation analyses in the same pool — keeping at most `--jobs` (default:
+cores − 2) running at a time, so the machine is never oversubscribed no matter how
+many suites you launch. A full 300 M-instruction suite is large for a single host:
+add `--icount 2000000` to shrink every simulation to a minutes-long end-to-end
+smoke test (the numbers won't match the paper at 2 M instructions; it does not
+affect `motivation`). `--icount` works in SLURM mode too.
 
-Both commands find their input on disk — the traces and the PTW dumps staged by
-Step 2. The motivation command prints which dump bundle it picked
-(`$HOME/ptw_bundle`, `../ptw_bundle` or `./ptw_bundle`). If it reports none, re-run
-Step 2 without `--skip-ptw-dumps`; it never downloads anything itself.
+Everything reads input that is already on disk — the traces and the PTW dumps
+staged by Step 2. The motivation suite prints which dump bundle it picked
+(`$HOME/ptw_bundle`, `../ptw_bundle` or `./ptw_bundle`); if it reports none, re-run
+Step 2 without `--skip-ptw-dumps`. Nothing in Step 3 ever downloads.
 
 ### 3.2 — Check progress
 
 Any time, as often as you like:
 
 ```bash
-bash experiments/ae/ae_run_all.sh --status                              # every suite; wait for DONE
-ls experiments/ae/motivation/motivation_out/json/*.json | wc -l         # motivation; wait for 251
+bash experiments/ae/ae_run_all.sh --status
 ```
+
+Every suite reports `done: N / M` and a `status:` line; wait until all of them
+read `DONE`. For `motivation` the count is analysed workloads (251) rather than
+simulation jobs.
 
 ### 3.3 — Produce the figures and tables
 
-Once 3.2 shows every suite at `DONE` and the motivation count at 251:
+Once 3.2 shows every suite at `DONE`:
 
 ```bash
-bash experiments/ae/ae_run_all.sh --results                             # tables + Figures 12, 13, 20, 22
-bash experiments/ae/motivation/run_motivation.sh --plot                 # Figures 4, 5, 6, 8, 9
+bash experiments/ae/ae_run_all.sh --results
 ```
 
-`--results` skips any suite that is not finished yet and says so, and `--plot`
-refuses to draw incomplete figures, reporting how many of the 251 workloads are
-ready (`--allow-partial` overrides). Both are safe to re-run as the remaining
-suites land.
+This parses each finished suite and renders its figure or table, including
+Figures 4, 5, 6, 8, 9 from the motivation suite. It skips anything not finished
+yet and says so, so it is safe to re-run as the remaining suites land.
 
 ### What you get (SLURM or single machine)
 

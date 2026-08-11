@@ -43,8 +43,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/../lib/venv.sh"                  # put the AE Python venv on PATH (numpy/matplotlib)
 ROOT="$(cd "$HERE/../../.." && pwd)"           # artifact root (…/Virtuoso)
 DUMPS=""; MODE="local"; JOBS=$(( $(nproc) - 2 )); PARTS=""; OUT="$HERE/motivation_out"
-ACTION="analyse"; PARTIAL=0; OUT_SET=""
+ACTION="analyse"; PARTIAL=0; OUT_SET=""; EMIT_CMDS=""
 while [ $# -gt 0 ]; do case "$1" in
+  --emit-cmds) EMIT_CMDS="$2"; shift 2;;   # ae_run_all's shared local scheduler
   --analyse|--analyze) ACTION="analyse"; shift;;
   --plot) ACTION="plot"; shift;;
   --allow-partial) PARTIAL=1; shift;;
@@ -119,6 +120,24 @@ todo=$(grep -c . "$work"); total=$(ls "$DUMPS"/*.csv "$DUMPS"/*.csv.gz 2>/dev/nu
 have() { ls "$JDIR"/*.json 2>/dev/null | wc -l; }
 plot_cmd="bash experiments/ae/motivation/run_motivation.sh --plot${OUT_SET:+ --out $OUT}"
 
+# Record launch state in the same format the AE watcher reads for every other
+# suite (ae_out/<suite>.launch), so `motivation` is watched, statused and gated
+# by exactly the machinery the simulation suites use. No jobfile: progress is
+# counted as JSON files under results=.
+AE_OUT="$(cd "$HERE/.." && pwd)/ae_out"
+write_launch() {
+  mkdir -p "$AE_OUT"
+  {
+    echo "suite=motivation"
+    echo "mode=$MODE"
+    echo "expected=$total"
+    echo "results=$JDIR"
+    echo "jobfile="
+    echo "partitions=$PARTS"
+    echo "user=$USER"
+  } > "$AE_OUT/motivation.launch"
+}
+
 # --- step 2: plot ------------------------------------------------------------
 # Separate from the analysis on purpose: in SLURM mode the analysis only submits
 # jobs, so the figures cannot exist until they finish. Plotting is its own step
@@ -146,6 +165,23 @@ fi
 
 # --- step 1: analyse ---------------------------------------------------------
 echo "==== motivation analysis: $todo of $total workloads to run (mode=$MODE) ===="
+
+# --emit-cmds: hand the per-workload commands to ae_run_all's shared local
+# scheduler instead of running a pool here, so the analyses queue behind the
+# same --jobs limit as the simulations rather than competing with them.
+if [ -n "$EMIT_CMDS" ]; then
+  : > "$EMIT_CMDS"
+  while IFS= read -r dump; do
+    wl=$(basename "$dump"); wl="${wl%.csv.gz}"; wl="${wl%.csv}"
+    printf '%s\0' "python3 '$AN' --dump '$dump' --workload '$wl' --out '$JDIR/$wl.json' >/dev/null 2>&1" \
+      >> "$EMIT_CMDS"
+  done < "$work"
+  rm -f "$work"
+  echo "  local: queued $todo analyses for the shared scheduler."
+  write_launch
+  exit 0
+fi
+
 if [ "$todo" -gt 0 ]; then
   if [ "$MODE" = "slurm" ]; then
     while IFS= read -r dump; do
@@ -163,15 +199,18 @@ if [ "$todo" -gt 0 ]; then
   fi
 fi
 rm -f "$work"
+write_launch
 
 n=$(have)
 echo "  analysed: $n/$total workloads."
 echo
 if [ "$n" -lt "$total" ]; then
-  echo "==== next: wait for the analysis, then plot (step 2 of 2) ===="
-  echo "  progress:  ls $JDIR/*.json | wc -l    # should reach $total"
+  echo "==== next: wait for the analysis, then plot ===="
+  echo "  progress:  bash experiments/ae/ae_run_all.sh --status"
+  echo "             (or: ls $JDIR/*.json | wc -l   # should reach $total)"
   [ "$MODE" = "slurm" ] && echo "  queue:     squeue -u \$USER | grep -c mot_"
 else
-  echo "==== next: produce the figures (step 2 of 2) ===="
+  echo "==== next: produce the figures ===="
 fi
 echo "  plot:      $plot_cmd"
+echo "             (or, with every other suite: bash experiments/ae/ae_run_all.sh --results)"

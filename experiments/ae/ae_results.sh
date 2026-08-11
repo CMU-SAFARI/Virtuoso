@@ -39,6 +39,11 @@ fi
 
 echo "==== [results] $SUITE  ->  paper $FIG ===="
 sed 's/^/  /' "$DONEF" | head -8
+
+# motivation: no parser/table — its own driver renders the five figures
+if [ "$KIND" = "mot" ]; then
+  exec bash "$HERE/motivation/run_motivation.sh" --plot
+fi
 MD="$AE_OUT/$SUITE.md"; PDF="$AE_OUT/$FIGFILE.pdf"
 echo "parsing -> $MD"
 python3 "$HERE/parse/$PARSER" --results-dir "$RESULTS" --top200 "$TOP200" $PARGS --md "$MD" >/dev/null 2>&1 \

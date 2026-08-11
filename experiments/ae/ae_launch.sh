@@ -36,6 +36,17 @@ while [ $# -gt 0 ]; do case "$1" in
 esac; done
 [ -n "$SUITE" ] || { echo "ERROR: --suite required"; exit 2; }
 ae_suite_cfg "$SUITE" || exit 1
+mkdir -p "$AE_OUT"
+
+# The motivation "suite" has no jobfile and no simulator: hand it to its own
+# driver, which submits/queues one analysis per PTW dump and writes the same
+# ae_out/<suite>.launch the watcher reads. Everything downstream is unchanged.
+if [ "$KIND" = "mot" ]; then
+  exec bash "$HERE/motivation/run_motivation.sh" --mode "$MODE" \
+       ${PARTS:+--partitions "$PARTS"} ${JOBS:+--jobs "$JOBS"} \
+       ${EMIT_CMDS:+--emit-cmds "$EMIT_CMDS"}
+fi
+
 [ -x "$ROOT/simulator/sniper/lib/sniper" ] || { echo "ERROR: lib/sniper not built (run build_and_validate.sh first)."; exit 1; }
 [ "$JOBS" -lt 1 ] 2>/dev/null && JOBS=1
 mkdir -p "$AE_OUT"

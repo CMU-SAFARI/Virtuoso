@@ -13,10 +13,15 @@ YAML_MC="$EXP/clist_multicore.yaml"
 TOP200="$EXP/top200_trail_workloads.txt"
 AE_OUT="$AE_DIR/ae_out"
 
-ALL_SUITES="head8mb head2mb table5 table6 pqsweep multicore"
+ALL_SUITES="head8mb head2mb table5 table6 pqsweep multicore motivation"
 
 # suite -> (generator, suite(s), exp-dir, parser, parser-args, paper label, figure file)
-ae_suite_cfg() {  # sets GEN EXPSUITE DIR PARSER PARGS FIG FIGFILE ; returns 1 on unknown suite
+# KIND=sim for the simulation suites, KIND=mot for the motivation analysis, which
+# is driven by motivation/run_motivation.sh instead of a generated jobfile. The
+# phase scripts dispatch on KIND; everything else about a suite — the ae_out
+# status/DONE contract, and therefore ae_run_all's three passes — is identical.
+ae_suite_cfg() {  # sets KIND GEN EXPSUITE DIR PARSER PARGS FIG FIGFILE ; returns 1 on unknown suite
+  KIND=sim
   case "$1" in
     head8mb)   GEN=sc; EXPSUITE="trail_comparison_v4";             DIR="ae_head8mb"; PARSER=parse_headtohead.py; PARGS="";                 FIG="Figure 12 (bottom, 8 MB NUCA)"; FIGFILE="figure12";;
     head2mb)   GEN=sc; EXPSUITE="trail_comparison_v4_nuca2mb";     DIR="ae_head2mb"; PARSER=parse_headtohead.py; PARGS="--suffix=-nuca2mb"; FIG="Figure 12 (top, 2 MB NUCA)";     FIGFILE="figure12";;
@@ -24,9 +29,15 @@ ae_suite_cfg() {  # sets GEN EXPSUITE DIR PARSER PARGS FIG FIGFILE ; returns 1 o
     table6)    GEN=sc; EXPSUITE="sidecar-payload-sweep-corrected"; DIR="ae_table6";  PARSER=parse_table6.py;    PARGS="";                 FIG="Table 6";  FIGFILE="table6";;
     pqsweep)   GEN=sc; EXPSUITE="pq-size-sweep";                   DIR="ae_pqsweep"; PARSER=parse_pqsweep.py;   PARGS="";                 FIG="Figure 20"; FIGFILE="figure20";;
     multicore) GEN=mc; EXPSUITE="prefetcher_v4_diverse_4core prefetcher_v4_diverse_4core_x60"; DIR="ae_multicore"; PARSER=parse_multicore.py; PARGS=""; FIG="Figure 22"; FIGFILE="figure22";;
+    motivation) KIND=mot; GEN=mot; EXPSUITE=""; DIR="motivation"; PARSER=""; PARGS=""; FIG="Figures 4, 5, 6, 8, 9 (temporal locality)"; FIGFILE="figure4_pc_delta_pairs";;
     *) echo "unknown suite: $1 (valid: $ALL_SUITES)" >&2; return 1;;
   esac
-  EXPDIR="$EXP/exp_${DIR}"; RESULTS="$EXPDIR/results"; JOBFILE="$EXPDIR/jobfile.sh"
+  if [ "$KIND" = "mot" ]; then
+    # no jobfile: one analysis per PTW dump, one JSON per workload
+    EXPDIR="$AE_DIR/motivation"; RESULTS="$EXPDIR/motivation_out/json"; JOBFILE=""
+  else
+    EXPDIR="$EXP/exp_${DIR}"; RESULTS="$EXPDIR/results"; JOBFILE="$EXPDIR/jobfile.sh"
+  fi
 }
 
 # generate the jobfile for a suite (idempotent; --force overwrites)

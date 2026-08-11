@@ -114,3 +114,7 @@ simulator/sniper/test_results/
 simulator/sniper/.vscode/*
 .vscode/*
 
+
+# Datasets downloaded by build_and_validate.sh into the clone (traces, PTW dumps).
+/ae_bundle/
+/ptw_bundle/

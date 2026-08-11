@@ -48,7 +48,22 @@ use these dumps — only the motivation figures do).
 own `PATH` but your interactive shell does not, so a bare `hf download` fails with
 *command not found*.
 
-## 2. Analyse, then plot — two commands
+## 2. The easy way — through the AE harness
+
+`motivation` is a suite like `head8mb` or `multicore`, so the normal three passes
+cover it and you do not need the commands in this file at all:
+
+```bash
+bash experiments/ae/ae_run_all.sh --mode slurm --partitions <p>   # or --mode local --jobs $(nproc)
+bash experiments/ae/ae_run_all.sh --status                        # wait for DONE
+bash experiments/ae/ae_run_all.sh --results                       # renders the five figures
+```
+
+Restrict it to this suite alone with `--suites motivation`. Progress, the
+`ae_out/motivation.DONE` pass/fail report and the results gate work exactly as
+they do for a simulation suite; the count is analysed workloads rather than jobs.
+
+## 3. The direct way — analyse, then plot
 
 `--dumps` is optional; omit it to use the pre-staged bundle found above.
 

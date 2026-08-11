@@ -11,6 +11,9 @@ vm_tlist/
 ae/ae_out/
 ae/*.manifest
 
+# Motivation suite: per-workload JSON + the rendered figures.
+ae/motivation/motivation_out/
+
 # Python caches
 __pycache__/
 *.pyc
