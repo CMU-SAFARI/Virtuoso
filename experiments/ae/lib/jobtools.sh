@@ -31,9 +31,13 @@ ae_line_rundir() { local t="${1#* -d }"; printf '%s' "${t%% *}"; }
 # Returns 0 if all present; prints the missing ones and returns 1 otherwise.
 ae_preflight_traces() {  # $1 = jobfile
   local jf="$1" missing=0 total
-  # traces appear as --traces=a,b,c ; split on comma
+  # traces appear as --traces=a,b,c ; split on comma.
+  # The multicore generator puts --traces LAST inside a double-quoted command,
+  # so the closing quote is glued to the final path (…/d.champsim.gz"). Strip
+  # quotes before stat-ing, or every mix's last trace is reported MISSING.
   local tmp; tmp=$(mktemp)
-  grep -oE -- '--traces=[^ ]+' "$jf" | sed 's/--traces=//' | tr ',' '\n' | sort -u > "$tmp"
+  grep -oE -- '--traces=[^ ]+' "$jf" | sed 's/--traces=//' | tr ',' '\n' \
+    | tr -d '"'"'" | sort -u > "$tmp"
   total=$(wc -l < "$tmp")
   echo "[preflight] checking $total unique traces ..."
   while IFS= read -r t; do
