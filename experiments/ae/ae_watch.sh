@@ -12,6 +12,14 @@
 # the end) how many PASSED vs FAILED, listing the failed run-dirs. When every
 # job is accounted for it writes experiments/ae/ae_out/<suite>.DONE (the green
 # signal) and exits. Phase 4 (ae_results.sh) waits for that flag.
+#
+# WHAT COUNTS AS FINISHED: the results on disk, not the queue. The watcher stops
+# as soon as every expected job has produced a valid result — SLURM can hold jobs
+# in CG (completing) for many minutes after they have written their output, and a
+# job-name match can be skewed by an unrelated job of your own, so gating on the
+# queue would stall .DONE (and the whole results pass) long after the data is
+# complete. The queue is the secondary signal: if it drains while results are
+# still missing, those jobs failed and the report lists them.
 # ===========================================================================
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -44,12 +52,24 @@ fi
 eval "$(grep -E '^(mode|expected|results|jobfile)=' "$LAUNCH")"
 RUNDIRS=()
 if [ "$KIND" = "mot" ]; then
-  # motivation: progress is one JSON per workload, and the jobs are named mot_<wl>
+  # motivation: progress is one JSON per workload. Match the exact job names the
+  # launcher recorded, not a mot_* prefix, so an unrelated job of your own cannot
+  # read as this suite still running. (Other accounts are already excluded: the
+  # queue is filtered by -u $USER.) The prefix is only a fallback for a launch
+  # file written before the sidecar existed.
   UNIT="analysed workloads"
+  MOTNAMES="$AE_OUT/$SUITE.jobnames"
   count_valid() { ls "$results"/*.json 2>/dev/null | wc -l; }
-  count_active_slurm() {
-    squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | grep -c '^mot_'
-  }
+  if [ -s "$MOTNAMES" ]; then
+    count_active_slurm() {
+      comm -12 <(squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | sort -u) \
+               <(sort -u "$MOTNAMES") | wc -l
+    }
+  else
+    count_active_slurm() {
+      squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | grep -c '^mot_'
+    }
+  fi
 else
   UNIT="jobs with a valid sim.stats"
   mapfile -t RUNDIRS < <(ae_expected_rundirs "$jobfile")
@@ -84,15 +104,27 @@ while :; do
   fi
   prev_done=$done
   pending=$(( exp - done )); [ "$pending" -lt 0 ] && pending=0
+  # RESULTS ON DISK ARE THE TRUTH; the queue is only a secondary signal.
+  # Once every expected result is there the suite IS finished, whatever SLURM
+  # still reports: jobs sit in CG (completing) for minutes after writing their
+  # output, and a job-name check can be skewed by an unrelated job of yours.
+  # Waiting on the queue in that state stalls .DONE — and with it the results
+  # pass — long after the data is complete.
+  complete=$([ "$done" -ge "$exp" ] && echo 1 || echo 0)
   {
     echo "suite:   $SUITE        mode: $mode"
     echo "updated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "done:    $done / $exp   ($UNIT)"
     echo "active:  $active   (running/pending)"
-    echo "status:  $([ "$active" -gt 0 ] && echo RUNNING || echo FINISHING)"
+    if [ "$complete" -eq 1 ] && [ "$active" -gt 0 ]; then
+      echo "status:  FINISHING   (all $exp results written; $active job(s) still clearing the queue)"
+    else
+      echo "status:  $([ "$active" -gt 0 ] && echo RUNNING || echo FINISHING)"
+    fi
   } > "$STATUS"
 
-  [ "$active" -eq 0 ] && break
+  [ "$complete" -eq 1 ] && break     # everything produced a result
+  [ "$active" -eq 0 ] && break       # nothing left to run; the rest failed
   sleep "$INTERVAL"
 done
 

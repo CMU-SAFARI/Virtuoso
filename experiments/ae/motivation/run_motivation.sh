@@ -184,11 +184,14 @@ fi
 
 if [ "$todo" -gt 0 ]; then
   if [ "$MODE" = "slurm" ]; then
+    mkdir -p "$AE_OUT"; : > "$AE_OUT/motivation.jobnames"
     while IFS= read -r dump; do
       wl=$(basename "$dump"); wl="${wl%.csv.gz}"; wl="${wl%.csv}"
       sbatch ${PARTS:+--partition=$PARTS} -c 2 -J "mot_$wl" \
         --output="$JDIR/$wl.slurm.out" --error="$JDIR/$wl.slurm.err" \
         --wrap="python3 '$AN' --dump '$dump' --workload '$wl' --out '$JDIR/$wl.json'" >/dev/null
+      # exact names for the watcher: a mot_* prefix could alias another job of yours
+      echo "mot_$wl" >> "$AE_OUT/motivation.jobnames"
     done < "$work"
     echo "  submitted $todo SLURM jobs."
   else
