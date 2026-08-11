@@ -183,6 +183,16 @@ Every suite reports `done: N / M` and a `status:` line; wait until all of them
 read `DONE`. For `motivation` the count is analysed workloads (251) rather than
 simulation jobs.
 
+**A suite is finished when its results are on disk, not when the queue is empty.**
+`done` counts jobs that produced a valid result — a `sim.stats` containing a
+cycle count, or a complete per-workload JSON — and once that reaches the expected
+number the watcher writes `DONE` immediately. This matters on a busy cluster,
+where SLURM can hold finished jobs in `CG` (completing) for many minutes after
+they have written their output; you will see `FINISHING (all N results written;
+K job(s) still clearing the queue)` and can move straight to 3.3. If instead the
+queue drains while results are missing, those jobs failed and the `DONE` report
+lists them.
+
 ### 3.3 — Produce the figures and tables
 
 Once 3.2 shows every suite at `DONE`:
@@ -232,6 +242,11 @@ bash experiments/ae/ae_results.sh --suite head8mb --wait
 
 Re-running `ae_launch.sh` only resubmits jobs that do not yet have a valid result,
 so it cleanly heals a partially-failed suite without repeating finished work.
+
+The same three scripts drive `--suite motivation`; they hand off to
+`motivation/run_motivation.sh` underneath, so recovery works identically. A
+workload is redone unless its JSON is complete, which also repairs one truncated
+by a job that was killed mid-write.
 
 ---
 
