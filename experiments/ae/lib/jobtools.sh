@@ -11,6 +11,14 @@ ae_valid_result() {  # $1 = rundir (the -d dir)
   [ -s "$s" ] && grep -q '^performance_model.cycle_count =' "$s" 2>/dev/null
 }
 
+# The motivation suite's equivalent: one JSON per workload. Checked for content,
+# not just existence — analyze_dump.py writes atomically, but a JSON left by an
+# older version (or copied in by hand) could still be truncated, and both the
+# watcher and the resume logic would then treat that workload as finished.
+ae_valid_json() {  # $1 = <workload>.json
+  [ -s "$1" ] && [ "$(tail -c 1 "$1" 2>/dev/null)" = "}" ]
+}
+
 # --- ensure a sbatch line targets the requested partitions (pure bash) ---
 ae_ensure_partition() {  # $1=line $2=partitions(csv, empty = leave as-is)
   local line="$1" parts="$2" val

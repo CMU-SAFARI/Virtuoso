@@ -13,7 +13,7 @@ Writes a single JSON file with all of the above.
 
     analyze_dump.py --dump <ptw_dump.csv[.gz]> --workload <name> --out <name.json>
 """
-import argparse, csv, gzip, io, json, sys
+import argparse, csv, gzip, io, json, os, sys
 from collections import defaultdict, Counter
 
 REGION_SHIFT = 3                       # 32 KB successor regions (8 x 4 KB pages)
@@ -132,7 +132,16 @@ def main():
     if res is None:
         print(f"skip {a.workload}: too few PTWs", file=sys.stderr); sys.exit(0)
     res["workload"] = a.workload
-    json.dump(res, open(a.out, "w"))
+    # Write atomically: the JSON's presence is what the watcher counts as this
+    # workload being finished, and what a re-run treats as "already analysed".
+    # A direct open(...,"w") truncates first, so a job killed mid-write would
+    # leave a partial file that looks complete and is never redone.
+    tmp = a.out + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(res, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, a.out)
     print(f"[ok] {a.workload}: {res['n_transitions']} transitions -> {a.out}")
 
 if __name__ == "__main__":

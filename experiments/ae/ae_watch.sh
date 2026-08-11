@@ -59,7 +59,11 @@ if [ "$KIND" = "mot" ]; then
   # file written before the sidecar existed.
   UNIT="analysed workloads"
   MOTNAMES="$AE_OUT/$SUITE.jobnames"
-  count_valid() { ls "$results"/*.json 2>/dev/null | wc -l; }
+  count_valid() {  # complete JSONs, not merely present ones
+    local f n=0
+    for f in "$results"/*.json; do [ -e "$f" ] || continue; ae_valid_json "$f" && n=$((n+1)); done
+    echo "$n"
+  }
   if [ -s "$MOTNAMES" ]; then
     count_active_slurm() {
       comm -12 <(squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | sort -u) \

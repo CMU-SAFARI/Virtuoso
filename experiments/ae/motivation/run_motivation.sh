@@ -109,15 +109,24 @@ ls "$DUMPS"/*.csv* >/dev/null 2>&1 || { echo "ERROR: no dumps (*.csv/*.csv.gz) i
 JDIR="$OUT/json"; mkdir -p "$JDIR"
 AN="$HERE/analyze_dump.py"
 
+# A workload counts as analysed only if its JSON is complete: a truncated one
+# (job killed mid-write by an older, non-atomic analyze_dump.py) would otherwise
+# be skipped forever by this resume test and then break the plot.
+json_ok() { [ -s "$1" ] && [ "$(tail -c 1 "$1" 2>/dev/null)" = "}" ]; }
+
 # build the worklist of dumps still needing a JSON
 work=$(mktemp)
 for dump in "$DUMPS"/*.csv "$DUMPS"/*.csv.gz; do
   [ -e "$dump" ] || continue
   wl=$(basename "$dump"); wl="${wl%.csv.gz}"; wl="${wl%.csv}"
-  [ -f "$JDIR/$wl.json" ] || echo "$dump"
+  json_ok "$JDIR/$wl.json" || echo "$dump"
 done > "$work"
 todo=$(grep -c . "$work"); total=$(ls "$DUMPS"/*.csv "$DUMPS"/*.csv.gz 2>/dev/null | wc -l)
-have() { ls "$JDIR"/*.json 2>/dev/null | wc -l; }
+have() {  # complete JSONs only
+  local f n=0
+  for f in "$JDIR"/*.json; do [ -e "$f" ] || continue; json_ok "$f" && n=$((n+1)); done
+  echo "$n"
+}
 plot_cmd="bash experiments/ae/motivation/run_motivation.sh --plot${OUT_SET:+ --out $OUT}"
 
 # Record launch state in the same format the AE watcher reads for every other
