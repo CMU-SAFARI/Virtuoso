@@ -146,13 +146,24 @@ it to use your cluster's default; no `--partition` is passed to `sbatch`).
 Restrict the set with `--suites "head8mb multicore"`.
 
 **Motivation figures (Figures 4, 5, 6, 8, 9) — a separate step.** `ae_run_all.sh`
-does **not** produce these. To get them you must run the two extra commands below
-(download the page-table-walk dumps, then analyse them as one SLURM job per
-workload):
+does **not** produce these. It is **two commands**: analyse (one SLURM job per
+workload), then plot once those jobs finish. Step 1 reuses a pre-staged dump
+bundle if one is present — it looks for `$HOME/ptw_bundle`, `../ptw_bundle`, then
+`./ptw_bundle`, and says which it found:
+
+```bash
+bash experiments/ae/motivation/run_motivation.sh --mode slurm [--partitions <p>]   # 1. analyse
+bash experiments/ae/motivation/run_motivation.sh --plot                            # 2. figures
+```
+
+Step 1 submits and returns immediately — the figures cannot exist until the jobs
+finish, so run step 2 afterwards. It refuses to draw incomplete figures and
+reports how many of the 251 workloads are ready (`--allow-partial` overrides).
+
+Only if none of those exists do you need the 2.9 GB download first:
 
 ```bash
 hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
-bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode slurm [--partitions <p>]
 ```
 
 ### B) Run on a single machine (no SLURM)
@@ -175,13 +186,19 @@ to a minutes-long end-to-end smoke test (the numbers won't match the paper at
 2 M instructions). `--icount` works in SLURM mode too.
 
 **Motivation figures (Figures 4, 5, 6, 8, 9) — a separate step.** `ae_run_all.sh`
-does **not** produce these. To get them you must run the two extra commands below
-(download the page-table-walk dumps, then analyse them locally on up to `N`
-cores):
+does **not** produce these. It is **two commands**: analyse the dumps locally on
+up to `N` cores, then plot. Step 1 reuses a pre-staged dump bundle if one is
+present — `$HOME/ptw_bundle`, `../ptw_bundle`, then `./ptw_bundle`:
+
+```bash
+bash experiments/ae/motivation/run_motivation.sh --mode local --jobs $(nproc)   # 1. analyse
+bash experiments/ae/motivation/run_motivation.sh --plot                          # 2. figures
+```
+
+Only if none of those exists do you need the 2.9 GB download first:
 
 ```bash
 hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
-bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode local --jobs $(nproc)
 ```
 
 ### What you get (either mode)

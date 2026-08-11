@@ -12,24 +12,59 @@ CSV per workload of `(PTW_Address, EIP, …)` — not from full simulations.
 | **Figure 8** | Successor-region granularity sweep (top-4 / top-8) |
 | **Figure 9** | % of representable delta occurrences vs. delta bit-width |
 
-## 1. Download the dumps
+## 1. Get the dumps
 
-The dumps are a public Hugging Face dataset (~3 GB, 251 workloads):
+**First check whether they are already on the machine.** `run_motivation.sh` looks
+for a pre-staged bundle before anything else, in this order:
+
+```
+$HOME/ptw_bundle          <- usual place on a shared machine (often a symlink)
+<artifact>/../ptw_bundle
+<artifact>/ptw_bundle
+```
+
+If one is there the script says so and the download is skipped. To share a single
+copy between accounts, symlink it:
+
+```bash
+ln -s /path/to/shared/ptw_bundle ~/ptw_bundle
+```
+
+Otherwise the dumps are a public Hugging Face dataset (~3 GB, 251 workloads):
 
 ```bash
 hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
 #   -> ./ptw_bundle/ptw_dumps/<workload>.csv.gz
 ```
 
-## 2. Analyse + plot — one command
+## 2. Analyse, then plot — two commands
+
+`--dumps` is optional; omit it to use the pre-staged bundle found above.
+
+**Step 1 — analyse** (one job per workload; never plots):
 
 ```bash
-# local: analyse on this machine with up to N cores, then plot
-bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode local --jobs $(nproc)
+# local: analyse on this machine with up to N cores
+bash experiments/ae/motivation/run_motivation.sh --mode local --jobs $(nproc)
 
-# or on a SLURM cluster: one job per workload, then re-run to plot once done
-bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode slurm [--partitions <p>]
+# or on a SLURM cluster: submits one job per workload and returns immediately
+bash experiments/ae/motivation/run_motivation.sh --mode slurm [--partitions <p>]
+
+# explicit path still works and overrides the search
+bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode local
 ```
+
+**Step 2 — plot**, once step 1 has finished (in SLURM mode, once the jobs are done —
+check with `ls motivation_out/json/*.json | wc -l`, which should reach 251):
+
+```bash
+bash experiments/ae/motivation/run_motivation.sh --plot
+```
+
+Step 2 is separate on purpose: in SLURM mode the analysis only *submits* the jobs,
+so the figures cannot exist yet. It refuses to draw incomplete figures and reports
+how many workloads are ready; pass `--allow-partial` to plot anyway. Both steps are
+resumable — re-running step 1 only analyses what is still missing.
 
 Output goes to `experiments/ae/motivation/motivation_out/`:
 `figure4_pc_delta_pairs`, `figure5_topk_coverage`, `figure6_transitions_4wl`,
@@ -42,5 +77,5 @@ again to produce the figures.
 
 ## Pieces
 - `analyze_dump.py` — reads one dump, computes all per-workload metrics (one pass).
-- `run_motivation.sh` — SLURM/local driver + plotting.
+- `run_motivation.sh` — SLURM/local driver: analysis (default) and `--plot`, as two steps.
 - `plot_motivation.py` — renders the five figures (default matplotlib font).

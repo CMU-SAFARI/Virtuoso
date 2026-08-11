@@ -203,9 +203,14 @@ experiments/ae/ae_out/. You do NOT run anything per-suite.
 
 Motivation figures (Figures 4, 5, 6, 8, 9 — separate, no simulation):
 
-    hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
-    bash experiments/ae/motivation/run_motivation.sh --dumps ./ptw_bundle --mode local --jobs \$(nproc)
-    #   on a cluster instead:  --mode slurm [--partitions <p>]
+    bash experiments/ae/motivation/run_motivation.sh --mode local --jobs \$(nproc)   # 1. analyse
+    bash experiments/ae/motivation/run_motivation.sh --plot                          # 2. figures
+    #   on a cluster instead:  --mode slurm [--partitions <p>]  — step 1 only submits
+    #   the jobs there, so run step 2 once they finish (it refuses to draw partial
+    #   figures and tells you how many of the workloads are ready).
+    # Step 1 reuses a pre-staged bundle (\$HOME/ptw_bundle, ../ptw_bundle, ./ptw_bundle)
+    # and tells you so. Only if there is none do you need the 2.9 GB download:
+    #   hf download konkanello/trail_ptw_dumps --repo-type dataset --local-dir ./ptw_bundle
 
 Don't run launch/status/results back-to-back: launch once, poll --status until
 every suite reads DONE, then --results. Full details: experiments/ae/README.md.
