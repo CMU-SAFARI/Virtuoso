@@ -59,7 +59,7 @@ bash experiments/ae/lib/install_deps.sh        # uses sudo if you are not root
 bash experiments/ae/build_and_validate.sh --skip-deps
 ```
 
-This builds the simulator, downloads the trace dataset, and runs a few short
+This builds the simulator, downloads the datasets, and runs a few short
 simulations on randomly chosen traces to confirm the whole pipeline works. It
 shows progress and then **stops**:
 
@@ -68,9 +68,15 @@ shows progress and then **stops**:
 [2/4] build the simulator             (~2-3 min)
 [3/4] traces + trace-lists             (skipped if ../ae_bundle is already there;
                                         else public dataset; ~250 GB; resumable)
+      + PTW dumps for the motivation   (skipped if a ptw_bundle is already there;
+        figures                         else ~2.9 GB; --skip-ptw-dumps opts out)
 [4/4] validate on 3 random traces      ->  [PASS] <trace> IPC=...
       "Setup is validated. You are ready to run the experiments."
 ```
+
+**All downloading happens here.** The run scripts (`ae_*`, `run_motivation.sh`)
+never fetch anything, so once this step succeeds every later command works
+offline against what is on disk.
 
 Every phase is resumable — re-run the command after an interruption and it skips
 whatever is already done. **This step alone is enough to confirm the artifact
@@ -163,12 +169,10 @@ Step 1 submits and returns immediately — the figures cannot exist until the jo
 finish, so run step 2 afterwards. It refuses to draw incomplete figures and
 reports how many of the 251 workloads are ready (`--allow-partial` overrides).
 
-Only if none of those exists do you need the 2.9 GB download first — as a harness
-command, so you never have to activate the virtualenv `hf` lives in:
-
-```bash
-bash experiments/ae/motivation/run_motivation.sh --download    # 0. dumps (resumable)
-```
+If none of those exists, the dumps were staged for you by Step 2 —
+`build_and_validate.sh` downloads them (~2.9 GB, resumable) in phase [3/4], unless
+you passed `--skip-ptw-dumps`. Re-run Step 2 to fetch them; `run_motivation.sh`
+never downloads anything itself.
 
 ### B) Run on a single machine (no SLURM)
 
@@ -199,12 +203,10 @@ bash experiments/ae/motivation/run_motivation.sh --mode local --jobs $(nproc)   
 bash experiments/ae/motivation/run_motivation.sh --plot                          # 2. figures
 ```
 
-Only if none of those exists do you need the 2.9 GB download first — as a harness
-command, so you never have to activate the virtualenv `hf` lives in:
-
-```bash
-bash experiments/ae/motivation/run_motivation.sh --download    # 0. dumps (resumable)
-```
+If none of those exists, the dumps were staged for you by Step 2 —
+`build_and_validate.sh` downloads them (~2.9 GB, resumable) in phase [3/4], unless
+you passed `--skip-ptw-dumps`. Re-run Step 2 to fetch them; `run_motivation.sh`
+never downloads anything itself.
 
 ### What you get (either mode)
 

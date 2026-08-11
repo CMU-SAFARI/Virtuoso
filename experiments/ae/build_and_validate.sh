@@ -32,7 +32,11 @@
 #                        copy            full byte-for-byte copy (needs the space)
 #   --n         N      random traces to validate (default: 3)
 #   --skip-deps        do not run install_deps.sh (deps already installed)
-#   --skip-download    reuse an existing bundle (no HF download)
+#   --skip-download    reuse an existing bundle (no HF download; implies
+#                      --skip-ptw-dumps)
+#   --skip-ptw-dumps   do not fetch the PTW dumps used by the motivation figures
+#   --ptw-bundle DIR   where those dumps go        (default: <artifact>/ptw_bundle)
+#   --ptw-repo   REPO  their Hugging Face dataset  (default: konkanello/trail_ptw_dumps)
 # ===========================================================================
 set -uo pipefail
 
@@ -42,19 +46,25 @@ SNIPER="$ROOT/simulator/sniper"
 source "$HERE/lib/venv.sh"                        # put the AE Python venv on PATH (hf)
 
 HF_REPO="${HF_REPO:-konkanello/trail_traces}"
+PTW_REPO="${PTW_REPO:-konkanello/trail_ptw_dumps}" # dumps for the motivation figures
+PTW_BUNDLE="$ROOT/ptw_bundle"
 BUNDLE="$ROOT/ae_bundle"
 BUNDLE_SET=0                                      # did the user pass --bundle?
 BUNDLE_MODE="${AE_BUNDLE_MODE:-reuse}"            # reuse | link | copy
 NVAL=3
 SKIP_DEPS=0
 SKIP_DL=0
+SKIP_PTW=0
 while [ $# -gt 0 ]; do case "$1" in
   --hf-repo) HF_REPO="$2"; shift 2;;
+  --ptw-repo) PTW_REPO="$2"; shift 2;;
+  --ptw-bundle) PTW_BUNDLE="$2"; shift 2;;
+  --skip-ptw-dumps) SKIP_PTW=1; shift;;
   --bundle) BUNDLE="$2"; BUNDLE_SET=1; shift 2;;
   --bundle-mode) BUNDLE_MODE="$2"; shift 2;;
   --n) NVAL="$2"; shift 2;;
   --skip-deps) SKIP_DEPS=1; shift;;
-  --skip-download) SKIP_DL=1; shift;;
+  --skip-download) SKIP_DL=1; SKIP_PTW=1; shift;;
   # print only the leading header block, not every comment in the body
   -h|--help) awk 'NR>1 && !/^#/{exit} NR>1{sub(/^# ?/,""); print}' "$0"; exit 0;;
   *) echo "unknown arg: $1"; exit 2;;
@@ -173,6 +183,41 @@ echo "  resolving trace-lists -> experiments/vm_tlist ..."
 bash "$HERE/lib/setup_tlists.sh" "$(realpath "$BUNDLE/traces")" "$ROOT/experiments/vm_tlist" "$BUNDLE/vm_tlist" \
   || die "setup_tlists.sh failed."
 
+# --- page-table-walk dumps (motivation figures 4, 5, 6, 8, 9) ----------------
+# Staged here, with the traces, so that run_motivation.sh never has to download:
+# the run scripts only run. Same pre-staged convention as the trace bundle, and
+# the same locations run_motivation.sh searches, so it then needs no --dumps.
+echo
+echo "  PTW dumps (motivation figures 4, 5, 6, 8, 9):"
+ptw_ok() {                                        # at least one dump in <dir>[/ptw_dumps]
+  local d f
+  for d in "$1" "$1/ptw_dumps"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*.csv "$d"/*.csv.gz; do [ -e "$f" ] && return 0; done
+  done
+  return 1
+}
+PTW_STAGED=""
+for cand in "${HOME:-/nonexistent}/ptw_bundle" "$ROOT/../ptw_bundle" "$PTW_BUNDLE"; do
+  ptw_ok "$cand" && { PTW_STAGED="$cand"; break; }
+done
+if [ -n "$PTW_STAGED" ]; then
+  echo "    ${C_G}found a pre-staged PTW-dump bundle:${C_0} $PTW_STAGED — no download needed."
+  [ -L "$PTW_STAGED" ] && echo "    (symlink -> $(readlink -f "$PTW_STAGED"))"
+elif [ "$SKIP_PTW" -eq 1 ]; then
+  echo "    ${C_Y}--skip-ptw-dumps: not fetched.${C_0} The six simulation suites do not need"
+  echo "    them; only the motivation figures do. Re-run without the flag to get them."
+else
+  echo "    downloading '$PTW_REPO' -> $PTW_BUNDLE  (~2.9 GB, resumable)"
+  if hf download "$PTW_REPO" --repo-type dataset --local-dir "$PTW_BUNDLE"; then
+    echo "    dumps: $(ls "$PTW_BUNDLE"/ptw_dumps/*.csv "$PTW_BUNDLE"/ptw_dumps/*.csv.gz 2>/dev/null | wc -l) files"
+  else
+    # Not fatal: the simulation suites — the bulk of the artifact — do not use these.
+    echo "    ${C_Y}WARNING: the PTW-dump download failed. Everything except the motivation"
+    echo "    figures still works; re-run build_and_validate.sh to resume it.${C_0}"
+  fi
+fi
+
 # --- [4/4] validate ----------------------------------------------------------
 step "[4/4] Validate the setup on $NVAL random traces"
 bash "$HERE/lib/validate_traces.sh" --n "$NVAL" || die "trace validation failed — do not launch the full run yet."
@@ -208,9 +253,9 @@ Motivation figures (Figures 4, 5, 6, 8, 9 — separate, no simulation):
     #   on a cluster instead:  --mode slurm [--partitions <p>]  — step 1 only submits
     #   the jobs there, so run step 2 once they finish (it refuses to draw partial
     #   figures and tells you how many of the workloads are ready).
-    # Step 1 reuses a pre-staged bundle (\$HOME/ptw_bundle, ../ptw_bundle, ./ptw_bundle)
-    # and tells you so. Only if there is none do you need the 2.9 GB download first:
-    #   bash experiments/ae/motivation/run_motivation.sh --download
+    # The dumps were staged above, in [3/4]; step 1 finds them by itself
+    # (\$HOME/ptw_bundle, ../ptw_bundle, ./ptw_bundle) and tells you which it used.
+    # If you passed --skip-ptw-dumps, re-run this script without it first.
 
 Don't run launch/status/results back-to-back: launch once, poll --status until
 every suite reads DONE, then --results. Full details: experiments/ae/README.md.

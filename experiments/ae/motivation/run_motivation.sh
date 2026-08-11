@@ -7,21 +7,20 @@
 # finish. Plotting is therefore its own command in BOTH modes — the same two
 # commands work on a cluster and on a laptop.
 #
-#   0) get dumps: run_motivation.sh --download        (only if none are staged)
-#   1) analyse:   run_motivation.sh [--mode local|slurm] [--jobs N] [--partitions p]
-#   2) plot:      run_motivation.sh --plot
+#   1) analyse:  run_motivation.sh [--mode local|slurm] [--jobs N] [--partitions p]
+#   2) plot:     run_motivation.sh --plot
 #
 # Step 1 is the default action; it never plots and ends by printing step 2.
 # Step 2 refuses to draw incomplete figures unless you pass --allow-partial.
 #
-# Step 0 exists so you never have to activate the venv: `hf` lives in the AE
-# virtualenv, which lib/venv.sh puts on PATH inside these scripts but NOT in your
-# interactive shell. Running the download through this script means every command
-# in the artifact is a harness command.
+# THE DUMPS ARE STAGED BY SETUP, NOT HERE. build_and_validate.sh fetches them in
+# phase [3/4] alongside the traces; this script only locates what is already on
+# disk and never downloads. If it finds nothing it tells you which setup command
+# to run.
 #
-#   experiments/ae/motivation/run_motivation.sh [--download | --plot] [--dumps <dir>]
+#   experiments/ae/motivation/run_motivation.sh [--plot] [--dumps <dir>]
 #         [--mode local|slurm] [--jobs N] [--partitions p1,p2] [--out <dir>]
-#         [--allow-partial] [--hf-repo REPO]
+#         [--allow-partial]
 #
 #   --dumps       directory of downloaded dumps (ptw_dumps/*.csv[.gz]). Optional:
 #                 if omitted, a PRE-STAGED bundle is looked for, in this order:
@@ -44,14 +43,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/../lib/venv.sh"                  # put the AE Python venv on PATH (numpy/matplotlib)
 ROOT="$(cd "$HERE/../../.." && pwd)"           # artifact root (…/Virtuoso)
 DUMPS=""; MODE="local"; JOBS=$(( $(nproc) - 2 )); PARTS=""; OUT="$HERE/motivation_out"
-ACTION="analyse"; PARTIAL=0; OUT_SET=""; HF_REPO="${HF_REPO:-konkanello/trail_ptw_dumps}"
+ACTION="analyse"; PARTIAL=0; OUT_SET=""
 while [ $# -gt 0 ]; do case "$1" in
   --analyse|--analyze) ACTION="analyse"; shift;;
   --plot) ACTION="plot"; shift;;
-  --download) ACTION="download"; shift;;
   --allow-partial) PARTIAL=1; shift;;
   --dumps) DUMPS="$2"; shift 2;;
-  --hf-repo) HF_REPO="$2"; shift 2;;
   --mode) MODE="$2"; shift 2;;
   --jobs) JOBS="$2"; shift 2;;
   --partitions) PARTS="$2"; shift 2;;
@@ -59,38 +56,6 @@ while [ $# -gt 0 ]; do case "$1" in
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
 
-# --- step 0: download --------------------------------------------------------
-# Runs through the harness so `hf` resolves from the AE venv (lib/venv.sh, sourced
-# above). A user never has to activate anything. Downloads land in a directory the
-# analysis step already searches, so step 1 then needs no --dumps.
-if [ "$ACTION" = "download" ]; then
-  DL="${DUMPS:-$ROOT/ptw_bundle}"
-  if ! command -v hf >/dev/null 2>&1; then
-    echo "ERROR: the 'hf' CLI is not available." >&2
-    echo "  It lives in the AE virtualenv. Create it with:" >&2
-    echo "      bash experiments/ae/lib/install_deps.sh" >&2
-    echo "  then re-run this command (no need to activate anything)." >&2
-    exit 1
-  fi
-  echo "==== downloading the PTW dumps (~2.9 GB) ===="
-  echo "  dataset: $HF_REPO"
-  echo "  into:    $DL"
-  echo "  (resumable — if it is interrupted, just run this command again)"
-  hf download "$HF_REPO" --repo-type dataset --local-dir "$DL" \
-    || { echo "ERROR: download failed. Re-run to resume; if the dataset is private," >&2
-         echo "       authenticate first with:  $(command -v hf) auth login" >&2; exit 1; }
-  n=$(ls "$DL"/ptw_dumps/*.csv "$DL"/ptw_dumps/*.csv.gz "$DL"/*.csv "$DL"/*.csv.gz 2>/dev/null | wc -l)
-  echo "  downloaded $n dumps."
-  echo
-  echo "==== next: analyse (step 1 of 2) ===="
-  case "$DL" in
-    "$ROOT/ptw_bundle"|"$ROOT/../ptw_bundle"|"${HOME:-/nonexistent}/ptw_bundle")
-      echo "  bash experiments/ae/motivation/run_motivation.sh --mode local --jobs \$(nproc)";;
-    *)  # not one of the searched locations — the path has to be passed explicitly
-      echo "  bash experiments/ae/motivation/run_motivation.sh --dumps $DL --mode local --jobs \$(nproc)";;
-  esac
-  exit 0
-fi
 # --- locate the dumps --------------------------------------------------------
 # A pre-staged bundle wins over downloading 2.9 GB again. Same convention as the
 # trace bundle in build_and_validate.sh: it normally sits one level ABOVE the
@@ -106,7 +71,8 @@ has_dumps() {
   done
   return 1
 }
-if [ -z "$DUMPS" ]; then
+discover() {                                    # sets DUMPS to the first bundle found
+  local cand
   for cand in "${HOME:-/nonexistent}/ptw_bundle" "$ROOT/../ptw_bundle" "$ROOT/ptw_bundle"; do
     [ -d "$cand" ] || continue
     has_dumps "$cand" || continue
@@ -114,18 +80,24 @@ if [ -z "$DUMPS" ]; then
     echo "  found a pre-staged PTW-dump bundle: $cand"
     [ -L "$cand" ] && echo "  (symlink -> $(readlink -f "$cand"))"
     echo "  (the download is not needed; override with --dumps <dir>)"
-    break
+    return 0
   done
-fi
+  return 1
+}
+[ -n "$DUMPS" ] || discover
+
+# This script never downloads anything: fetching the dumps is part of setup, in
+# build_and_validate.sh, so the run scripts only ever run.
 [ -n "$DUMPS" ] || { cat >&2 <<'NODUMPS'
 ERROR: no PTW dumps found, and --dumps <dir> was not given.
-Download them (~2.9 GB, resumable):
-    bash experiments/ae/motivation/run_motivation.sh --download
-or point at an existing bundle:
+Staging them is part of setup (this script never downloads):
+    bash experiments/ae/build_and_validate.sh --skip-deps
+which fetches the dumps (~2.9 GB, resumable) in phase [3/4]. Already have them
+elsewhere? Point at the bundle, or pre-stage it where this script looks
+($HOME/ptw_bundle, <artifact>/../ptw_bundle, <artifact>/ptw_bundle) — on a shared
+machine that is normally a symlink:
     run_motivation.sh --dumps <dir>          # dataset root or its ptw_dumps/ subdir
-or pre-stage one where this script looks for it ($HOME/ptw_bundle,
-<artifact>/../ptw_bundle, <artifact>/ptw_bundle) — on a shared machine that is
-normally a symlink, e.g.  ln -s /path/to/shared/ptw_bundle ~/ptw_bundle
+    ln -s /path/to/shared/ptw_bundle ~/ptw_bundle
 NODUMPS
 exit 2; }
 [ -d "$DUMPS" ] || { echo "ERROR: --dumps $DUMPS is not a directory"; exit 2; }

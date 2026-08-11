@@ -30,19 +30,23 @@ copy between accounts, symlink it:
 ln -s /path/to/shared/ptw_bundle ~/ptw_bundle
 ```
 
-Otherwise download them — a public Hugging Face dataset (~3 GB, 251 workloads):
+Otherwise **setup fetches them for you** — they are a public Hugging Face dataset
+(~3 GB, 251 workloads), downloaded in phase [3/4] of the build:
 
 ```bash
-bash experiments/ae/motivation/run_motivation.sh --download
+bash experiments/ae/build_and_validate.sh --skip-deps
 #   -> ./ptw_bundle/ptw_dumps/<workload>.csv.gz
 ```
 
-Run it through the script rather than calling `hf` yourself: `hf` lives in the AE
-virtualenv, which the harness puts on its own `PATH` but your interactive shell does
-not have, so a bare `hf download` fails with *command not found*. The download is
-resumable — re-run the same command if it is interrupted. `--dumps <dir>` chooses
-where it lands (default `<artifact>/ptw_bundle`) and `--hf-repo` overrides the
-dataset.
+That is the same command that stages the traces, and it is resumable, so re-run it
+if the transfer is interrupted. The download is skipped when a bundle is already
+present, and `--skip-ptw-dumps` opts out entirely (the six simulation suites do not
+use these dumps — only the motivation figures do).
+
+`run_motivation.sh` itself never downloads: the run scripts only run. Do not call
+`hf` by hand either — it lives in the AE virtualenv, which the harness puts on its
+own `PATH` but your interactive shell does not, so a bare `hf download` fails with
+*command not found*.
 
 ## 2. Analyse, then plot — two commands
 
