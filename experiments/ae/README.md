@@ -11,7 +11,8 @@ single-core (8 MB and 2 MB last-level-cache NUCA) and 4-core configurations.
 
 Reproducing a result takes three steps: **(1) install dependencies → (2) build &
 validate → (3) run the experiments.** The motivation figures (4, 5, 6, 8, 9) are
-a separate, trace-free step.
+a separate, trace-free step — two commands (analyse, then plot) over a set of
+page-table-walk dumps, with no simulation involved.
 
 ---
 
@@ -33,7 +34,9 @@ a separate, trace-free step.
 **Hardware**
 - **Disk:** ~300 GB free (≈250 GB of traces, plus the build and results). If the
   traces are already staged for you at `<parent-of-clone>/ae_bundle`, only a few
-  GB are needed — see Step 2.
+  GB are needed — see Step 2. The motivation figures need a further ~3 GB of
+  page-table-walk dumps, likewise skipped if a bundle is already staged (see
+  [`motivation/README.md`](motivation/)).
 - **RAM:** 8 GB is enough for the build and the sanity check. Each simulation
   uses a few GB, so budget more if you run many in parallel.
 - **CPU:** any x86-64 machine. More cores (or a cluster) only reduce wall time.
@@ -208,9 +211,14 @@ and a rendered image in `ae_out/`: `figure12.pdf` (the 2×2 plot, once **both**
 `head8mb` and `head2mb` have run), `figure13.pdf`, `figure20.pdf`, `figure22.pdf`,
 and `table5.pdf`/`table6.pdf`. Progress lives in `ae_out/<suite>.status`, and each
 finished suite gets an `ae_out/<suite>.DONE` **pass/fail report** (listing any
-failed jobs and where to find their logs). The motivation run writes Figures 4, 5,
-6, 8, 9 to `experiments/ae/motivation/motivation_out/` (see
-[`motivation/README.md`](motivation/)).
+failed jobs and where to find their logs).
+
+The motivation step is separate and runs as two commands — the analysis writes one
+JSON per workload to `motivation_out/json/`, then `--plot` renders Figures 4, 5, 6,
+8, 9 into `experiments/ae/motivation/motivation_out/`. Plotting is its own command
+because on SLURM the analysis only submits the jobs, so the figures cannot exist
+until those finish; it refuses to draw incomplete figures and reports how many
+workloads are ready (see [`motivation/README.md`](motivation/)).
 
 **Scale & runtime:** a single-core job simulates 300 M instructions (a few
 minutes to under an hour each); `all` is 21,080 jobs. On a **~1300-core cluster
