@@ -127,88 +127,78 @@ dumps (no simulation). Outputs land in `experiments/ae/ae_out/` (simulation) and
 | `motivation` | Temporal-locality characterization (no simulation) |   — | **Figures 4, 5, 6, 8, 9** |
 | **all sim.** | every simulation suite above                     | **21080** | |
 
-For the six **simulation** suites, `ae_run_all.sh` is the **one command you
-drive**, in three passes: **launch** once (non-blocking — the watchers run in the
-background), poll **`--status`** until every suite reads `DONE`, then run
-**`--results`** to produce the figures and tables. Don't run the three back-to-back;
-`--results` only works once the jobs finish. Pick the block for your environment: **A) a SLURM cluster**
-(recommended, for the full run) or **B) a single machine**. In normal operation
-you never touch the individual `ae_launch`/`ae_watch`/`ae_results` scripts; those
-are only for recovery if a suite fails (see
-[**If something goes wrong**](#if-something-goes-wrong--manual-per-suite-control), below).
+The order is the same everywhere: **launch everything, check progress, then
+produce the figures.** Nothing plots by itself, and the plotting passes only work
+once the jobs have finished — so run 3.1, come back later for 3.2, and finish with
+3.3. In normal operation you never touch the individual
+`ae_launch`/`ae_watch`/`ae_results` scripts; those are only for recovery if a suite
+fails (see
+[**If something goes wrong**](#if-something-goes-wrong--manual-per-suite-control),
+below).
 
-The **motivation** figures (4, 5, 6, 8, 9) are **not** part of `ae_run_all.sh` —
-they need two extra commands, shown at the end of each block below.
+### 3.1 — Launch everything
 
-### A) Run on a SLURM cluster (recommended)
+Two commands: the six simulation suites, then the motivation analysis. On SLURM
+both submit and return immediately; on a single machine the second one blocks
+(see B).
 
-**Simulation suites — all in parallel:**
-
-```bash
-bash experiments/ae/ae_run_all.sh --mode slurm --partitions <partition>   # launch every suite
-bash experiments/ae/ae_run_all.sh --status                                 # progress, any time
-bash experiments/ae/ae_run_all.sh --results                                # once every suite reads DONE
-```
-
-Suites are independent and proceed in parallel. `--partitions` is optional (omit
-it to use your cluster's default; no `--partition` is passed to `sbatch`).
-Restrict the set with `--suites "head8mb multicore"`.
-
-**Motivation figures (Figures 4, 5, 6, 8, 9) — a separate step.** `ae_run_all.sh`
-does **not** produce these. It is **two commands**: analyse (one SLURM job per
-workload), then plot once those jobs finish. Step 1 reuses a pre-staged dump
-bundle if one is present — it looks for `$HOME/ptw_bundle`, `../ptw_bundle`, then
-`./ptw_bundle`, and says which it found:
+**A) On a SLURM cluster (recommended):**
 
 ```bash
-bash experiments/ae/motivation/run_motivation.sh --mode slurm [--partitions <p>]   # 1. analyse
-bash experiments/ae/motivation/run_motivation.sh --plot                            # 2. figures
+bash experiments/ae/ae_run_all.sh --mode slurm --partitions <partition>
+bash experiments/ae/motivation/run_motivation.sh --mode slurm [--partitions <p>]
 ```
 
-Step 1 submits and returns immediately — the figures cannot exist until the jobs
-finish, so run step 2 afterwards. It refuses to draw incomplete figures and
-reports how many of the 251 workloads are ready (`--allow-partial` overrides).
+Suites are independent and proceed in parallel; the motivation analysis is one
+job per workload alongside them. `--partitions` is optional (omit it to use your
+cluster's default; no `--partition` is passed to `sbatch`). Restrict the set with
+`--suites "head8mb multicore"`.
 
-If none of those exists, the dumps were staged for you by Step 2 —
-`build_and_validate.sh` downloads them (~2.9 GB, resumable) in phase [3/4], unless
-you passed `--skip-ptw-dumps`. Re-run Step 2 to fetch them; `run_motivation.sh`
-never downloads anything itself.
-
-### B) Run on a single machine (no SLURM)
-
-No cluster needed — the same command with `--mode local`. Launch **as many
-suites as you like** (all of them, if you want): a single shared scheduler runs
-their simulations through this machine's cores, keeping at most `--jobs` (default:
-cores − 2) running at a time, so the machine is never oversubscribed regardless of
-how many suites you pick.
+**B) On a single machine (no SLURM):**
 
 ```bash
-bash experiments/ae/ae_run_all.sh --mode local --jobs $(nproc)   # launch all suites
-bash experiments/ae/ae_run_all.sh --status                        # progress, any time
-bash experiments/ae/ae_run_all.sh --results                       # once every suite reads DONE
+bash experiments/ae/ae_run_all.sh --mode local --jobs $(nproc)
+bash experiments/ae/motivation/run_motivation.sh --mode local --jobs $(nproc)
 ```
 
-Add `--suites "head8mb multicore"` to run only a subset. A full 300 M-instruction
-suite is still large on one machine — add `--icount 2000000` to shrink every job
-to a minutes-long end-to-end smoke test (the numbers won't match the paper at
-2 M instructions). `--icount` works in SLURM mode too.
+A single shared scheduler runs the simulations through this machine's cores,
+keeping at most `--jobs` (default: cores − 2) running at a time, so the machine is
+never oversubscribed no matter how many suites you launch. The motivation command
+*does* block until its analysis is done, and it competes for the same cores — on
+one machine, run it after the suites rather than beside them. A full
+300 M-instruction suite is large for a single host: add `--icount 2000000` to
+shrink every job to a minutes-long end-to-end smoke test (the numbers won't match
+the paper at 2 M instructions). `--icount` works in SLURM mode too.
 
-**Motivation figures (Figures 4, 5, 6, 8, 9) — a separate step.** `ae_run_all.sh`
-does **not** produce these. It is **two commands**: analyse the dumps locally on
-up to `N` cores, then plot. Step 1 reuses a pre-staged dump bundle if one is
-present — `$HOME/ptw_bundle`, `../ptw_bundle`, then `./ptw_bundle`:
+Both commands find their input on disk — the traces and the PTW dumps staged by
+Step 2. The motivation command prints which dump bundle it picked
+(`$HOME/ptw_bundle`, `../ptw_bundle` or `./ptw_bundle`). If it reports none, re-run
+Step 2 without `--skip-ptw-dumps`; it never downloads anything itself.
+
+### 3.2 — Check progress
+
+Any time, as often as you like:
 
 ```bash
-bash experiments/ae/motivation/run_motivation.sh --mode local --jobs $(nproc)   # 1. analyse
-bash experiments/ae/motivation/run_motivation.sh --plot                          # 2. figures
+bash experiments/ae/ae_run_all.sh --status                              # every suite; wait for DONE
+ls experiments/ae/motivation/motivation_out/json/*.json | wc -l         # motivation; wait for 251
 ```
 
-If none of those exists, the dumps were staged for you by Step 2 —
-`build_and_validate.sh` downloads them (~2.9 GB, resumable) in phase [3/4], unless
-you passed `--skip-ptw-dumps`. Re-run Step 2 to fetch them; `run_motivation.sh`
-never downloads anything itself.
+### 3.3 — Produce the figures and tables
 
-### What you get (either mode)
+Once 3.2 shows every suite at `DONE` and the motivation count at 251:
+
+```bash
+bash experiments/ae/ae_run_all.sh --results                             # tables + Figures 12, 13, 20, 22
+bash experiments/ae/motivation/run_motivation.sh --plot                 # Figures 4, 5, 6, 8, 9
+```
+
+`--results` skips any suite that is not finished yet and says so, and `--plot`
+refuses to draw incomplete figures, reporting how many of the 251 workloads are
+ready (`--allow-partial` overrides). Both are safe to re-run as the remaining
+suites land.
+
+### What you get (SLURM or single machine)
 
 `ae_run_all.sh --results` writes, for each suite, a table (`ae_out/<suite>.md`)
 and a rendered image in `ae_out/`: `figure12.pdf` (the 2×2 plot, once **both**
@@ -217,12 +207,10 @@ and `table5.pdf`/`table6.pdf`. Progress lives in `ae_out/<suite>.status`, and ea
 finished suite gets an `ae_out/<suite>.DONE` **pass/fail report** (listing any
 failed jobs and where to find their logs).
 
-The motivation step is separate and runs as two commands — the analysis writes one
-JSON per workload to `motivation_out/json/`, then `--plot` renders Figures 4, 5, 6,
-8, 9 into `experiments/ae/motivation/motivation_out/`. Plotting is its own command
-because on SLURM the analysis only submits the jobs, so the figures cannot exist
-until those finish; it refuses to draw incomplete figures and reports how many
-workloads are ready (see [`motivation/README.md`](motivation/)).
+On the motivation side, the 3.1 analysis writes one JSON per workload to
+`motivation_out/json/`, and 3.3's `--plot` renders Figures 4, 5, 6, 8, 9 into
+`experiments/ae/motivation/motivation_out/` (see
+[`motivation/README.md`](motivation/)).
 
 **Scale & runtime:** a single-core job simulates 300 M instructions (a few
 minutes to under an hour each); `all` is 21,080 jobs. On a **~1300-core cluster
