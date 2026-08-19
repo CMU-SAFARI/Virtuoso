@@ -13,3 +13,8 @@ void MetricsRegistry::writeToFile(const std::string& filepath) {
         
     }
 }
+/* Verbosity default: true preserves the standalone kernel's narration.
+   mimicos::Kernel::create() overrides it for embedded use. */
+namespace mimicos_log {
+bool verbose = true;
+}

@@ -18,6 +18,8 @@
 #include <string>
 #include <iostream>
 
+#include "globals.h"
+
 using VirtuosoBaselineAllocator       = BaselineAllocator<Virtuoso::Baseline::NoMetricsPolicy>;
 using VirtuosoTHPAllocator            = ReservationTHPAllocator<Virtuoso::ReserveTHP::NoMetricsPolicy>;
 using VirtuosoLinuxBuddyAnonAllocator = LinuxBuddyAnonAllocator<Virtuoso::LinuxBuddyAnon::NoMetricsPolicy>;
@@ -25,24 +27,30 @@ using VirtuosoLinuxBuddyAnonAllocator = LinuxBuddyAnonAllocator<Virtuoso::LinuxB
 class AllocatorFactory
 {
 public:
-    static PhysicalMemoryAllocator *createAllocator(String allocator_name, int memory_size, int max_order, int kernel_size, String frag_type, int threshold_for_promotion = -1)
+    /* threshold_for_promotion is a *fraction* of a 2 MiB region's 4 KiB pages
+       (ReservationTHPAllocator compares it against a utilisation ratio), so it
+       must be a double.  It was previously an int, which silently truncated
+       every fractional threshold to the next lower integer — 0.5 became 0,
+       i.e. "promote on first touch".  Widening is backward compatible: the
+       standalone kernel passes an integer read via GetInteger. */
+    static PhysicalMemoryAllocator *createAllocator(String allocator_name, int memory_size, int max_order, int kernel_size, String frag_type, double threshold_for_promotion = -1)
     {
         
-        std::cout << "[MimicOS] [createAllocator] Creating allocator: " << allocator_name << std::endl;
+        if (mimicos_log::enabled()) std::cout << "[MimicOS] [createAllocator] Creating allocator: " << allocator_name << std::endl;
 
         if (allocator_name == "baseline")
         {
-            std::cout << "[MimicOS] [createAllocator] Created VirtuosoBaselineAllocator" << std::endl;
+            if (mimicos_log::enabled()) std::cout << "[MimicOS] [createAllocator] Created VirtuosoBaselineAllocator" << std::endl;
             return new VirtuosoBaselineAllocator(allocator_name, memory_size, max_order, kernel_size, frag_type);
         }
         else if (allocator_name == "reserve_thp")
         {
-            std::cout << "[MimicOS] [createAllocator] Created VirtuosoTHPAllocator" << std::endl;
+            if (mimicos_log::enabled()) std::cout << "[MimicOS] [createAllocator] Created VirtuosoTHPAllocator" << std::endl;
             return new VirtuosoTHPAllocator(allocator_name, memory_size, max_order, kernel_size, frag_type, threshold_for_promotion);
         }
         else if (allocator_name == "linux_buddy_anon")
         {
-            std::cout << "[MimicOS] [createAllocator] Created VirtuosoLinuxBuddyAnonAllocator" << std::endl;
+            if (mimicos_log::enabled()) std::cout << "[MimicOS] [createAllocator] Created VirtuosoLinuxBuddyAnonAllocator" << std::endl;
             return new VirtuosoLinuxBuddyAnonAllocator(allocator_name, memory_size, max_order, kernel_size, frag_type);
         }
         else

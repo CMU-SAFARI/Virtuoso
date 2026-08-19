@@ -13,12 +13,12 @@ namespace Virtuoso {
                          int /*kernel*/,
                          Alloc* /*alloc*/)
             {
-                std::cout << "[VirtuOS] Baseline Allocator" << std::endl;
+                if (mimicos_log::enabled()) std::cout << "[VirtuOS] Baseline Allocator" << std::endl;
             }
 
             /* BaselineAllocator inherits privately, so `log()` becomes `this->log()` */
             void log(const std::string& msg) const
-            { std::cout << msg << '\n'; }
+            { if (mimicos_log::enabled()) std::cout << msg << '\n'; }
         };
 
     } // namespace Baseline

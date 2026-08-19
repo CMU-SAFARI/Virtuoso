@@ -1,0 +1,1814 @@
+From 7a08980d80d1ebac2c001dce3feb178cfd1c147b Mon Sep 17 00:00:00 2001
+From: konkanello <konkanello@gmail.com>
+Date: Wed, 19 Aug 2026 00:41:18 +0200
+Subject: [PATCH] mimicos: let MimicOS own memory management in
+ syscall-emulation mode
+
+SE mode allocates physical frames with a bump pointer and resolves
+minor faults functionally, in zero simulated time.  Neither models
+anything: placement is whatever order pages happened to be touched in,
+and a fault costs whatever number is in a config file.  Studies of
+allocator policy, fragmentation or huge pages cannot be run in SE mode
+at all.
+
+This hands memory management to MimicOS.  Opt-in and inert by default:
+without MIMICOS_HOME the MimicOS files compile to stubs and gem5 is
+unchanged.
+
+  MIMICOS_HOME=/path/to/mimicos scons build/X86/gem5.opt
+
+  build/X86/gem5.opt configs/example/mimicos_se.py \
+      --mimicos-config <ini> [--mimicos-server <server binary>] <app>
+
+What it adds:
+
+  Allocation.  Process::allocateMem resolves one page at a time through
+  MimicOS, which places frames from the virtual address.  MimicOS's
+  space is reserved out of the MemPool up front so its frames cannot
+  collide with the ones gem5 hands out for its own structures.
+
+  Two page sizes in the TLB.  The trie already supports them for full
+  system mode; SE mode was passing the full key width and hardcoding
+  logBytes, so a 2M page cost 512 entries and bought nothing.  The page
+  table now records the real page size and the TLB installs one entry
+  for it.  A 32 MB working set walked four times goes from 32796 data
+  TLB read misses to 2.
+
+  A kernel in the guest.  With --mimicos-server, MimicOS runs as an
+  ordinary process on its own CPU and the simulator hands it each
+  fault over three m5ops: wait, asid, reply.  Its allocator and page
+  tables execute as guest instructions, so a fault costs what the
+  handler does rather than what a config file says.  Any number of
+  threads may fault at once; they queue and each is woken by its own
+  answer.
+
+Things that had to be right, and were not at first:
+
+  A fault takes two trips through the handler.  The first parks the
+  thread, the second goes down the ordinary fixupFault path so the
+  region checks in MemState still run; only the frame comes from the
+  kernel.  Resolving it directly would let a bad access be mapped
+  instead of faulting.
+
+  Never fall back quietly.  An early version declined to hand over a
+  fault while the kernel was still starting, and the run used gem5's
+  own allocator throughout while looking perfectly healthy.
+
+  Park, do not spin.  suspend() lets the pseudo instruction return and
+  the thread keeps fetching; quiesce() is what m5_quiesce uses.
+
+  The kernel faults too, on its own text and stack, and cannot serve
+  those itself.  It is identified by pid and its faults take the normal
+  path.
+
+  A large TLB entry answers for its whole region, but the binary's text
+  and data are mapped before the kernel is running, out of gem5's pool.
+  The entry was redirecting those reads into the large frame and the
+  program read someone else's memory.  A large entry is now installed
+  only when the whole region is backed by that one allocation.
+
+Measured with the kernel in the guest, a 2 MB working set: 516 faults
+served at 4K, 6 at 2M with four large pages, 516 mixed, each ending on
+its own with the workload's checksum intact.  Four threads over 4 MB:
+1037 faults, up to three waiting at once, checksum intact.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0198h1jxpi9UhkKyfhM3h2gH
+---
+ configs/example/mimicos_se.py         | 199 +++++++++++++++++++++++
+ include/gem5/asm/generic/m5ops.h      |  18 ++-
+ src/SConscript                        |  33 ++++
+ src/arch/x86/faults.cc                |  40 ++++-
+ src/arch/x86/pagetable.cc             |   5 +-
+ src/arch/x86/pagetable.hh             |   3 +-
+ src/arch/x86/tlb.cc                   |  42 ++++-
+ src/mem/page_table.hh                 |  21 +++
+ src/sim/SConscript                    |   3 +
+ src/sim/Workload.py                   |  24 +++
+ src/sim/mimicos_binding.cc            | 215 ++++++++++++++++++++++++
+ src/sim/mimicos_binding.hh            | 115 +++++++++++++
+ src/sim/mimicos_broker.cc             | 225 ++++++++++++++++++++++++++
+ src/sim/mimicos_broker.hh             | 179 ++++++++++++++++++++
+ src/sim/process.cc                    |  72 ++++++++-
+ src/sim/pseudo_inst.cc                |  25 +++
+ src/sim/pseudo_inst.hh                |  15 ++
+ src/sim/se_workload.cc                | 102 +++++++++++-
+ src/sim/se_workload.hh                |  34 ++++
+ tests/gem5/mimicos/test_mimicos_se.py |  65 ++++++++
+ 20 files changed, 1420 insertions(+), 15 deletions(-)
+ create mode 100644 configs/example/mimicos_se.py
+ create mode 100644 src/sim/mimicos_binding.cc
+ create mode 100644 src/sim/mimicos_binding.hh
+ create mode 100644 src/sim/mimicos_broker.cc
+ create mode 100644 src/sim/mimicos_broker.hh
+ create mode 100644 tests/gem5/mimicos/test_mimicos_se.py
+
+diff --git a/configs/example/mimicos_se.py b/configs/example/mimicos_se.py
+new file mode 100644
+index 0000000..60aa921
+--- /dev/null
++++ b/configs/example/mimicos_se.py
+@@ -0,0 +1,199 @@
++# Copyright (c) 2026 The Virtuoso Authors
++# All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions are
++# met: redistributions of source code must retain the above copyright
++# notice, this list of conditions and the following disclaimer;
++# redistributions in binary form must reproduce the above copyright
++# notice, this list of conditions and the following disclaimer in the
++# documentation and/or other materials provided with the distribution;
++# neither the name of the copyright holders nor the names of its
++# contributors may be used to endorse or promote products derived from
++# this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++"""Syscall-emulation mode with MimicOS backing process memory.
++
++Stock SE mode allocates physical frames with a bump pointer and resolves minor
++faults in zero simulated time, so neither physical placement nor fault cost is
++modelled. Pointing the workload at a MimicOS config replaces both: frames come
++from MimicOS's buddy/THP allocator, and each minor fault carries MimicOS's
++calibrated cost.
++
++Run it with and without --mimicos-config to see the difference:
++
++    build/X86/gem5.opt configs/example/mimicos_se.py
++    build/X86/gem5.opt configs/example/mimicos_se.py \
++        --mimicos-config ../../mimicos/configs/embedded_4gb_thp.ini
++
++Requires a gem5 built with MIMICOS_HOME set; see src/sim/mimicos_binding.hh.
++"""
++
++import argparse
++import os
++
++import m5
++from m5.objects import *
++
++thispath = os.path.dirname(os.path.realpath(__file__))
++default_binary = os.path.join(
++    thispath, "..", "..", "tests/test-progs/hello/bin/x86/linux/hello"
++)
++
++parser = argparse.ArgumentParser(description=__doc__)
++parser.add_argument(
++    "binary", nargs="?", default=default_binary, help="binary to run"
++)
++parser.add_argument(
++    "--options", default="", help="arguments to pass to the binary"
++)
++parser.add_argument(
++    "--mimicos-config",
++    default="",
++    help="path to a MimicOS INI. Empty (the default) uses stock SE-mode "
++    "allocation, which makes this script a plain baseline.",
++)
++parser.add_argument(
++    "--mem-size",
++    default="8GiB",
++    help="physical memory size. Must be larger than the MimicOS config's "
++    "[pmem_alloc] memory_size, since MimicOS reserves that much up front.",
++)
++parser.add_argument(
++    "--cpu-type",
++    default="timing",
++    choices=["atomic", "timing"],
++    help="atomic is faster; timing is needed for the fault stall to show up "
++    "in the cycle count",
++)
++parser.add_argument(
++    "--mimicos-server",
++    default="",
++    help="path to mimicos_gem5_server. When given, MimicOS runs as a second "
++    "process on its own CPU and handles each fault with its own "
++    "instructions, instead of the simulator calling into it.",
++)
++parser.add_argument(
++    "--app-threads",
++    type=int,
++    default=1,
++    help="CPUs available to the application, counting the main thread. "
++    "Syscall emulation gives a new thread the first idle context it "
++    "finds, so this must be at least one more than the number of "
++    "threads created, or pthread_create returns EAGAIN and that "
++    "thread's work is silently missing from the result. The kernel "
++    "always gets a further CPU of its own.",
++)
++parser.add_argument(
++    "--max-instructions",
++    type=int,
++    default=0,
++    help="stop after this many instructions (0 = run to completion)",
++)
++args = parser.parse_args()
++
++system = System()
++
++system.clk_domain = SrcClockDomain()
++system.clk_domain.clock = "3GHz"
++system.clk_domain.voltage_domain = VoltageDomain()
++
++system.mem_mode = "atomic" if args.cpu_type == "atomic" else "timing"
++system.mem_ranges = [AddrRange(args.mem_size)]
++
++# The kernel needs a CPU of its own: it has to run while a faulting
++# thread is parked.  Application threads need one each, since a parked
++# thread cannot lend its context to another.
++num_cpus = args.app_threads + (1 if args.mimicos_server else 0)
++
++if args.cpu_type == "atomic":
++    system.cpu = [X86AtomicSimpleCPU(cpu_id=i) for i in range(num_cpus)]
++else:
++    system.cpu = [X86TimingSimpleCPU(cpu_id=i) for i in range(num_cpus)]
++
++system.membus = SystemXBar()
++
++for cpu in system.cpu:
++    cpu.icache_port = system.membus.cpu_side_ports
++    cpu.dcache_port = system.membus.cpu_side_ports
++    cpu.createInterruptController()
++    cpu.interrupts[0].pio = system.membus.mem_side_ports
++    cpu.interrupts[0].int_requestor = system.membus.cpu_side_ports
++    cpu.interrupts[0].int_responder = system.membus.mem_side_ports
++
++system.system_port = system.membus.cpu_side_ports
++
++system.mem_ctrl = MemCtrl()
++system.mem_ctrl.dram = DDR3_1600_8x8()
++system.mem_ctrl.dram.range = system.mem_ranges[0]
++system.mem_ctrl.port = system.membus.mem_side_ports
++
++system.workload = SEWorkload.init_compatible(args.binary)
++
++# This is the whole integration on the configuration side: hand the workload a
++# MimicOS config and it stops using gem5's MemPool for process memory.
++if args.mimicos_config:
++    config_path = os.path.abspath(args.mimicos_config)
++    if not os.path.exists(config_path):
++        raise SystemExit(f"MimicOS config not found: {config_path}")
++    system.workload.mimicos_config = config_path
++
++# @kanellok: --mimicos-server puts MimicOS in the guest.  The kernel
++# gets a CPU of its own, because it has to run while the faulting thread
++# is parked.
++if args.mimicos_server:
++    if not args.mimicos_config:
++        raise SystemExit("--mimicos-server needs --mimicos-config")
++    server_path = os.path.abspath(args.mimicos_server)
++    if not os.path.exists(server_path):
++        raise SystemExit(f"MimicOS server not found: {server_path}")
++    system.workload.mimicos_in_guest = True
++    system.workload.mimicos_kernel_pid = 101
++
++app = Process(pid=100)
++app.cmd = [args.binary] + args.options.split()
++
++# Every CPU the application may use gets the same process.  That is how
++# syscall emulation gives a thread somewhere to run: clone hands a new
++# thread the first context that is idle.
++for i in range(args.app_threads):
++    system.cpu[i].workload = app
++    system.cpu[i].createThreads()
++
++if args.mimicos_server:
++    # Last CPU, so the application's threads land on the ones before it.
++    kernel = Process(pid=101)
++    kernel.cmd = [os.path.abspath(args.mimicos_server), config_path]
++    system.cpu[num_cpus - 1].workload = kernel
++    system.cpu[num_cpus - 1].createThreads()
++
++if args.max_instructions > 0:
++    system.cpu[0].max_insts_any_thread = args.max_instructions
++
++root = Root(full_system=False, system=system)
++m5.instantiate()
++
++print(f"Beginning simulation of {args.binary}")
++if args.mimicos_server:
++    print(f"MimicOS: in the guest, {args.mimicos_server}")
++elif args.mimicos_config:
++    print(f"MimicOS config: {args.mimicos_config}")
++else:
++    print("MimicOS: disabled (stock SE-mode allocation)")
++
++exit_event = m5.simulate()
++print(
++    f"Exiting @ tick {m5.curTick()} because {exit_event.getCause()}"
++)
+diff --git a/include/gem5/asm/generic/m5ops.h b/include/gem5/asm/generic/m5ops.h
+index 9bd10e0..1280eab 100644
+--- a/include/gem5/asm/generic/m5ops.h
++++ b/include/gem5/asm/generic/m5ops.h
+@@ -80,6 +80,19 @@
+ 
+ #define M5OP_WORKLOAD           0x70
+ 
++/*
++ * @kanellok: the three instructions the guest kernel uses to talk to
++ * the simulator.  wait blocks until there is a fault, asid says which
++ * address space it came from, reply hands back the frame.
++ *
++ * Hand a page fault to a MimicOS kernel running as a guest process.
++ * wait blocks until a fault is pending and returns its virtual address;
++ * reply says which frame backs it and how big the page is.
++ */
++#define M5OP_MIMICOS_WAIT       0x71
++#define M5OP_MIMICOS_REPLY      0x72
++#define M5OP_MIMICOS_ASID       0x73
++
+ 
+ #define M5OP_FOREACH                                            \
+     M5OP(m5_arm, M5OP_ARM)                                      \
+@@ -107,7 +120,10 @@
+     M5OP(m5_work_begin, M5OP_WORK_BEGIN)                        \
+     M5OP(m5_work_end, M5OP_WORK_END)                            \
+     M5OP(m5_dist_toggle_sync, M5OP_DIST_TOGGLE_SYNC)            \
+-    M5OP(m5_workload, M5OP_WORKLOAD)                            \
++    M5OP(m5_workload, M5OP_WORKLOAD)                             \
++    M5OP(m5_mimicos_wait, M5OP_MIMICOS_WAIT)                    \
++    M5OP(m5_mimicos_reply, M5OP_MIMICOS_REPLY)                  \
++    M5OP(m5_mimicos_asid, M5OP_MIMICOS_ASID)                    \
+ 
+ #define M5OP_MERGE_TOKENS_I(a, b) a##b
+ #define M5OP_MERGE_TOKENS(a, b) M5OP_MERGE_TOKENS_I(a, b)
+diff --git a/src/SConscript b/src/SConscript
+index 52051b3..85da001 100644
+--- a/src/SConscript
++++ b/src/SConscript
+@@ -61,6 +61,39 @@ Import('*')
+ if env['CONF']['USE_EFENCE']:
+     env.Append(LIBS=['efence'])
+ 
++# @kanellok: MimicOS integration (opt-in).
++#
++#   MIMICOS_HOME=/path/to/virtuoso_artifact/mimicos scons build/X86/gem5.opt
++#
++# When MIMICOS_HOME is set, SE mode can hand physical allocation and the
++# minor-fault cost model to MimicOS -- see src/sim/mimicos_binding.hh.  Without
++# it, src/sim/mimicos_binding.cc compiles to stubs, nothing links against
++# MimicOS, and gem5 is unchanged.  MIMICOS_SNIPER_INCLUDE points at the shared
++# allocator headers and defaults to the layout of the Virtuoso artifact
++# repository.
++mimicos_home = os.environ.get('MIMICOS_HOME')
++if mimicos_home:
++    mimicos_home = os.path.abspath(mimicos_home)
++    mimicos_lib = os.environ.get(
++        'MIMICOS_LIB', os.path.join(mimicos_home, 'build', 'libmimicos.a'))
++    mimicos_sniper_include = os.environ.get(
++        'MIMICOS_SNIPER_INCLUDE',
++        os.path.join(mimicos_home, os.pardir, 'simulator', 'sniper', 'include'))
++
++    if not os.path.exists(mimicos_lib):
++        error("MIMICOS_HOME is set but %s does not exist. Build it first with "
++              "'make -C %s lib-static'." % (mimicos_lib, mimicos_home))
++
++    env.Append(CPPDEFINES=['GEM5_USE_MIMICOS'])
++    env.Append(CPPPATH=[
++        Dir(os.path.join(mimicos_home, 'include')),
++        Dir(os.path.abspath(mimicos_sniper_include)),
++    ])
++    # Appended to LIBS as a File so SCons treats a rebuilt libmimicos.a as a
++    # dependency and relinks, rather than leaving a stale copy in place.
++    env.Append(LIBS=[File(mimicos_lib)])
++    print("Building with MimicOS support from %s" % mimicos_home)
++
+ # Children need to see the environment
+ Export('env')
+ 
+diff --git a/src/arch/x86/faults.cc b/src/arch/x86/faults.cc
+index fce92b1..a64ee75 100644
+--- a/src/arch/x86/faults.cc
++++ b/src/arch/x86/faults.cc
+@@ -49,8 +49,12 @@
+ #include "base/trace.hh"
+ #include "cpu/thread_context.hh"
+ #include "debug/Faults.hh"
++#include "sim/core.hh"
+ #include "sim/full_system.hh"
++#include "sim/mimicos_broker.hh"
+ #include "sim/process.hh"
++#include "sim/se_workload.hh"
++#include "sim/system.hh"
+ 
+ namespace gem5
+ {
+@@ -149,7 +153,41 @@ PageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
+             tc->setMiscReg(misc_reg::Cr2, addr);
+         else
+             tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
+-    } else if (!tc->getProcessPtr()->fixupFault(addr)) {
++    /*
++     * @kanellok: a page fault with a MimicOS kernel in the guest.
++     *
++     * Park this thread and let the kernel run.  It answers, we wake up,
++     * the instruction runs again, faults again, and the second time the
++     * answer is waiting and the normal path below uses it.  Two faults
++     * per miss, which is the price of doing it honestly.
++     */
++    } else if (MimicOSBroker::instance().handOff(tc, addr)) {
++        /*
++         * A MimicOS kernel in the guest is working out which frame backs
++         * this address.  The thread is parked; when it runs again it
++         * re-executes this instruction, faults once more, and the second
++         * time round the answer is waiting and the normal path uses it.
++         */
++        DPRINTF(Faults, "Handed the fault at %#x to the MimicOS kernel.\n",
++                addr);
++    } else if (tc->getProcessPtr()->fixupFault(addr)) {
++        /*
++         * SE mode resolves a minor fault in zero simulated time.  When
++         * MimicOS is driving allocation it says what the fault cost, so
++         * stall the thread for that long, the way m5_quiesce_ns does.
++         * Without MimicOS the latency is zero and this does nothing.
++         */
++        auto *se_workload = dynamic_cast<SEWorkload *>(
++                tc->getSystemPtr()->workload);
++        if (se_workload != nullptr) {
++            const uint64_t fault_ns = se_workload->takeMimicosFaultLatencyNs();
++            if (fault_ns > 0) {
++                DPRINTF(Faults, "Charging %llu ns for the minor fault at "
++                        "%#x.\n", (unsigned long long)fault_ns, addr);
++                tc->quiesceTick(curTick() + sim_clock::as_int::ns * fault_ns);
++            }
++        }
++    } else {
+         PageFaultErrorCode code = errorCode;
+         const char *modeStr = "";
+         if (code.fetch)
+diff --git a/src/arch/x86/pagetable.cc b/src/arch/x86/pagetable.cc
+index 20d446d..e3643c7 100644
+--- a/src/arch/x86/pagetable.cc
++++ b/src/arch/x86/pagetable.cc
+@@ -56,8 +56,9 @@ TlbEntry::TlbEntry()
+ }
+ 
+ TlbEntry::TlbEntry(Addr asn, Addr _vaddr, Addr _paddr,
+-                   bool uncacheable, bool read_only) :
+-    paddr(_paddr), vaddr(_vaddr), logBytes(PageShift), writable(!read_only),
++                   bool uncacheable, bool read_only,
++                   unsigned _log_bytes) :
++    paddr(_paddr), vaddr(_vaddr), logBytes(_log_bytes), writable(!read_only),
+     user(true), uncacheable(uncacheable), global(false), patBit(0),
+     noExec(false), lruSeq(0)
+ {}
+diff --git a/src/arch/x86/pagetable.hh b/src/arch/x86/pagetable.hh
+index 1621f46..067146a 100644
+--- a/src/arch/x86/pagetable.hh
++++ b/src/arch/x86/pagetable.hh
+@@ -94,7 +94,8 @@ namespace X86ISA
+         TlbEntryTrie::Handle trieHandle;
+ 
+         TlbEntry(Addr asn, Addr _vaddr, Addr _paddr,
+-                 bool uncacheable, bool read_only);
++                 bool uncacheable, bool read_only,
++                 unsigned _log_bytes = PageShift);
+         TlbEntry();
+ 
+         void
+diff --git a/src/arch/x86/tlb.cc b/src/arch/x86/tlb.cc
+index c7d144b..a424dcb 100644
+--- a/src/arch/x86/tlb.cc
++++ b/src/arch/x86/tlb.cc
+@@ -126,8 +126,13 @@ TLB::insert(Addr vpn, const TlbEntry &entry, uint64_t pcid)
+         trie.insert(vpn, TlbEntryTrie::MaxBits-entry.logBytes, newEntry);
+     }
+     else {
++        /*
++         * SE mode used to force full width here, which pinned every
++         * entry to 4K.  Use the entry's own size so large pages cover
++         * their whole range with one entry.
++         */
+         newEntry->trieHandle =
+-        trie.insert(vpn, TlbEntryTrie::MaxBits, newEntry);
++        trie.insert(vpn, TlbEntryTrie::MaxBits-entry.logBytes, newEntry);
+     }
+     return newEntry;
+ }
+@@ -449,13 +454,38 @@ TLB::translate(const RequestPtr &req,
+                         return std::make_shared<PageFault>(vaddr, true, mode,
+                                                            true, false);
+                     } else {
+-                        Addr alignedVaddr = p->pTable->pageAlign(vaddr);
+-                        DPRINTF(TLB, "Mapping %#x to %#x\n", alignedVaddr,
+-                                pte->paddr);
++                        /*
++                         * @kanellok: install one entry for the whole
++                         * page, however big it is.  Without this a 2M
++                         * page costs 512 entries and buys nothing.
++                         *
++                         * The page table keeps one entry per 4K page, but
++                         * the mapping flags say how big the real page is.
++                         * Install one TLB entry covering the whole page so
++                         * a 2M page costs one entry, not 512.
++                         */
++                        unsigned log_bytes =
++                            EmulationPageTable::pageShiftFromFlags(pte->flags);
++
++                        /*
++                         * concAddrPcid() packs the pcid into the low 12
++                         * bits and the trie only matches the top
++                         * 64 - log_bytes, so a large entry does not
++                         * distinguish address spaces.  Full system mode
++                         * has the same hole.  It does not bite in SE
++                         * mode because each CPU's TLB serves one
++                         * process, and gem5 gives every process its own
++                         * page table.
++                         */
++                        Addr alignedVaddr = vaddr & ~mask(log_bytes);
++                        Addr alignedPaddr = pte->paddr & ~mask(log_bytes);
++                        DPRINTF(TLB, "Mapping %#x to %#x, %u byte page\n",
++                                alignedVaddr, alignedPaddr, 1U << log_bytes);
+                         entry = insert(alignedVaddr, TlbEntry(
+-                                p->pTable->pid(), alignedVaddr, pte->paddr,
++                                p->pTable->pid(), alignedVaddr, alignedPaddr,
+                                 pte->flags & EmulationPageTable::Uncacheable,
+-                                pte->flags & EmulationPageTable::ReadOnly),
++                                pte->flags & EmulationPageTable::ReadOnly,
++                                log_bytes),
+                                 pcid);
+                     }
+                     DPRINTF(TLB, "Miss was serviced.\n");
+diff --git a/src/mem/page_table.hh b/src/mem/page_table.hh
+index a17250c..81d8532 100644
+--- a/src/mem/page_table.hh
++++ b/src/mem/page_table.hh
+@@ -98,8 +98,29 @@ class EmulationPageTable : public Serializable
+         Clobber     = 1,
+         Uncacheable = 4,
+         ReadOnly    = 8,
++        /*
++         * @kanellok: how big the real page is.
++         *
++         * The page table stores one entry per 4K page even when the
++         * underlying page is larger.  These flags record how big the
++         * real page is so the TLB can install a single entry for it
++         * instead of 512 or 262144 of them.
++         */
++        Huge2M      = 16,
++        Huge1G      = 32,
+     };
+ 
++    /* log2 of the page size recorded in a mapping's flags. */
++    static unsigned
++    pageShiftFromFlags(uint64_t flags)
++    {
++        if (flags & Huge1G)
++            return 30;
++        if (flags & Huge2M)
++            return 21;
++        return 12;
++    }
++
+     // flag which marks the page table as shared among software threads
+     bool shared;
+ 
+diff --git a/src/sim/SConscript b/src/sim/SConscript
+index a9216de..55a7b54 100644
+--- a/src/sim/SConscript
++++ b/src/sim/SConscript
+@@ -82,6 +82,8 @@ Source('redirect_path.cc')
+ Source('root.cc')
+ Source('serialize.cc', add_tags='gem5 serialize')
+ Source('se_workload.cc')
++Source('mimicos_binding.cc')
++Source('mimicos_broker.cc')
+ Source('sim_events.cc', add_tags='gem5 drain')
+ Source('sim_object.cc')
+ Source('sub_system.cc')
+@@ -133,6 +135,7 @@ DebugFlag('Checkpoint')
+ DebugFlag('Config')
+ DebugFlag('CxxConfig')
+ DebugFlag('Drain')
++DebugFlag('MimicOS')
+ DebugFlag('Event')
+ DebugFlag('Flow')
+ DebugFlag('IPI')
+diff --git a/src/sim/Workload.py b/src/sim/Workload.py
+index 3e0c9a6..9858495 100644
+--- a/src/sim/Workload.py
++++ b/src/sim/Workload.py
+@@ -136,6 +136,30 @@ class SEWorkload(Workload, metaclass=SEWorkloadMeta):
+     cxx_class = "gem5::SEWorkload"
+     abstract = True
+ 
++    mimicos_config = Param.String(
++        "",
++        "Path to a MimicOS INI file. When set, MimicOS decides which physical "
++        "frame backs each page of process memory and what a minor fault costs, "
++        "replacing gem5's bump-pointer MemPool and its zero-cost faults. Empty "
++        "(the default) leaves SE mode exactly as it was. Requires a gem5 built "
++        "with MIMICOS_HOME set.",
++    )
++
++    mimicos_in_guest = Param.Bool(
++        False,
++        "Run MimicOS as a guest process rather than calling into it. The "
++        "kernel handles each page fault with its own instructions, which "
++        "the simulator executes like any others, so the cost of a fault "
++        "comes from the handler rather than from a number in a config "
++        "file. Needs a second process running the MimicOS server binary.",
++    )
++
++    mimicos_kernel_pid = Param.UInt64(
++        0,
++        "pid of the process running the MimicOS kernel. Its own page "
++        "faults go down the normal path: it cannot serve them itself.",
++    )
++
+     @classmethod
+     def _is_compatible_with(cls, obj):
+         return False
+diff --git a/src/sim/mimicos_binding.cc b/src/sim/mimicos_binding.cc
+new file mode 100644
+index 0000000..deed871
+--- /dev/null
++++ b/src/sim/mimicos_binding.cc
+@@ -0,0 +1,215 @@
++/*
++ * Copyright (c) 2026 The Virtuoso Authors
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are
++ * met: redistributions of source code must retain the above copyright
++ * notice, this list of conditions and the following disclaimer;
++ * redistributions in binary form must reproduce the above copyright
++ * notice, this list of conditions and the following disclaimer in the
++ * documentation and/or other materials provided with the distribution;
++ * neither the name of the copyright holders nor the names of its
++ * contributors may be used to endorse or promote products derived from
++ * this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "sim/mimicos_binding.hh"
++
++#include <cstdlib>
++#include <sstream>
++
++#include "base/logging.hh"
++
++namespace gem5
++{
++
++#ifdef GEM5_USE_MIMICOS
++
++} // namespace gem5
++
++#include "mimicos_embed.h"
++
++namespace gem5
++{
++
++namespace
++{
++constexpr uint64_t PageShift4K = 12;
++} // namespace
++
++struct MimicOSBinding::Impl
++{
++    std::unique_ptr<mimicos::Kernel> kernel;
++    uint64_t frames = 0;
++    Addr phys_base = 0;
++    bool phys_base_set = false;
++    uint64_t pending_latency_ns = 0;
++};
++
++bool MimicOSBinding::available() { return true; }
++
++MimicOSBinding::MimicOSBinding() : impl(new Impl()) {}
++MimicOSBinding::~MimicOSBinding()
++{
++    if (impl && impl->kernel)
++        impl->kernel->flush_mapping_trace();
++}
++
++std::unique_ptr<MimicOSBinding>
++MimicOSBinding::attach(const std::string &ini_path, std::string *err)
++{
++    mimicos::KernelConfig cfg;
++    if (!mimicos::KernelConfig::from_ini(ini_path, &cfg, err))
++        return nullptr;
++
++    /*
++     * No page table walker in SE mode, so the depth is not observable.
++     * Keep what the config says; it only changes how many page table
++     * frames MimicOS charges to the kernel reserve.
++     */
++    auto kernel = mimicos::Kernel::create(cfg, err);
++    if (kernel == nullptr)
++        return nullptr;
++
++    std::unique_ptr<MimicOSBinding> binding(new MimicOSBinding());
++    binding->impl->kernel = std::move(kernel);
++    /*
++     * Reserve the whole space, not just the data pool.  Page table
++     * frames come from the kernel reserve at the bottom and data frames
++     * from above, so the numbers returned span [0, memory_size).
++     * Reserving less leaves the top overlapping frames gem5 hands out.
++     */
++    binding->impl->frames = cfg.memory_size_mb * 1024ull * 1024ull / 4096ull;
++
++    /* Log mapping decisions so a run can be replayed and compared. */
++    const char *trace_path = std::getenv("MIMICOS_MAPPING_TRACE");
++    if (trace_path != nullptr && trace_path[0] != '\0') {
++        std::string trace_err;
++        if (!binding->impl->kernel->enable_mapping_trace(trace_path,
++                                                         &trace_err)) {
++            if (err != nullptr)
++                *err = trace_err;
++            return nullptr;
++        }
++        inform("MimicOS mapping trace -> '%s'", trace_path);
++    }
++
++    return binding;
++}
++
++uint64_t MimicOSBinding::numFrames() const { return impl->frames; }
++
++void
++MimicOSBinding::setPhysBase(Addr base)
++{
++    impl->phys_base = base;
++    impl->phys_base_set = true;
++}
++
++Addr MimicOSBinding::physBase() const { return impl->phys_base; }
++
++bool
++MimicOSBinding::allocate(Addr vaddr, uint32_t asid, Addr *paddr,
++                         unsigned *log_bytes)
++{
++    /* Without a base, frame numbers would alias what the MemPool gave out. */
++    if (!impl->phys_base_set)
++        return false;
++
++    mimicos::FaultRequest req;
++    req.vaddr = vaddr;
++    req.asid = asid;
++    req.core_id = 0;
++    /*
++     * The access type does not reach us and the page table carries no
++     * mapping metadata, so every fault is an anonymous write.  The
++     * standalone kernel assumes the same without VMA information.
++     */
++    req.access = mimicos::AccessType::WRITE;
++    req.mapping = mimicos::MappingType::ANON;
++
++    const auto t = impl->kernel->translate(req);
++    if (!t.ok)
++        return false;
++
++    impl->pending_latency_ns += t.fault_latency_ns;
++
++    if (paddr != nullptr)
++        *paddr = impl->phys_base + (t.ppn << PageShift4K);
++    if (log_bytes != nullptr)
++        *log_bytes = t.page_size_bits;
++    return true;
++}
++
++uint64_t
++MimicOSBinding::takePendingLatencyNs()
++{
++    const uint64_t ns = impl->pending_latency_ns;
++    impl->pending_latency_ns = 0;
++    return ns;
++}
++
++std::string
++MimicOSBinding::summary() const
++{
++    const auto s = impl->kernel->stats();
++    std::ostringstream oss;
++    oss << "MimicOS: " << s.translations << " translations, " << s.minor_faults
++        << " minor faults (" << s.huge_page_faults << " huge), "
++        << s.data_frames_allocated << " data frames, " << s.pt_frames_allocated
++        << " page-table frames";
++    if (s.failed_allocations > 0)
++        oss << ", " << s.failed_allocations << " FAILED allocations";
++    if (s.aliased_frames > 0)
++        oss << ", " << s.aliased_frames << " ALIASED frames";
++    return oss.str();
++}
++
++#else /* !GEM5_USE_MIMICOS -- stubs, so a stock gem5 has no MimicOS dependency */
++
++struct MimicOSBinding::Impl
++{
++};
++
++bool MimicOSBinding::available() { return false; }
++
++MimicOSBinding::MimicOSBinding() : impl(nullptr) {}
++MimicOSBinding::~MimicOSBinding() = default;
++
++std::unique_ptr<MimicOSBinding>
++MimicOSBinding::attach(const std::string &ini_path, std::string *err)
++{
++    (void)ini_path;
++    if (err != nullptr) {
++        *err = "this gem5 was built without MimicOS support; rebuild with "
++               "MIMICOS_HOME=<path to mimicos> in the environment to enable it";
++    }
++    return nullptr;
++}
++
++uint64_t MimicOSBinding::numFrames() const { return 0; }
++void MimicOSBinding::setPhysBase(Addr base) { (void)base; }
++Addr MimicOSBinding::physBase() const { return 0; }
++bool MimicOSBinding::allocate(Addr, uint32_t, Addr *, unsigned *)
++{
++    return false;
++}
++uint64_t MimicOSBinding::takePendingLatencyNs() { return 0; }
++std::string MimicOSBinding::summary() const { return {}; }
++
++#endif
++
++} // namespace gem5
+diff --git a/src/sim/mimicos_binding.hh b/src/sim/mimicos_binding.hh
+new file mode 100644
+index 0000000..cb21db4
+--- /dev/null
++++ b/src/sim/mimicos_binding.hh
+@@ -0,0 +1,115 @@
++/*
++ * Copyright (c) 2026 The Virtuoso Authors
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are
++ * met: redistributions of source code must retain the above copyright
++ * notice, this list of conditions and the following disclaimer;
++ * redistributions in binary form must reproduce the above copyright
++ * notice, this list of conditions and the following disclaimer in the
++ * documentation and/or other materials provided with the distribution;
++ * neither the name of the copyright holders nor the names of its
++ * contributors may be used to endorse or promote products derived from
++ * this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#ifndef __SIM_MIMICOS_BINDING_HH__
++#define __SIM_MIMICOS_BINDING_HH__
++
++#include <cstdint>
++#include <memory>
++#include <string>
++
++#include "base/types.hh"
++
++namespace gem5
++{
++
++/*
++ * @kanellok: gem5's own copy of MimicOS, used when the kernel is not
++ * running in the guest.  With --mimicos-server it only reserves the
++ * physical range; the guest kernel decides everything else.
++ *
++ * Bridge to the MimicOS library (mimicos/include/mimicos_embed.h).
++ *
++ * SE mode allocates frames with a bump pointer and resolves minor
++ * faults in zero simulated time.  Neither models anything: placement is
++ * whatever order pages were touched in, and a fault is free.  With this
++ * attached, placement comes from MimicOS's buddy/THP allocator and the
++ * fault carries its cost.
++ *
++ * This does not give SE mode a page table walker.  EmulationPageTable
++ * is a functional map with no memory traffic, so MimicOS's page tables
++ * are never read here.  ChampSim has a real walker; that is where page
++ * table geometry shows up.
++ *
++ * MimicOS allocates in its own physical space.  SEWorkload reserves
++ * that space from the MemPool up front and tells us the base, so its
++ * frames cannot collide with the ones gem5 hands out for descriptor
++ * tables and GPU buffers.
++ *
++ * Built without GEM5_USE_MIMICOS this is all stubs and attach() fails.
++ */
++class MimicOSBinding
++{
++  public:
++    /* Attach from an INI, the same file the standalone kernel takes. */
++    static std::unique_ptr<MimicOSBinding> attach(const std::string &ini_path,
++                                                  std::string *err);
++
++    ~MimicOSBinding();
++    MimicOSBinding(const MimicOSBinding &) = delete;
++    MimicOSBinding &operator=(const MimicOSBinding &) = delete;
++
++    /* False unless built with GEM5_USE_MIMICOS. */
++    static bool available();
++
++    /*
++     * 4K frames spanned by MimicOS's physical space, kernel reserve
++     * included: page table frames come from the bottom and data frames
++     * from above, so the numbers it returns cover the whole range.
++     */
++    uint64_t numFrames() const;
++
++    /* Base of the region reserved for MimicOS in gem5's space. */
++    void setPhysBase(Addr base);
++    Addr physBase() const;
++
++    /*
++     * Resolve the frame backing vaddr, allocating on first touch.
++     * paddr gets the gem5 physical address, log_bytes the page size.
++     */
++    bool allocate(Addr vaddr, uint32_t asid, Addr *paddr,
++                  unsigned *log_bytes);
++
++    /*
++     * Fault cost accrued since the last call, in ns, then reset.  The
++     * ISA's fault handler reads it once per fault to stall the thread.
++     */
++    uint64_t takePendingLatencyNs();
++
++    /* One line for the end of a run. */
++    std::string summary() const;
++
++  private:
++    MimicOSBinding();
++    struct Impl;
++    std::unique_ptr<Impl> impl;
++};
++
++} // namespace gem5
++
++#endif // __SIM_MIMICOS_BINDING_HH__
+diff --git a/src/sim/mimicos_broker.cc b/src/sim/mimicos_broker.cc
+new file mode 100644
+index 0000000..83b7f91
+--- /dev/null
++++ b/src/sim/mimicos_broker.cc
+@@ -0,0 +1,225 @@
++/*
++ * Copyright (c) 2026 The Virtuoso Authors
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are
++ * met: redistributions of source code must retain the above copyright
++ * notice, this list of conditions and the following disclaimer;
++ * redistributions in binary form must reproduce the above copyright
++ * notice, this list of conditions and the following disclaimer in the
++ * documentation and/or other materials provided with the distribution;
++ * neither the name of the copyright holders nor the names of its
++ * contributors may be used to endorse or promote products derived from
++ * this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/*
++ * @kanellok: the fault exchange, in order.
++ *
++ *   handOff()      application faults -> queue it, park the thread,
++ *                  wake the kernel
++ *   waitForFault() kernel asks for work -> hand it the next one
++ *   reply()        kernel answers -> remember the frame, wake whoever
++ *                  was waiting on that page
++ *   takeAnswer()   the parked thread runs again and picks it up
++ *
++ * Any number of threads can be waiting at once.  The kernel takes them
++ * one at a time, which is what a real fault handler does anyway.
++ */
++#include "sim/mimicos_broker.hh"
++
++#include <algorithm>
++
++#include "base/logging.hh"
++#include "base/trace.hh"
++#include "cpu/thread_context.hh"
++#include "sim/core.hh"
++#include "sim/process.hh"
++#include "debug/MimicOS.hh"
++
++namespace gem5
++{
++
++MimicOSBroker &
++MimicOSBroker::instance()
++{
++    static MimicOSBroker broker;
++    return broker;
++}
++
++void
++MimicOSBroker::enable(Addr phys_base, uint64_t kernel_pid)
++{
++    _enabled = true;
++    _phys_base = phys_base;
++    _kernel_pid = kernel_pid;
++}
++
++bool
++MimicOSBroker::handOff(ThreadContext *tc, Addr vaddr)
++{
++    if (!_enabled)
++        return false;
++
++    /*
++     * The kernel faults too, on its own text and stack, and it cannot
++     * serve those itself: it is not running yet when they happen, and
++     * handing it its own fault would wait forever.  They go down the
++     * normal path.
++     */
++    if (tc->getProcessPtr()->pid() == (int)_kernel_pid)
++        return false;
++
++    const Addr page = vaddr & ~(Addr)0xfff;
++    const uint64_t asid = tc->getProcessPtr()->pid();
++    const uint64_t k = key(asid, page);
++
++    /* Already answered: let the normal path pick the answer up. */
++    if (_answers.count(k))
++        return false;
++
++    /*
++     * Someone is already waiting on this page: either this same thread
++     * re-executing the faulting instruction before the park took
++     * effect, or another thread that wants the page too.  Join the
++     * queue rather than asking the kernel twice.
++     */
++    auto waiting = _parked.find(k);
++    if (waiting != _parked.end()) {
++        auto &list = waiting->second;
++        if (std::find(list.begin(), list.end(), tc) == list.end())
++            list.push_back(tc);
++        tc->quiesce();
++        return true;
++    }
++
++    /*
++     * The kernel may not have reached its first wait() yet -- it is a
++     * process like any other and has to start up.  Queue the fault and
++     * let it pick it up when it does.  Falling back to the simulator
++     * would be worse than a wait: the run would look fine having never
++     * used the kernel.
++     */
++    Fault f;
++    f.tc = tc;
++    f.vaddr = page;
++    f.asid = asid;
++    f.valid = true;
++    _queue.push_back(f);
++    _parked[k].push_back(tc);
++    _app_tc = tc;
++
++    DPRINTF(MimicOS, "queueing fault at %#x (asid %llu), %llu waiting\n",
++            page, (unsigned long long)asid,
++            (unsigned long long)_queue.size());
++
++    /* Park this thread.  Others keep running and may fault too. */
++    tc->quiesce();
++    if (_kernel_tc != nullptr)
++        _kernel_tc->activate();
++
++    return true;
++}
++
++bool
++MimicOSBroker::takeAnswer(uint64_t asid, Addr vaddr, Addr *paddr,
++                          unsigned *log_bytes)
++{
++    const Addr page = vaddr & ~(Addr)0xfff;
++    auto it = _answers.find(key(asid, page));
++    if (it == _answers.end())
++        return false;
++
++    if (paddr != nullptr)
++        *paddr = it->second.paddr;
++    if (log_bytes != nullptr)
++        *log_bytes = it->second.log_bytes;
++
++    _answers.erase(it);
++    return true;
++}
++
++uint64_t
++MimicOSBroker::waitForFault(ThreadContext *tc)
++{
++    _kernel_tc = tc;
++
++    /*
++     * Nothing more will ever fault once the application has gone, so
++     * let the kernel exit.  Without this the run never ends: a kernel
++     * waiting for work keeps the simulation alive for ever.
++     */
++    if (_app_tc != nullptr && _app_tc->status() == ThreadContext::Halted) {
++        DPRINTF(MimicOS, "application has gone, telling the kernel to stop\n");
++        return Shutdown;
++    }
++
++    if (!_serving.valid && !_queue.empty()) {
++        _serving = _queue.front();
++        _queue.pop_front();
++        DPRINTF(MimicOS, "kernel picked up the fault at %#x (asid %llu)\n",
++                _serving.vaddr, (unsigned long long)_serving.asid);
++        return _serving.vaddr;
++    }
++
++    /* Handed out already and not yet answered; hand out the same one. */
++    if (_serving.valid)
++        return _serving.vaddr;
++
++    /*
++     * Nothing to do.  Park the kernel rather than spin: a spinning
++     * kernel would burn simulated time that a real one does not.  It
++     * resumes at the instruction after this one, loops, and asks again.
++     *
++     * Wake it periodically as well as on a fault, so it notices when
++     * the application has gone.  Parked for good it would never look,
++     * and the run would never end.  A fault still wakes it at once.
++     */
++    DPRINTF(MimicOS, "kernel idle, parking\n");
++    tc->quiesceTick(curTick() + sim_clock::as_int::us);
++    return NoWork;
++}
++
++void
++MimicOSBroker::reply(ThreadContext *tc, uint64_t ppn, uint64_t page_size_bits)
++{
++    panic_if(!_serving.valid,
++             "MimicOS: the kernel answered without a fault to answer");
++
++    const unsigned log_bytes =
++        (page_size_bits >= 30) ? 30 : ((page_size_bits >= 21) ? 21 : 12);
++
++    const uint64_t k = key(_serving.asid, _serving.vaddr);
++    _answers[k] = Answer{_phys_base + (ppn << 12), log_bytes};
++    _served++;
++
++    DPRINTF(MimicOS, "kernel answered %#x with frame %llu, %u byte page\n",
++            _serving.vaddr, (unsigned long long)ppn, 1U << log_bytes);
++
++    /* Wake everyone waiting on this page, not just the first. */
++    auto it = _parked.find(k);
++    if (it != _parked.end()) {
++        for (auto *waiter : it->second)
++            waiter->activate();
++        _parked.erase(it);
++    }
++
++    _serving = Fault{};
++
++    (void)tc;
++}
++
++} // namespace gem5
+diff --git a/src/sim/mimicos_broker.hh b/src/sim/mimicos_broker.hh
+new file mode 100644
+index 0000000..3a4b2c2
+--- /dev/null
++++ b/src/sim/mimicos_broker.hh
+@@ -0,0 +1,179 @@
++/*
++ * Copyright (c) 2026 The Virtuoso Authors
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions are
++ * met: redistributions of source code must retain the above copyright
++ * notice, this list of conditions and the following disclaimer;
++ * redistributions in binary form must reproduce the above copyright
++ * notice, this list of conditions and the following disclaimer in the
++ * documentation and/or other materials provided with the distribution;
++ * neither the name of the copyright holders nor the names of its
++ * contributors may be used to endorse or promote products derived from
++ * this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#ifndef __SIM_MIMICOS_BROKER_HH__
++#define __SIM_MIMICOS_BROKER_HH__
++
++#include <cstdint>
++#include <deque>
++#include <unordered_map>
++#include <vector>
++
++#include "base/types.hh"
++
++namespace gem5
++{
++
++class ThreadContext;
++
++/*
++ * @kanellok: this is what makes gem5 run MimicOS for real.
++ *
++ * Normally a page fault in syscall emulation is resolved by the
++ * simulator calling a function, so the fault costs whatever number you
++ * put in a config file.  Here the fault is handed to MimicOS running as
++ * an ordinary process: it wakes up, works out which frame to use, and
++ * answers.  Its instructions go through the pipeline like the
++ * application's, so the fault costs what the handler actually does.
++ *
++ * Hands page faults to a MimicOS kernel running as a guest process.
++ *
++ * SE mode resolves a fault by calling into the simulator, so the cost of
++ * handling it can only ever be a number from a config file.  With the
++ * kernel in the guest, the fault is handed to it and the kernel's own
++ * instructions run through the pipeline like any others.  That is what
++ * makes the cost come from the handler.
++ *
++ * The exchange is two m5ops.  The kernel calls m5_mimicos_wait(), which
++ * blocks it until a fault is pending and then returns the address.  It
++ * works out which frame backs that address and calls
++ * m5_mimicos_reply().  Only then does the faulting thread run again.
++ *
++ * A fault takes two trips through the fault handler.  The first posts it
++ * and parks the thread; the second, after the kernel has answered, goes
++ * down gem5's normal path so the region checks in MemState still run --
++ * the answer is only used for the frame.
++ *
++ * Any number of threads may fault at once.  They queue, the kernel takes
++ * them one at a time, and each is woken when its own answer lands.
++ * Answers are keyed by address space as well as address, so two
++ * processes using the same virtual address do not collide.
++ */
++class MimicOSBroker
++{
++  public:
++    static MimicOSBroker &instance();
++
++    /*
++     * phys_base is where MimicOS's physical space starts in gem5's.
++     * kernel_pid is the process running the kernel: its own faults go
++     * down the normal path, since it cannot service them itself.
++     */
++    void enable(Addr phys_base, uint64_t kernel_pid);
++    bool enabled() const { return _enabled; }
++
++    /* True once a kernel has called wait() at least once. */
++    bool kernelPresent() const { return _kernel_tc != nullptr; }
++
++    /*
++     * Called from the ISA's fault handler before it resolves anything.
++     * Returns true when the fault has been handed to the kernel and the
++     * caller should return without fixing it: the thread is parked and
++     * will re-run the instruction once the kernel answers.
++     */
++    bool handOff(ThreadContext *tc, Addr vaddr);
++
++    /*
++     * The frame the kernel gave for this address, if it has answered.
++     * Consumes the answer.  log_bytes gets the page size it chose.
++     */
++    bool takeAnswer(uint64_t asid, Addr vaddr, Addr *paddr,
++                    unsigned *log_bytes);
++
++    /* Address space of the fault the kernel is serving right now. */
++    uint64_t servingAsid() const { return _serving.asid; }
++
++    /*
++     * m5_mimicos_wait().  Returns the faulting address, or one of the
++     * two values below.
++     *
++     * Address 0 is a real address -- a null dereference faults there --
++     * so it cannot double as "nothing to do".  Using it as one made the
++     * kernel skip a genuine fault and spin on it for ever.
++     */
++    static constexpr uint64_t Shutdown = ~(uint64_t)0;
++    static constexpr uint64_t NoWork = ~(uint64_t)1;
++    uint64_t waitForFault(ThreadContext *tc);
++
++    /* m5_mimicos_reply() */
++    void reply(ThreadContext *tc, uint64_t ppn, uint64_t page_size_bits);
++
++    uint64_t served() const { return _served; }
++
++  private:
++    MimicOSBroker() = default;
++
++    struct Answer
++    {
++        Addr paddr;
++        unsigned log_bytes;
++    };
++
++    struct Fault
++    {
++        ThreadContext *tc = nullptr;
++        Addr vaddr = 0;
++        uint64_t asid = 0;
++        bool valid = false;
++    };
++
++    /* One key per address space and page. */
++    static uint64_t key(uint64_t asid, Addr page)
++    {
++        return (asid << 48) ^ (page >> 12);
++    }
++
++    bool _enabled = false;
++    Addr _phys_base = 0;
++    uint64_t _kernel_pid = 0;
++
++    ThreadContext *_kernel_tc = nullptr;
++
++    /* Faults waiting for the kernel, and the one it has in hand. */
++    std::deque<Fault> _queue;
++    Fault _serving;
++
++    /*
++     * Threads parked on a fault.  More than one can be waiting on the
++     * same page -- they touch it at the same time and both fault before
++     * either is served -- and every one of them has to be woken, or the
++     * ones left behind sleep for ever and their work is lost.
++     */
++    std::unordered_map<uint64_t, std::vector<ThreadContext *>> _parked;
++
++    /* Any application thread, to notice when the workload is done. */
++    ThreadContext *_app_tc = nullptr;
++
++    std::unordered_map<uint64_t, Answer> _answers;
++
++    uint64_t _served = 0;
++};
++
++} // namespace gem5
++
++#endif // __SIM_MIMICOS_BROKER_HH__
+diff --git a/src/sim/process.cc b/src/sim/process.cc
+index 7b6e2d0..e7f3a53 100644
+--- a/src/sim/process.cc
++++ b/src/sim/process.cc
+@@ -336,11 +336,77 @@ Process::allocateMem(Addr vaddr, int64_t size, bool clobber)
+     }
+ 
+     const int npages = divCeil(size, page_size);
++    const auto flags = clobber ? EmulationPageTable::Clobber :
++                                 EmulationPageTable::MappingFlags(0);
++
++    /*
++     * @kanellok: where the frames for this process come from.
++     *
++     * With MimicOS, one page at a time, because it decides placement
++     * from the virtual address.  Without it, one contiguous run as
++     * before.
++     */
++    if (seWorkload->mimicosEnabled()) {
++        /*
++         * MimicOS places frames by virtual address: its buddy allocator
++         * and THP reservation both key off it.  So resolve one page at
++         * a time rather than take one contiguous run, and let physical
++         * contiguity reflect what the allocator decided.
++         */
++        for (int i = 0; i < npages; i++) {
++            const Addr va = page_addr + i * page_size;
++            unsigned log_bytes = 12;
++            const Addr pa = seWorkload->mimicosAllocPage(va, pTable->pid(),
++                                                         &log_bytes);
++            /*
++             * Record the real page size.  The table still holds one
++             * entry per 4K page; the TLB needs the size so a 2M page
++             * takes one entry instead of 512.
++             */
++            auto page_flags = flags;
++
++            /*
++             * A large TLB entry answers for the whole region, so it is
++             * only safe if every page in that region really is backed
++             * by this allocation.  Anything mapped earlier -- the
++             * binary's text and data are mapped before the kernel is
++             * even running -- would otherwise be silently redirected
++             * into the large frame, and the program would read someone
++             * else's memory.  When that has happened, keep 4K entries.
++             */
++            if (log_bytes >= 21) {
++                const Addr region = Addr(1) << log_bytes;
++                const Addr huge_va = va & ~(region - 1);
++                const Addr huge_pa = pa & ~(region - 1);
++                const int covered = int(region / page_size);
++
++                bool clean = true;
++                for (int j = 0; j < covered; j++) {
++                    if (pTable->lookup(huge_va + j * page_size)) {
++                        clean = false;
++                        break;
++                    }
++                }
++
++                if (clean) {
++                    page_flags = EmulationPageTable::MappingFlags(
++                            page_flags | (log_bytes >= 30
++                                          ? EmulationPageTable::Huge1G
++                                          : EmulationPageTable::Huge2M));
++                    /* Map the whole region so the entry tells the truth. */
++                    pTable->map(huge_va, huge_pa, region, page_flags);
++                    continue;
++                }
++            }
++
++            pTable->map(va, pa, page_size, page_flags);
++        }
++        return;
++    }
++
+     const Addr paddr = seWorkload->allocPhysPages(npages);
+     const Addr pages_size = npages * page_size;
+-    pTable->map(page_addr, paddr, pages_size,
+-                clobber ? EmulationPageTable::Clobber :
+-                          EmulationPageTable::MappingFlags(0));
++    pTable->map(page_addr, paddr, pages_size, flags);
+ }
+ 
+ void
+diff --git a/src/sim/pseudo_inst.cc b/src/sim/pseudo_inst.cc
+index 084be5a..f75e8ac 100644
+--- a/src/sim/pseudo_inst.cc
++++ b/src/sim/pseudo_inst.cc
+@@ -42,6 +42,8 @@
+ 
+ #include "sim/pseudo_inst.hh"
+ 
++#include "sim/mimicos_broker.hh"
++
+ #include <fcntl.h>
+ #include <unistd.h>
+ 
+@@ -150,6 +152,29 @@ quiesceTime(ThreadContext *tc)
+         sim_clock::as_int::ns;
+ }
+ 
++uint64_t
++mimicosWait(ThreadContext *tc)
++{
++    DPRINTF(PseudoInst, "pseudo_inst::mimicosWait()\n");
++    return MimicOSBroker::instance().waitForFault(tc);
++}
++
++uint64_t
++mimicosAsid(ThreadContext *tc)
++{
++    DPRINTF(PseudoInst, "pseudo_inst::mimicosAsid()\n");
++    (void)tc;
++    return MimicOSBroker::instance().servingAsid();
++}
++
++void
++mimicosReply(ThreadContext *tc, uint64_t ppn, uint64_t page_size_bits)
++{
++    DPRINTF(PseudoInst, "pseudo_inst::mimicosReply(%llu, %llu)\n",
++            (unsigned long long)ppn, (unsigned long long)page_size_bits);
++    MimicOSBroker::instance().reply(tc, ppn, page_size_bits);
++}
++
+ uint64_t
+ rpns(ThreadContext *tc)
+ {
+diff --git a/src/sim/pseudo_inst.hh b/src/sim/pseudo_inst.hh
+index 2d7b277..097fe78 100644
+--- a/src/sim/pseudo_inst.hh
++++ b/src/sim/pseudo_inst.hh
+@@ -97,6 +97,9 @@ void loadsymbol(ThreadContext *xc);
+ void addsymbol(ThreadContext *tc, GuestAddr addr, GuestAddr symbolAddr);
+ uint64_t initParam(ThreadContext *xc, uint64_t key_str1, uint64_t key_str2);
+ uint64_t rpns(ThreadContext *tc);
++uint64_t mimicosWait(ThreadContext *tc);
++uint64_t mimicosAsid(ThreadContext *tc);
++void mimicosReply(ThreadContext *tc, uint64_t ppn, uint64_t page_size_bits);
+ void wakeCPU(ThreadContext *tc, uint64_t cpuid);
+ void m5exit(ThreadContext *tc, Tick delay);
+ void m5fail(ThreadContext *tc, Tick delay, uint64_t code);
+@@ -161,6 +164,18 @@ pseudoInstWork(ThreadContext *tc, uint8_t func, uint64_t &result)
+         result = invokeSimcall<ABI, store_ret>(tc, rpns);
+         return true;
+ 
++      case M5OP_MIMICOS_WAIT:
++        result = invokeSimcall<ABI, store_ret>(tc, mimicosWait);
++        return true;
++
++      case M5OP_MIMICOS_REPLY:
++        invokeSimcall<ABI>(tc, mimicosReply);
++        return true;
++
++      case M5OP_MIMICOS_ASID:
++        result = invokeSimcall<ABI, store_ret>(tc, mimicosAsid);
++        return true;
++
+       case M5OP_WAKE_CPU:
+         invokeSimcall<ABI>(tc, wakeCPU);
+         return true;
+diff --git a/src/sim/se_workload.cc b/src/sim/se_workload.cc
+index 4d2bd54..244aaa3 100644
+--- a/src/sim/se_workload.cc
++++ b/src/sim/se_workload.cc
+@@ -30,6 +30,7 @@
+ #include "cpu/thread_context.hh"
+ #include "params/SEWorkload.hh"
+ #include "sim/process.hh"
++#include "sim/mimicos_broker.hh"
+ #include "sim/system.hh"
+ 
+ namespace gem5
+@@ -37,7 +38,26 @@ namespace gem5
+ 
+ SEWorkload::SEWorkload(const Params &p, Addr page_shift) :
+     Workload(p), memPools(page_shift)
+-{}
++{
++    mimicosInGuest = p.mimicos_in_guest;
++    mimicosKernelPid = p.mimicos_kernel_pid;
++
++    if (!p.mimicos_config.empty()) {
++        std::string err;
++        mimicos = MimicOSBinding::attach(p.mimicos_config, &err);
++        /* Falling back would report results MimicOS never produced. */
++        fatal_if(mimicos == nullptr,
++                 "could not attach MimicOS from '%s': %s",
++                 p.mimicos_config, err);
++        inform("MimicOS attached from '%s'", p.mimicos_config);
++    }
++}
++
++SEWorkload::~SEWorkload()
++{
++    if (mimicos)
++        inform("%s", mimicos->summary());
++}
+ 
+ void
+ SEWorkload::setSystem(System *sys)
+@@ -51,6 +71,86 @@ SEWorkload::setSystem(System *sys)
+         memories -= m5op_range;
+ 
+     memPools.populate(memories);
++
++    if (mimicos) {
++        /*
++         * Carve MimicOS's space out of the pool up front so its frames
++         * cannot collide with the ones gem5 hands out for descriptor
++         * tables and GPU buffers, which still come from the pool.
++         */
++        const uint64_t frames = mimicos->numFrames();
++        const Addr free_bytes = memPools.freeMemSize();
++        const Addr needed = frames * 4096ull;
++        fatal_if(needed > free_bytes,
++                 "MimicOS needs %llu MiB of physical memory but only %llu MiB "
++                 "is available; enlarge the system's memory or reduce "
++                 "[pmem_alloc] memory_size",
++                 (unsigned long long)(needed >> 20),
++                 (unsigned long long)(free_bytes >> 20));
++
++        const Addr base = memPools.allocPhysPages((int)frames);
++        mimicos->setPhysBase(base);
++        /*
++         * @kanellok: with the kernel in the guest, gem5's own copy of
++         * MimicOS steps aside.  It has already reserved the physical
++         * range; from here on the guest decides what goes where.
++         */
++        if (mimicosInGuest) {
++            /*
++             * The kernel decides the frames, so the copy of MimicOS in
++             * here is only used for the reservation and the geometry.
++             */
++            MimicOSBroker::instance().enable(base, mimicosKernelPid);
++            inform("MimicOS runs in the guest; the kernel decides placement");
++        }
++        inform("MimicOS reserved %llu MiB of physical memory at %#llx",
++               (unsigned long long)(needed >> 20), (unsigned long long)base);
++    }
++}
++
++Addr
++SEWorkload::mimicosAllocPage(Addr vaddr, uint32_t asid, unsigned *log_bytes)
++{
++    /*
++     * With a kernel in the guest, the frame was decided by MimicOS
++     * running as a real process; this just picks up its answer.  The
++     * region checks in MemState still ran on the way here.
++     */
++    Addr from_kernel = 0;
++    unsigned kernel_bytes = 12;
++    if (MimicOSBroker::instance().takeAnswer(asid, vaddr, &from_kernel,
++                                             &kernel_bytes)) {
++        if (log_bytes != nullptr)
++            *log_bytes = kernel_bytes;
++        return from_kernel;
++    }
++
++    if (mimicosInGuest) {
++        /*
++         * No answer waiting, so this is not the application's fault: it
++         * is the kernel process itself, or a page set up before the
++         * kernel was running.  Those come from gem5's pool.  Serving
++         * them from the copy of MimicOS in here would put two
++         * allocators on the same physical region, and they would hand
++         * out the same frames.
++         */
++        if (log_bytes != nullptr)
++            *log_bytes = 12;
++        return allocPhysPages(1);
++    }
++
++    assert(mimicos);
++    Addr paddr = 0;
++    fatal_if(!mimicos->allocate(vaddr, asid, &paddr, log_bytes),
++             "MimicOS could not back virtual address %#llx (out of physical "
++             "memory?)", (unsigned long long)vaddr);
++    return paddr;
++}
++
++uint64_t
++SEWorkload::takeMimicosFaultLatencyNs()
++{
++    return mimicos ? mimicos->takePendingLatencyNs() : 0;
+ }
+ 
+ void
+diff --git a/src/sim/se_workload.hh b/src/sim/se_workload.hh
+index e212ad6..57eee02 100644
+--- a/src/sim/se_workload.hh
++++ b/src/sim/se_workload.hh
+@@ -28,8 +28,12 @@
+ #ifndef __SIM_SE_WORKLOAD_HH__
+ #define __SIM_SE_WORKLOAD_HH__
+ 
++#include <memory>
++#include <string>
++
+ #include "params/SEWorkload.hh"
+ #include "sim/mem_pool.hh"
++#include "sim/mimicos_binding.hh"
+ #include "sim/workload.hh"
+ 
+ namespace gem5
+@@ -41,13 +45,43 @@ class SEWorkload : public Workload
+     /** Memory allocation objects for all physical memories in the system. */
+     MemPools memPools;
+ 
++    /*
++     * When set, MimicOS decides which frame backs each page and what a
++     * fault costs.  Null without a mimicos_config, and in any build
++     * without MimicOS support.  See sim/mimicos_binding.hh.
++     */
++    std::unique_ptr<MimicOSBinding> mimicos;
++
++    /* Kernel runs as a guest process rather than being called into. */
++    bool mimicosInGuest = false;
++    uint64_t mimicosKernelPid = 0;
++
+   public:
+     using Params = SEWorkloadParams;
+ 
+     SEWorkload(const Params &p, Addr page_shift=0);
++    ~SEWorkload();
+ 
+     void setSystem(System *sys) override;
+ 
++    /* True when MimicOS is backing this workload's memory. */
++    bool mimicosEnabled() const { return mimicos != nullptr; }
++
++    /*
++     * Resolve the frame backing vaddr, allocating on first touch.  Only
++     * valid when mimicosEnabled().  Panics rather than return a bogus
++     * frame: a wrong physical address still looks plausible.
++     */
++    Addr mimicosAllocPage(Addr vaddr, uint32_t asid,
++                          unsigned *log_bytes = nullptr);
++
++    /*
++     * Fault cost accrued since the last call, in ns, then reset.  An
++     * ISA's fault handler reads it to stall the faulting thread; SE
++     * mode otherwise resolves faults in zero simulated time.
++     */
++    uint64_t takeMimicosFaultLatencyNs();
++
+     Addr
+     getEntry() const override
+     {
+diff --git a/tests/gem5/mimicos/test_mimicos_se.py b/tests/gem5/mimicos/test_mimicos_se.py
+new file mode 100644
+index 0000000..f2e494a
+--- /dev/null
++++ b/tests/gem5/mimicos/test_mimicos_se.py
+@@ -0,0 +1,65 @@
++# Copyright (c) 2026 The Virtuoso Authors
++# All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions are
++# met: redistributions of source code must retain the above copyright
++# notice, this list of conditions and the following disclaimer;
++# redistributions in binary form must reproduce the above copyright
++# notice, this list of conditions and the following disclaimer in the
++# documentation and/or other materials provided with the distribution;
++# neither the name of the copyright holders nor the names of its
++# contributors may be used to endorse or promote products derived from
++# this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++"""Tests for the MimicOS syscall-emulation hook.
++
++The two tests here run with MimicOS *disabled*, and that is deliberate: they
++are the regression guard, checking that the code paths added for MimicOS leave
++stock SE mode behaving exactly as before. They run in any build, including one
++without MIMICOS_HOME set.
++
++Exercising MimicOS itself needs a library build and a MimicOS INI, neither of
++which a stock gem5 checkout has. That side is covered by
++mimicos/tests/check_gem5_se.py in the Virtuoso artifact, which runs gem5 twice
++and compares.
++"""
++
++from testlib import *
++
++config_path = joinpath(config.base_dir, "configs", "example")
++
++# Plain SE mode through the MimicOS example config, with MimicOS off. Proves
++# the hook in Process::allocateMem and the SEWorkload parameter do not disturb
++# the stock allocation path.
++gem5_verify_config(
++    name="mimicos_se_disabled",
++    verifiers=(),
++    config=joinpath(config_path, "mimicos_se.py"),
++    config_args=["--cpu-type", "atomic"],
++    length=constants.quick_tag,
++    valid_isas=(constants.x86_tag, constants.all_compiled_tag),
++)
++
++# The same thing in timing mode, which is the mode where a charged fault
++# latency would show up in the tick count.
++gem5_verify_config(
++    name="mimicos_se_disabled_timing",
++    verifiers=(),
++    config=joinpath(config_path, "mimicos_se.py"),
++    config_args=["--cpu-type", "timing"],
++    length=constants.quick_tag,
++    valid_isas=(constants.x86_tag, constants.all_compiled_tag),
++)
+-- 
+2.34.1
+

@@ -40,6 +40,7 @@ Both walkthroughs are self-contained HTML — open them in a browser.
 - [Configuration System](#configuration-system)
 - [Experiment Framework](#experiment-framework)
 - [Ramulator2 Integration](#ramulator2-integration)
+- [MimicOS in Other Simulators (gem5, ChampSim)](#mimicos-in-other-simulators-gem5-champsim)
 - [Smoke Tests](#smoke-tests)
 - [Website and Documentation](#website-and-documentation)
 - [Citation](#citation)
@@ -415,6 +416,63 @@ cd simulator/ramulator2 && mkdir -p build && cd build && cmake .. && make -j
 cd simulator/ramulator2/mimicos
 make SNIPER_INCLUDE=$PWD/../../sniper/include
 ```
+
+## MimicOS in Other Simulators (gem5, ChampSim)
+
+MimicOS is not tied to Sniper. `libmimicos` is a simulator-agnostic C++ library
+(`mimicos/include/mimicos_embed.h`) that any host simulator can link to hand
+MimicOS ownership of physical memory allocation, page tables and the
+minor-fault cost model. Two integrations ship as patch series against pinned
+upstream releases:
+
+| Simulator | Pin | What MimicOS owns |
+|---|---|---|
+| [gem5](https://github.com/gem5/gem5), syscall-emulation mode | `v24.1.0.3` | physical allocation, 4 KiB + 2 MiB pages in the TLB, minor-fault cost |
+| [ChampSim](https://github.com/ChampSim/ChampSim) | `06de8d3` | physical allocation, page tables, 4 KiB + 2 MiB pages in the TLBs, and the fault handler's real instructions |
+
+The asymmetry is deliberate: ChampSim has a real page table walker, so MimicOS's
+page tables generate observable PTE traffic there, and being trace-driven it can
+replay a recording of the fault handler into the core. gem5's SE mode translates
+functionally, so it gets placement, page sizes and fault cost, but has nothing
+for page-table geometry to show up in, and it charges a latency rather than
+running MimicOS's instructions.
+
+Both TLBs hold two page sizes. On a 32 MiB working set walked four times, gem5's
+data TLB takes 32 796 read misses with 4 KiB pages and 2 with 2 MiB. ChampSim,
+on 605.mcf, goes from 29 650 DTLB misses to 5 654.
+
+```bash
+# Build the library and run its own tests
+make -C mimicos lib-static
+make -C mimicos check-embed
+
+# ChampSim
+bash patches/apply_mimicos_champsim.sh
+cd simulator/ChampSim && ./config.sh champsim_config.json
+make MIMICOS_HOME=$PWD/../../mimicos -j
+MIMICOS_CONFIG=../../mimicos/configs/embedded_4gb_thp.ini \
+  ./bin/champsim --deadlock-cycle 100000 -w 200000 -i 1000000 trace.champsimtrace.xz
+
+# gem5 (clones gem5 at the pinned tag if you do not have it)
+bash patches/apply_mimicos_gem5.sh
+cd simulator/gem5
+MIMICOS_HOME=$PWD/../../mimicos scons build/X86/gem5.opt -j$(nproc)
+build/X86/gem5.opt configs/example/mimicos_se.py \
+    --mimicos-config ../../mimicos/configs/embedded_4gb_thp.ini
+```
+
+Both integrations are inert unless enabled: without `MIMICOS_HOME` the MimicOS
+translation units compile to stubs, nothing links against the library, and the
+host simulator behaves exactly as upstream.
+
+Start with [docs/mimicos_integration_walkthrough.md](docs/mimicos_integration_walkthrough.md)
+for a short tour of how it fits together, then
+**[docs/mimicos_portable.md](docs/mimicos_portable.md) before using it in anger.**
+It covers the API, both integrations, how to verify an adapter is a
+pass-through, what each integration does *not* model, and how to port MimicOS to
+a third simulator. One thing in particular will catch you out: the
+`[fault_calibration]` section means something different when MimicOS is embedded
+than when it runs under SDE, and every config shipped for Sniper has it at zero.
 
 ## Smoke Tests
 

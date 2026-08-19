@@ -1,0 +1,1933 @@
+From b6fa5efcf962da0d7013ff9fe7bc1ef7c5350280 Mon Sep 17 00:00:00 2001
+From: konkanello <konkanello@gmail.com>
+Date: Wed, 19 Aug 2026 00:39:07 +0200
+Subject: [PATCH] mimicos: let MimicOS own memory management
+
+ChampSim invents its own physical addresses: frames come off a shuffled
+free list and page-table pages are made up as the walker needs them.
+That is fine as a placeholder, but it means physical placement -- the
+thing an OS allocator decides -- is not modelled, and a page fault is a
+fixed number of cycles that says nothing about what a handler does.
+
+This hands all of it to MimicOS.  Opt-in and inert by default:
+
+  make MIMICOS_HOME=/path/to/mimicos
+  MIMICOS_CONFIG=<mimicos.ini> bin/champsim ...
+
+Without MIMICOS_HOME, src/vmem_mimicos.cc compiles to stubs, nothing
+links against MimicOS, and behaviour is identical to stock.
+
+What it adds:
+
+  Allocation and page tables.  va_to_pa() and get_pte_pa() ask MimicOS.
+  Since the entries have real physical addresses, the existing page
+  table walker fetches them through the cache hierarchy, so allocator
+  policy shows up in measured traffic instead of being assumed away.
+
+  Two page sizes in the TLBs.  A TLB is indexed on the page number, so
+  an entry for a 2M page cannot be found by a lookup that indexes on
+  the 4K page number; every lookup now probes twice and entries record
+  which they are.  Separate arrays for an L1, shared capacity for an
+  L2, both configured per TLB.  Off by default.
+
+  The fault handler, for real.  ChampSim cannot execute code, so point
+  MIMICOS_FAULT_TRACE at a recording of MimicOS servicing a fault and
+  those instructions are replayed into the core at each fault.  They
+  fetch, decode and execute like any others.  A 4K fault is 565
+  instructions; promoting to 2M is 1426.
+
+  Kernel instructions are marked, so they do not count towards the
+  program's IPC, and their accesses skip address translation entirely:
+  MimicOS is what answers a translation and cannot translate for
+  itself.
+
+  --deadlock-cycle.  A measured minor fault is microseconds, thousands
+  of cycles, and the hardcoded 500-cycle window reported that as a
+  deadlock.  Default unchanged.
+
+Measured on 605.mcf, 1M instructions after 200k warmup, fault cost held
+fixed so only placement differs:
+
+  stock (shuffled free list)   IPC 0.1001   LLC misses 116552
+  MimicOS, baseline allocator  IPC 0.1597   LLC misses  89201
+
+and with page size varying, 150k instructions:
+
+  4K     IPC 0.01324   DTLB miss 29650   STLB miss 3650
+  2M     IPC 0.08224   DTLB miss  5654   STLB miss  342
+
+The full suite passes: 10894 assertions over 626 cases, including new
+tests for the MimicOS paths.  A stock build passes 10842 over 622,
+unchanged.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0198h1jxpi9UhkKyfhM3h2gH
+---
+ Makefile                         |  24 +++
+ champsim_config.json             |  12 +-
+ config/instantiation_file.py     |   7 +-
+ config/parse.py                  |  11 +-
+ inc/block.h                      |   7 +
+ inc/cache.h                      |  42 ++++
+ inc/cache_builder.h              |  28 +++
+ inc/champsim.h                   |  10 +
+ inc/environment.h                |   2 +
+ inc/instruction.h                |  15 ++
+ inc/ooo_cpu.h                    |  11 +-
+ inc/tracereader.h                |  12 ++
+ inc/vmem.h                       |  71 ++++++-
+ inc/vmem_mimicos.h               | 103 ++++++++++
+ src/cache.cc                     | 166 ++++++++++++++-
+ src/champsim.cc                  |  44 +++-
+ src/main.cc                      |   7 +
+ src/ooo_cpu.cc                   |  28 ++-
+ src/ptw.cc                       |  15 +-
+ src/vmem.cc                      | 129 +++++++++++-
+ src/vmem_mimicos.cc              | 233 +++++++++++++++++++++
+ test/cpp/src/804-vmem-mimicos.cc | 343 +++++++++++++++++++++++++++++++
+ 22 files changed, 1297 insertions(+), 23 deletions(-)
+ create mode 100644 inc/vmem_mimicos.h
+ create mode 100644 src/vmem_mimicos.cc
+ create mode 100644 test/cpp/src/804-vmem-mimicos.cc
+
+diff --git a/Makefile b/Makefile
+index 6aae9c9..4879d56 100644
+--- a/Makefile
++++ b/Makefile
+@@ -20,6 +20,26 @@ override CPPFLAGS += -I$(OBJ_ROOT)
+ override LDFLAGS  += -L$(TRIPLET_DIR)/lib -L$(TRIPLET_DIR)/lib/manual-link
+ override LDLIBS   += -lCLI11 -llzma -lz -lbz2 -lfmt
+ 
++# @kanellok: MimicOS integration (opt-in).
++#
++#   make MIMICOS_HOME=/path/to/virtuoso_artifact/mimicos
++#
++# Without MIMICOS_HOME the build is stock ChampSim: src/vmem_mimicos.cc
++# compiles to stubs and nothing links against MimicOS.  With it, VirtualMemory
++# can hand physical allocation and the page tables to MimicOS -- see
++# inc/vmem_mimicos.h.  MIMICOS_SNIPER_INCLUDE points at the shared allocator
++# headers; it defaults to the layout of the Virtuoso artifact repository.
++ifdef MIMICOS_HOME
++MIMICOS_SNIPER_INCLUDE ?= $(MIMICOS_HOME)/../simulator/sniper/include
++MIMICOS_LIB ?= $(MIMICOS_HOME)/build/libmimicos.a
++override CPPFLAGS += -DCHAMPSIM_MIMICOS -I$(MIMICOS_HOME)/include -I$(MIMICOS_SNIPER_INCLUDE)
++override LDLIBS   += $(MIMICOS_LIB)
++# Relinking when libmimicos.a changes has to be stated explicitly: LDLIBS is
++# passed to the linker but is not a prerequisite, so without this a rebuilt
++# MimicOS would silently leave the old one linked in.
++override MIMICOS_LINK_PREREQ := $(MIMICOS_LIB)
++endif
++
+ .PHONY: all clean compile_commands compile_commands_clean configclean test pytest maketest
+ 
+ test_main_name=test/bin/000-test-main
+@@ -214,6 +234,10 @@ endif
+ 
+ all: $(executable_name)
+ 
++ifdef MIMICOS_HOME
++$(executable_name): $(MIMICOS_LINK_PREREQ)
++endif
++
+ # Get the base object files, with the 'main' file mangled
+ # $1 - A unique key identifying the build
+ get_base_objs = $(call get_object_list,$(base_source_dir),$(OBJ_ROOT),$1)
+diff --git a/champsim_config.json b/champsim_config.json
+index d8a33e1..c44735c 100644
+--- a/champsim_config.json
++++ b/champsim_config.json
+@@ -90,6 +90,9 @@
+   "ITLB": {
+     "sets": 16,
+     "ways": 4,
++    "huge_page_shift": 21,
++    "huge_page_sets": 2,
++    "huge_page_ways": 4,
+     "rq_size": 16,
+     "wq_size": 16,
+     "pq_size": 0,
+@@ -103,6 +106,9 @@
+   "DTLB": {
+     "sets": 16,
+     "ways": 4,
++    "huge_page_shift": 21,
++    "huge_page_sets": 8,
++    "huge_page_ways": 4,
+     "rq_size": 16,
+     "wq_size": 16,
+     "pq_size": 0,
+@@ -116,6 +122,9 @@
+   "STLB": {
+     "sets": 128,
+     "ways": 12,
++    "huge_page_shift": 21,
++    "huge_page_sets": 0,
++    "huge_page_ways": 0,
+     "rq_size": 32,
+     "wq_size": 32,
+     "pq_size": 0,
+@@ -182,6 +191,7 @@
+     "pte_page_size": 4096,
+     "num_levels": 5,
+     "minor_fault_penalty": 200,
+-    "randomization": 1
++    "randomization": 1,
++    "mimicos_config": ""
+   }
+ }
+diff --git a/config/instantiation_file.py b/config/instantiation_file.py
+index 5cf22ac..642e22c 100644
+--- a/config/instantiation_file.py
++++ b/config/instantiation_file.py
+@@ -23,7 +23,7 @@ from . import util
+ from . import cxx
+ 
+ pmem_fmtstr = 'champsim::chrono::picoseconds{{{clock_period_dbus}}}, champsim::chrono::picoseconds{{{clock_period_mc}}}, std::size_t{{{_tRP}}}, std::size_t{{{_tRCD}}}, std::size_t{{{_tCAS}}}, std::size_t{{{_tRAS}}}, champsim::chrono::microseconds{{{_refresh_period}}}, {{{_ulptr}}}, {rq_size}, {wq_size}, {channels}, champsim::data::bytes{{{channel_width}}}, {_bank_rows}, {_bank_columns}, {ranks}, {bankgroups}, {banks}, {_refreshes_per_period}'
+-vmem_fmtstr = 'champsim::data::bytes{{{pte_page_size}}}, {num_levels}, champsim::chrono::picoseconds{{{clock_period}*{minor_fault_penalty}}}, {dram_name}, {_randomization}'
++vmem_fmtstr = 'champsim::data::bytes{{{pte_page_size}}}, {num_levels}, champsim::chrono::picoseconds{{{clock_period}*{minor_fault_penalty}}}, {dram_name}, {_randomization}, "{mimicos_config}"'
+ 
+ queue_fmtstr = '{rq_size}, {pq_size}, {wq_size}, champsim::data::bits{{{_offset_bits}}}, {_queue_check_full_addr:b}'
+ 
+@@ -80,6 +80,7 @@ cache_builder_parts = {
+     'max_tag_check': '.tag_bandwidth(champsim::bandwidth::maximum_type{{{max_tag_check}}})',
+     'max_fill': '.fill_bandwidth(champsim::bandwidth::maximum_type{{{max_fill}}})',
+     '_offset_bits': '.offset_bits(champsim::data::bits{{{_offset_bits}}})',
++    '_huge_pages': '.huge_pages(champsim::data::bits{{{_huge_shift}}}, {_huge_sets}, {_huge_ways}).virtual_memory(&vmem)',
+     'prefetch_activate': '.prefetch_activate({^prefetch_activate_string})',
+     '_replacement_data': '.replacement<{^replacement_string}>()',
+     '_prefetcher_data': '.prefetcher<{^prefetcher_string}>()',
+@@ -417,6 +418,9 @@ def get_instantiation_lines(cores, caches, ptws, pmem, vmem, build_id):
+     yield from cxx.function(f'{classname}::dram_view', [f'return {pmem["name"]};'], rtype='MEMORY_CONTROLLER&')
+     yield ''
+ 
++    yield from cxx.function(f'{classname}::vmem_view', ['return vmem;'], rtype='VirtualMemory&')
++    yield ''
++
+ def get_instantiation_header(num_cpus, env, build_id):
+     yield '#include "environment.h"'
+     yield '#include "vmem.h"'
+@@ -441,6 +445,7 @@ def get_instantiation_header(num_cpus, env, build_id):
+         'std::vector<std::reference_wrapper<CACHE>> cache_view() final;',
+         'std::vector<std::reference_wrapper<PageTableWalker>> ptw_view() final;',
+         'MEMORY_CONTROLLER& dram_view() final;',
++        'VirtualMemory& vmem_view() final;',
+         'std::vector<std::reference_wrapper<operable>> operable_view() final;'
+     )
+     struct_name = f'champsim::configured::generated_environment<0x{build_id}> final'
+diff --git a/config/parse.py b/config/parse.py
+index b9cad56..ef2fc21 100644
+--- a/config/parse.py
++++ b/config/parse.py
+@@ -339,7 +339,7 @@ class NormalizedConfiguration:
+         vmem = util.chain(
+             transform_for_keys(self.vmem, ('pte_page_size',), int_or_prefixed_size),
+             self.vmem,
+-            { 'pte_page_size': int_or_prefixed_size("4kB"), 'num_levels': 5, 'minor_fault_penalty': 200, 'randomization': 1}
++            { 'pte_page_size': int_or_prefixed_size("4kB"), 'num_levels': 5, 'minor_fault_penalty': 200, 'randomization': 1, 'mimicos_config': ''}
+         )
+ 
+         # Give cores numeric indices and default cache names
+@@ -375,7 +375,14 @@ class NormalizedConfiguration:
+             } for k,cache in caches.items() if 'prefetch_activate' in cache),
+ 
+             # TLBs use page offsets, Caches use block offsets
+-            ({'name': c['name'], '_offset_bits': f'champsim::lg2({root_config["page_size"]})'} for c in tlb_path),
++            # TLBs may hold more than one page size.  Defaults keep this
++            # off, so a config that says nothing behaves as before.
++            ({'name': c['name'],
++              '_offset_bits': f'champsim::lg2({root_config["page_size"]})',
++              '_huge_pages': True,
++              '_huge_shift': c.get('huge_page_shift', 0),
++              '_huge_sets': c.get('huge_page_sets', 0),
++              '_huge_ways': c.get('huge_page_ways', 0)} for c in tlb_path),
+             ({'name': c['name'], '_offset_bits': f'champsim::lg2({root_config["block_size"]})'} for c in data_path),
+ 
+             # Unfold suffixed strings
+diff --git a/inc/block.h b/inc/block.h
+index ad40f36..3d85d56 100644
+--- a/inc/block.h
++++ b/inc/block.h
+@@ -31,6 +31,13 @@ struct cache_block {
+   champsim::address data{};
+ 
+   uint32_t pf_metadata = 0;
++
++  /*
++   * log2 of the page this entry covers, for TLBs that hold more than
++   * one page size.  0 means the cache's own offset applies, which is
++   * every cache that is not a TLB and every TLB without huge pages.
++   */
++  uint8_t page_shift = 0;
+ };
+ } // namespace champsim
+ 
+diff --git a/inc/cache.h b/inc/cache.h
+index d5eed21..b61b259 100644
+--- a/inc/cache.h
++++ b/inc/cache.h
+@@ -47,6 +47,8 @@
+ #include "util/to_underlying.h" // for to_underlying
+ #include "waitable.h"
+ 
++class VirtualMemory;
++
+ class CACHE : public champsim::operable
+ {
+   enum [[deprecated(
+@@ -162,6 +164,39 @@ public:
+   champsim::chrono::clock::duration FILL_LATENCY;
+   champsim::data::bits OFFSET_BITS;
+   set_type block{static_cast<typename set_type::size_type>(NUM_SET * NUM_WAY)};
++
++  /*
++   * @kanellok: how a TLB holds 4K and 2M entries at the same time.
++   *
++   * Large page support, TLBs only.  Off unless HUGE_SHIFT is set.
++   *
++   * A TLB indexes on the page number, so an entry for a 2M page is only
++   * found by a lookup that indexes the same way.  Every lookup probes
++   * twice, and entries say which they are in page_shift.
++   *
++   * NUM_WAY_HUGE == 0 keeps large entries in the main array, sharing
++   * capacity, which is what an L2 STLB does.  Above 0 they get their
++   * own array, which is what an L1 DTLB does.  That array uses plain
++   * LRU: the configured replacement module was built for the main
++   * array's geometry.
++   */
++  champsim::data::bits HUGE_SHIFT{};
++  uint32_t NUM_SET_HUGE = 0, NUM_WAY_HUGE = 0;
++  set_type block_huge{};
++  VirtualMemory* vmem = nullptr;
++
++  [[nodiscard]] bool huge_pages_enabled() const { return champsim::to_underlying(HUGE_SHIFT) > 0; }
++  [[nodiscard]] unsigned page_shift_of(champsim::address addr) const;
++  [[nodiscard]] long get_huge_set_index(champsim::address address) const;
++  std::pair<set_type::iterator, set_type::iterator> get_huge_set_span(champsim::address address);
++  std::pair<set_type::iterator, set_type::iterator> get_unified_huge_span(champsim::address address);
++  [[nodiscard]] auto matches_huge_address(champsim::address addr) const;
++  set_type::iterator find_huge_entry(champsim::address addr);
++  void fill_huge_entry(const mshr_type& fill_mshr, unsigned shift);
++  void answer_fill(const mshr_type& fill_mshr, uint32_t metadata_thru);
++  [[nodiscard]] long get_unified_huge_span_index(champsim::address address) const;
++  /* LRU stamp for the separate huge array; reuses the unused pf_metadata field */
++  uint32_t huge_lru_clock = 0;
+   champsim::bandwidth::maximum_type MAX_TAG, MAX_FILL;
+   bool prefetch_as_load;
+   bool match_offset_bits;
+@@ -323,6 +358,13 @@ public:
+         prefetch_as_load(b.m_pref_load), match_offset_bits(b.m_wq_full_addr), virtual_prefetch(b.m_va_pref), pref_activate_mask(b.m_pref_act_mask),
+         pref_module_pimpl(std::make_unique<prefetcher_module_model<Ps...>>(this)), repl_module_pimpl(std::make_unique<replacement_module_model<Rs...>>(this))
+   {
++    HUGE_SHIFT = b.m_huge_shift;
++    NUM_SET_HUGE = b.m_huge_sets;
++    NUM_WAY_HUGE = b.m_huge_ways;
++    vmem = b.m_vmem;
++    if (NUM_WAY_HUGE > 0) {
++      block_huge.resize(static_cast<typename set_type::size_type>(NUM_SET_HUGE) * NUM_WAY_HUGE);
++    }
+   }
+ 
+   CACHE(const CACHE&) = delete;
+diff --git a/inc/cache_builder.h b/inc/cache_builder.h
+index 22c2c5f..a7fce78 100644
+--- a/inc/cache_builder.h
++++ b/inc/cache_builder.h
+@@ -30,6 +30,8 @@
+ #include "util/to_underlying.h"
+ 
+ class CACHE;
++class VirtualMemory;
++
+ namespace champsim
+ {
+ class channel;
+@@ -54,6 +56,12 @@ struct cache_builder_base {
+   std::optional<champsim::bandwidth::maximum_type> m_max_tag{};
+   std::optional<champsim::bandwidth::maximum_type> m_max_fill{};
+   champsim::data::bits m_offset_bits{LOG2_BLOCK_SIZE};
++
++  /* Huge page support, TLBs only.  Zero shift leaves it off. */
++  champsim::data::bits m_huge_shift{};
++  uint32_t m_huge_sets{0};
++  uint32_t m_huge_ways{0};
++  VirtualMemory* m_vmem{nullptr};
+   bool m_pref_load{};
+   bool m_wq_full_addr{};
+   bool m_va_pref{};
+@@ -176,6 +184,10 @@ public:
+    * Specify the number of bits to be used as a block offset.
+    */
+   self_type& offset_bits(champsim::data::bits offset_bits_);
++  /* Turn on huge page support in a TLB.  shift is log2 of the huge
++   * page size; ways == 0 keeps huge entries in the main array. */
++  self_type& huge_pages(champsim::data::bits shift_, uint32_t sets_, uint32_t ways_);
++  self_type& virtual_memory(VirtualMemory* vmem_);
+ 
+   /**
+    * Specify the logarithm of the number of bits to be used as a block offset.
+@@ -430,6 +442,22 @@ auto champsim::cache_builder<P, R>::fill_bandwidth(champsim::bandwidth::maximum_
+   return *this;
+ }
+ 
++template <typename P, typename R>
++auto champsim::cache_builder<P, R>::huge_pages(champsim::data::bits shift_, uint32_t sets_, uint32_t ways_) -> self_type&
++{
++  m_huge_shift = shift_;
++  m_huge_sets = sets_;
++  m_huge_ways = ways_;
++  return *this;
++}
++
++template <typename P, typename R>
++auto champsim::cache_builder<P, R>::virtual_memory(VirtualMemory* vmem_) -> self_type&
++{
++  m_vmem = vmem_;
++  return *this;
++}
++
+ template <typename P, typename R>
+ auto champsim::cache_builder<P, R>::offset_bits(champsim::data::bits offset_bits_) -> self_type&
+ {
+diff --git a/inc/champsim.h b/inc/champsim.h
+index 16a3481..456a2e2 100644
+--- a/inc/champsim.h
++++ b/inc/champsim.h
+@@ -39,6 +39,16 @@ struct deadlock : public std::exception {
+   explicit deadlock(uint32_t cpu) : which(cpu) {}
+ };
+ 
++/**
++ * Set how many cycles without progress trip the deadlock detector (default 500).
++ *
++ * The detector's window must exceed the longest legitimate stall in the
++ * configuration. ChampSim's stock 200-cycle minor_fault_penalty fits easily;
++ * a measured minor page fault (microseconds, so thousands of cycles at a
++ * multi-GHz clock) does not, and would otherwise be reported as a deadlock.
++ */
++void set_deadlock_threshold(long cycles);
++
+ #ifdef DEBUG_PRINT
+ constexpr bool debug_print = true;
+ #else
+diff --git a/inc/environment.h b/inc/environment.h
+index f5ff612..69f6043 100644
+--- a/inc/environment.h
++++ b/inc/environment.h
+@@ -25,6 +25,7 @@
+ #include "ooo_cpu.h"
+ #include "operable.h"
+ #include "ptw.h"
++#include "vmem.h"
+ 
+ namespace champsim
+ {
+@@ -33,6 +34,7 @@ struct environment {
+   virtual std::vector<std::reference_wrapper<CACHE>> cache_view() = 0;
+   virtual std::vector<std::reference_wrapper<PageTableWalker>> ptw_view() = 0;
+   virtual MEMORY_CONTROLLER& dram_view() = 0;
++  virtual VirtualMemory& vmem_view() = 0;
+   virtual std::vector<std::reference_wrapper<operable>> operable_view() = 0;
+ };
+ 
+diff --git a/inc/instruction.h b/inc/instruction.h
+index bb011ff..c865dc9 100644
+--- a/inc/instruction.h
++++ b/inc/instruction.h
+@@ -55,6 +55,21 @@ struct program_ordered {
+   using id_type = uint64_t;
+   id_type instr_id = 0;
+ 
++  /*
++   * @kanellok: marks an instruction as belonging to the kernel.
++   *
++   * Two things follow from it: the instruction does not count towards
++   * the program's IPC, and its memory accesses skip address
++   * translation, because MimicOS is what answers a translation and
++   * cannot be asked to translate for itself.
++   *
++   * Set on instructions replayed from MimicOS's fault handler.  They
++   * run through the pipeline like any others, but they are not the
++   * program's work, so they do not count towards the instruction
++   * budget or the reported IPC.
++   */
++  bool is_kernel = false;
++
+   /**
+    * Return a functor that matches this element's ID.
+    * \overload
+diff --git a/inc/ooo_cpu.h b/inc/ooo_cpu.h
+index c7d0524..53cda94 100644
+--- a/inc/ooo_cpu.h
++++ b/inc/ooo_cpu.h
+@@ -71,10 +71,19 @@ struct LSQ_ENTRY : champsim::program_ordered<LSQ_ENTRY> {
+   std::array<uint8_t, 2> asid = {std::numeric_limits<uint8_t>::max(), std::numeric_limits<uint8_t>::max()};
+   bool fetch_issued = false;
+ 
++  /*
++   * Kernel accesses are not translated.  MimicOS is what answers a
++   * translation, so sending its own accesses through the TLBs would
++   * ask it to translate for itself.  Its addresses go to the caches
++   * as they are.
++   */
++  bool is_kernel = false;
++
+   uint64_t producer_id = std::numeric_limits<uint64_t>::max();
+   std::vector<std::reference_wrapper<std::optional<LSQ_ENTRY>>> lq_depend_on_me{};
+ 
+-  LSQ_ENTRY(champsim::address addr, champsim::program_ordered<LSQ_ENTRY>::id_type id, champsim::address ip, std::array<uint8_t, 2> asid);
++  LSQ_ENTRY(champsim::address addr, champsim::program_ordered<LSQ_ENTRY>::id_type id, champsim::address ip, std::array<uint8_t, 2> asid,
++            bool kernel = false);
+   void finish(ooo_model_instr& rob_entry) const;
+   void finish(std::deque<ooo_model_instr>::iterator begin, std::deque<ooo_model_instr>::iterator end) const;
+ };
+diff --git a/inc/tracereader.h b/inc/tracereader.h
+index 4fe37ca..d25c9fa 100644
+--- a/inc/tracereader.h
++++ b/inc/tracereader.h
+@@ -71,6 +71,18 @@ public:
+     return retval;
+   }
+ 
++  /*
++   * Give an instruction that did not come from the trace an id from the
++   * same counter, so it stays in program order with the ones that did.
++   * Used to replay MimicOS's fault handler into the core.
++   */
++  template <typename T>
++  auto stamp(T instr)
++  {
++    instr.instr_id = instr_unique_id++;
++    return instr;
++  }
++
+   [[nodiscard]] auto eof() const { return pimpl_->eof(); }
+ };
+ 
+diff --git a/inc/vmem.h b/inc/vmem.h
+index f2b461b..1be4876 100644
+--- a/inc/vmem.h
++++ b/inc/vmem.h
+@@ -20,14 +20,19 @@
+ #include <cstdint>
+ #include <deque>
+ #include <map>
++#include <memory>
+ #include <optional>
+ #include <random>
++#include <string>
++#include <vector>
+ 
+ #include "address.h"
+ #include "champsim.h"
+ #include "chrono.h"
++#include "trace_instruction.h"
+ 
+ class MEMORY_CONTROLLER;
++class MimicOSBinding;
+ 
+ using pte_entry = champsim::data::size<long long, std::ratio<8>>;
+ 
+@@ -39,6 +44,15 @@ private:
+   std::optional<uint64_t> randomization_seed;
+   MEMORY_CONTROLLER& dram;
+ 
++  /**
++   * When set, MimicOS owns physical allocation and the page tables, and the
++   * members above go unused. See inc/vmem_mimicos.h. Null in a stock build.
++   */
++  std::unique_ptr<MimicOSBinding> mimicos;
++
++  std::vector<input_instr> fault_handler;
++  std::vector<unsigned> pending_faults;
++
+ public:
+   const champsim::chrono::clock::duration minor_fault_penalty;
+   const std::size_t pt_levels;
+@@ -72,8 +86,18 @@ public:
+    */
+   VirtualMemory(champsim::data::bytes page_table_page_size, std::size_t page_table_levels, champsim::chrono::clock::duration minor_penalty,
+                 MEMORY_CONTROLLER& dram_);
++  /**
++   * :param mimicos_config: path to a MimicOS INI file. When non-empty, MimicOS
++   *   replaces ChampSim's built-in allocation and page-table model. An empty
++   *   string (the default) leaves stock behaviour exactly as it was. The
++   *   MIMICOS_CONFIG environment variable overrides this parameter.
++   */
+   VirtualMemory(champsim::data::bytes page_table_page_size, std::size_t page_table_levels, champsim::chrono::clock::duration minor_penalty,
+-                MEMORY_CONTROLLER& dram_, std::optional<uint64_t> randomization_seed_);
++                MEMORY_CONTROLLER& dram_, std::optional<uint64_t> randomization_seed_, std::string mimicos_config = {});
++
++  ~VirtualMemory();
++  VirtualMemory(const VirtualMemory&) = delete;
++  VirtualMemory& operator=(const VirtualMemory&) = delete;
+ 
+   /**
+    * Find the bit location of the lowest bit for the given page table level.
+@@ -118,6 +142,51 @@ public:
+    * :returns: A pair of the page table page address and the latency to be applied to the operation.
+    */
+   std::pair<champsim::address, champsim::chrono::clock::duration> get_pte_pa(uint32_t cpu_num, champsim::page_number vaddr, std::size_t level);
++
++  /**
++   * The translation level at which the walk for this page terminates.
++   *
++   * Always 0 in the stock model, where every walk runs to full depth. Under
++   * MimicOS a huge page ends the walk early — 1 for 2 MiB, 2 for 1 GiB — which
++   * is what makes THP visible to the page table walker rather than being an
++   * assumption baked into the TLB.
++   */
++  [[nodiscard]] std::size_t min_translation_level(uint32_t cpu_num, champsim::page_number vaddr);
++
++  /**
++   * log2 of the page size backing this virtual page: 12, 21 or 30.
++   *
++   * Always 12 in the stock model, which only ever makes 4K pages.
++   * TLBs use this to decide which array an entry belongs in, so it
++   * must not fault anything in; unmapped pages read as 4K.
++   */
++  [[nodiscard]] unsigned page_shift(uint32_t cpu_num, champsim::page_number vaddr) const;
++
++  /*
++   * MimicOS's fault handler, recorded once and replayed into the core
++   * every time MimicOS reports a fault.
++   *
++   * Charging a fault as a fixed latency says nothing about what the
++   * handler does to the caches or the TLBs, which is most of its cost.
++   * Feeding its real instructions through the pipeline does.  The trace
++   * comes from mimicos/tests/fault_driver.cc recorded under ChampSim's
++   * own PIN tracer; see mimicos/tests/extract_fault_window.py.
++   *
++   * Empty unless MIMICOS_FAULT_TRACE names a file, in which case the
++   * fault latency is dropped: the instructions are the cost now, and
++   * charging both would count it twice.
++   */
++  [[nodiscard]] bool replaying_fault_handler() const { return !fault_handler.empty(); }
++  [[nodiscard]] const std::vector<input_instr>& fault_handler_trace() const { return fault_handler; }
++
++  /* Faults raised since the last call, per cpu.  Reset to zero. */
++  [[nodiscard]] unsigned take_pending_faults(uint32_t cpu_num);
++
++  /** True when MimicOS is driving this virtual memory. */
++  [[nodiscard]] bool mimicos_enabled() const;
++
++  /** End-of-run MimicOS statistics, or an empty string when it is not enabled. */
++  [[nodiscard]] std::string mimicos_summary() const;
+ };
+ 
+ #endif
+diff --git a/inc/vmem_mimicos.h b/inc/vmem_mimicos.h
+new file mode 100644
+index 0000000..1c9d8c0
+--- /dev/null
++++ b/inc/vmem_mimicos.h
+@@ -0,0 +1,103 @@
++/*
++ *    MimicOS integration for ChampSim.
++ *
++ *    Licensed under the Apache License, Version 2.0 (the "License");
++ *    you may not use this file except in compliance with the License.
++ *    You may obtain a copy of the License at
++ *
++ *    http://www.apache.org/licenses/LICENSE-2.0
++ */
++
++#ifndef VMEM_MIMICOS_H
++#define VMEM_MIMICOS_H
++
++#include <cstdint>
++#include <memory>
++#include <string>
++
++/*
++ * @kanellok: this is the seam between ChampSim and MimicOS.
++ *
++ * ChampSim normally invents its own physical addresses.  With MimicOS
++ * attached, it asks MimicOS instead, and gets back the same answers a
++ * real OS allocator would give.  Everything MimicOS-shaped is hidden
++ * behind this one class so the rest of ChampSim never sees it.
++ *
++ * Bridge to the MimicOS library (mimicos/include/mimicos_embed.h).
++ *
++ * With MimicOS attached it decides which frame backs a page, how big
++ * that page is, what a fault costs, and where every page table entry
++ * lives.  The page table walker then reads those entries through the
++ * real cache hierarchy, so allocator policy shows up in measured
++ * traffic instead of being assumed away.
++ *
++ * No MimicOS types appear here; they sit behind a pimpl so vmem.h, and
++ * most of ChampSim with it, stays free of the dependency.  Built
++ * without -DCHAMPSIM_MIMICOS this is all stubs and attach() fails, so a
++ * stock build is unchanged.
++ */
++class MimicOSBinding
++{
++public:
++  struct MapResult {
++    uint64_t ppn = 0;             ///< 4 KiB-granular frame containing the address
++    uint32_t page_size_bits = 12; ///< 12, 21 or 30
++    bool faulted = false;         ///< this call resolved a minor fault
++    uint64_t fault_latency_ns = 0;///< 0 when the calibration model is unset
++    bool ok = false;
++  };
++
++  /*
++   * Attach MimicOS from an INI, the same file the standalone kernel
++   * takes.  Returns null with *err set on failure.
++   *
++   * pt_levels must match ChampSim's configured depth or the entries
++   * handed back belong to a different walk.  dram_bytes bounds the
++   * MimicOS pool: frames above it are addresses the memory controller
++   * cannot serve.
++   */
++  static std::unique_ptr<MimicOSBinding> attach(const std::string& ini_path, std::size_t pt_levels, uint64_t dram_bytes,
++                                                std::string* err);
++
++  ~MimicOSBinding();
++  MimicOSBinding(const MimicOSBinding&) = delete;
++  MimicOSBinding& operator=(const MimicOSBinding&) = delete;
++
++  /* False unless built with -DCHAMPSIM_MIMICOS. */
++  static bool available();
++
++  /* Resolve a page, faulting it in if it is not mapped. */
++  MapResult translate(uint32_t cpu_num, uint64_t vpage);
++
++  /*
++   * Address of the entry read at `level`, where pt_levels is the root
++   * and 1 the last table.  Interior tables are created on demand, so
++   * this works before the leaf mapping exists.
++   */
++  bool pte_paddr(uint32_t cpu_num, uint64_t vpage, std::size_t level, uint64_t* out);
++
++  /* Address of the root table. */
++  uint64_t root_paddr(uint32_t cpu_num);
++
++  /*
++   * Lowest level the walk reaches: 0 for 4K, 1 for 2M, 2 for 1G.  A
++   * large page ends the walk early.
++   */
++  std::size_t min_translation_level(uint32_t cpu_num, uint64_t vpage);
++
++  /* log2 of the page size backing this page, 12 if unmapped.  Never allocates. */
++  unsigned page_shift(uint32_t cpu_num, uint64_t vpage) const;
++
++  /* Free 4K frames left. */
++  uint64_t available_frames() const;
++
++  /* One line for the end of a run. */
++  std::string summary() const;
++
++private:
++  MimicOSBinding();
++  struct Impl;
++  std::unique_ptr<Impl> impl;
++};
++
++#endif
+diff --git a/src/cache.cc b/src/cache.cc
+index 9776c41..9dbc3d6 100644
+--- a/src/cache.cc
++++ b/src/cache.cc
+@@ -16,6 +16,8 @@
+ 
+ #include "cache.h"
+ 
++#include "vmem.h"
++
+ #include <algorithm>
+ #include <cassert>
+ #include <cmath>
+@@ -159,6 +161,115 @@ auto CACHE::matches_address(champsim::address addr) const
+   };
+ }
+ 
++/*
++ * @kanellok: a large entry is filed under the large page number, so a
++ * lookup that indexes on the 4K page number cannot find it.  That is
++ * why every TLB lookup probes twice.
++ */
++auto CACHE::matches_huge_address(champsim::address addr) const
++{
++  return [match = addr.slice_upper(HUGE_SHIFT), shamt = HUGE_SHIFT, huge = static_cast<uint8_t>(champsim::to_underlying(HUGE_SHIFT))](const auto& entry) {
++    return entry.page_shift == huge && entry.address.slice_upper(shamt) == match;
++  };
++}
++
++/* Page size backing this address, from whoever owns the page tables. */
++unsigned CACHE::page_shift_of(champsim::address addr) const
++{
++  if (vmem == nullptr) {
++    return static_cast<unsigned>(champsim::to_underlying(OFFSET_BITS));
++  }
++  return vmem->page_shift(cpu, champsim::page_number{addr});
++}
++
++long CACHE::get_huge_set_index(champsim::address address) const
++{
++  return address.slice(champsim::dynamic_extent{HUGE_SHIFT, champsim::lg2(NUM_SET_HUGE)}).to<long>();
++}
++
++auto CACHE::get_huge_set_span(champsim::address address) -> std::pair<set_type::iterator, set_type::iterator>
++{
++  const auto set_idx = get_huge_set_index(address);
++  assert(set_idx >= 0);
++  assert(set_idx < NUM_SET_HUGE);
++  const auto begin = std::next(std::begin(block_huge), set_idx * NUM_WAY_HUGE);
++  return {begin, std::next(begin, NUM_WAY_HUGE)};
++}
++
++/* Returns end() of whichever array was searched when there is no hit. */
++auto CACHE::find_huge_entry(champsim::address addr) -> set_type::iterator
++{
++  auto matcher = matches_huge_address(addr);
++
++  if (NUM_WAY_HUGE > 0) {
++    auto [begin, end] = get_huge_set_span(addr);
++    auto way = std::find_if(begin, end, [&](const auto& x) { return x.valid && matcher(x); });
++    return way == end ? std::end(block_huge) : way;
++  }
++
++  /* Unified: huge entries live in the main array at the huge index. */
++  auto [begin, end] = get_unified_huge_span(addr);
++  auto way = std::find_if(begin, end, [&](const auto& x) { return x.valid && matcher(x); });
++  return way == end ? std::end(block) : way;
++}
++
++/* Indexing on the large page number is what lets one entry cover all of it. */
++/*
++ * Install a large entry.  A TLB never writes back, so the victim is
++ * just dropped.  The separate array uses plain LRU; the shared one
++ * reuses the configured replacement module, which is fine because the
++ * set index still refers to the main array.
++ */
++void CACHE::fill_huge_entry(const mshr_type& fill_mshr, unsigned shift)
++{
++  set_type::iterator set_begin;
++  set_type::iterator set_end;
++  bool unified = (NUM_WAY_HUGE == 0);
++
++  if (unified) {
++    std::tie(set_begin, set_end) = get_unified_huge_span(fill_mshr.address);
++  } else {
++    std::tie(set_begin, set_end) = get_huge_set_span(fill_mshr.address);
++  }
++
++  auto way = std::find_if_not(set_begin, set_end, [](const auto& x) { return x.valid; });
++  if (way == set_end) {
++    if (unified) {
++      const auto set_idx = get_unified_huge_span_index(fill_mshr.address);
++      way = std::next(set_begin, impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, set_idx, &*set_begin, fill_mshr.ip, fill_mshr.address, fill_mshr.type));
++    } else {
++      /* plain LRU over the separate array */
++      way = std::min_element(set_begin, set_end, [](const auto& lhs, const auto& rhs) { return lhs.pf_metadata < rhs.pf_metadata; });
++    }
++  }
++
++  *way = champsim::cache_block{};
++  way->valid = true;
++  way->prefetch = fill_mshr.prefetch_from_this;
++  way->dirty = (fill_mshr.type == access_type::WRITE);
++  way->address = fill_mshr.address;
++  way->v_address = fill_mshr.v_address;
++  way->data = fill_mshr.data_promise->data;
++  way->page_shift = static_cast<uint8_t>(shift);
++  if (!unified) {
++    way->pf_metadata = ++huge_lru_clock;
++  }
++}
++
++long CACHE::get_unified_huge_span_index(champsim::address address) const
++{
++  return address.slice(champsim::dynamic_extent{HUGE_SHIFT, champsim::lg2(NUM_SET)}).to<long>();
++}
++
++auto CACHE::get_unified_huge_span(champsim::address address) -> std::pair<set_type::iterator, set_type::iterator>
++{
++  const auto set_idx = address.slice(champsim::dynamic_extent{HUGE_SHIFT, champsim::lg2(NUM_SET)}).to<long>();
++  assert(set_idx >= 0);
++  assert(set_idx < NUM_SET);
++  const auto begin = std::next(std::begin(block), set_idx * NUM_WAY);
++  return {begin, std::next(begin, NUM_WAY)};
++}
++
+ template <typename T>
+ champsim::address CACHE::module_address(const T& element) const
+ {
+@@ -170,6 +281,16 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
+ {
+   cpu = fill_mshr.cpu;
+ 
++  if (huge_pages_enabled()) {
++    const auto shift = page_shift_of(fill_mshr.address);
++    const auto huge_shift = static_cast<unsigned>(champsim::to_underlying(HUGE_SHIFT));
++    if (shift >= huge_shift) {
++      fill_huge_entry(fill_mshr, huge_shift);
++      answer_fill(fill_mshr, fill_mshr.data_promise->pf_metadata);
++      return true;
++    }
++  }
++
+   // find victim
+   auto [set_begin, set_end] = get_set_span(fill_mshr.address);
+   auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });
+@@ -234,7 +355,16 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
+     *way = fill_block(fill_mshr, metadata_thru);
+   }
+ 
+-  // COLLECT STATS
++  answer_fill(fill_mshr, metadata_thru);
++  return true;
++}
++
++/*
++ * Tell whoever was waiting that the fill happened.  Miss this and the
++ * level above waits forever.
++ */
++void CACHE::answer_fill(const mshr_type& fill_mshr, uint32_t metadata_thru)
++{
+   if (fill_mshr.type != access_type::PREFETCH)
+     sim_stats.total_miss_latency_cycles += (current_time - (fill_mshr.time_enqueued + clock_period)) / clock_period;
+   sim_stats.mshr_return.increment(std::pair{fill_mshr.type, fill_mshr.cpu});
+@@ -243,8 +373,6 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
+   for (auto* ret : fill_mshr.to_return) {
+     ret->push_back(response);
+   }
+-
+-  return true;
+ }
+ 
+ bool CACHE::try_hit(const tag_lookup_type& handle_pkt)
+@@ -254,7 +382,37 @@ bool CACHE::try_hit(const tag_lookup_type& handle_pkt)
+   // access cache
+   auto [set_begin, set_end] = get_set_span(handle_pkt.address);
+   auto way = std::find_if(set_begin, set_end, [matcher = matches_address(handle_pkt.address)](const auto& x) { return x.valid && matcher(x); });
+-  const auto hit = (way != set_end);
++  auto hit = (way != set_end);
++
++  /*
++   * A large entry is indexed on the large page number, so the lookup
++   * above cannot find it.  Probe again.  Real hardware does both at
++   * once; a page is only ever filled into one of them, so order does
++   * not matter here.
++   */
++  if (!hit && huge_pages_enabled()) {
++    auto huge_way = find_huge_entry(handle_pkt.address);
++    auto huge_end = (NUM_WAY_HUGE > 0) ? std::end(block_huge) : std::end(block);
++    if (huge_way != huge_end) {
++      sim_stats.hits.increment(std::pair{handle_pkt.type, handle_pkt.cpu});
++
++      /*
++       * The entry was filled by one small page but answers for all of
++       * them, so keep the large page's base and take the offset from
++       * this request.
++       */
++      const auto huge_mask = (uint64_t{1} << champsim::to_underlying(HUGE_SHIFT)) - 1;
++      const champsim::address translated{(huge_way->data.template to<uint64_t>() & ~huge_mask)
++                                         | (handle_pkt.address.template to<uint64_t>() & huge_mask)};
++
++      response_type response{handle_pkt.address, handle_pkt.v_address, translated, handle_pkt.pf_metadata, handle_pkt.instr_depend_on_me};
++      for (auto* ret : handle_pkt.to_return) {
++        ret->push_back(response);
++      }
++      huge_way->dirty |= (handle_pkt.type == access_type::WRITE);
++      return true;
++    }
++  }
+   const auto useful_prefetch = (hit && way->prefetch && !handle_pkt.prefetch_from_this);
+ 
+   if constexpr (champsim::debug_print) {
+diff --git a/src/champsim.cc b/src/champsim.cc
+index 50ace48..9826e6e 100644
+--- a/src/champsim.cc
++++ b/src/champsim.cc
+@@ -29,7 +29,14 @@
+ #include "phase_info.h"
+ #include "tracereader.h"
+ 
+-constexpr int DEADLOCK_CYCLE{500};
++/* The deadlock detector fires when no operable makes progress for this many
++   cycles.  It has to be larger than the longest *legitimate* stall in the
++   configuration, and a realistic minor page fault is one of those: MimicOS
++   reports microsecond-scale fault costs, which at multi-GHz clocks is
++   thousands of cycles -- well past the 500 that suffices for ChampSim's stock
++   200-cycle minor_fault_penalty.  Left at 500 by default so existing runs are
++   unaffected; raise it with --deadlock-cycle. */
++static long deadlock_cycle_threshold{500};
+ 
+ const auto start_time = std::chrono::steady_clock::now();
+ 
+@@ -52,6 +59,30 @@ long do_cycle(environment& env, std::vector<tracereader>& traces, std::vector<st
+   // Read from trace
+   for (O3_CPU& cpu : env.cpu_view()) {
+     auto& trace = traces.at(trace_index.at(cpu.cpu));
++    /*
++     * @kanellok: this is where MimicOS's fault handler gets executed.
++     *
++     * ChampSim cannot run code, so we replay a recording of the real
++     * handler instead.  Its instructions go into the same queue the
++     * trace feeds, which means they fetch, decode and execute like any
++     * others and disturb the caches exactly as the real thing would.
++     *
++     * MimicOS faulted on this core, so its handler runs here, ahead of
++     * the trace: the faulting access cannot retire until the mapping
++     * exists.  These fetch and execute like any other instructions, so
++     * what the handler does to the caches and TLBs is modelled.
++     */
++    auto& vmem = env.vmem_view();
++    if (vmem.replaying_fault_handler()) {
++      for (auto faults = vmem.take_pending_faults(cpu.cpu); faults > 0; --faults) {
++        for (const auto& instr : vmem.fault_handler_trace()) {
++          auto kernel_instr = ooo_model_instr{static_cast<uint8_t>(cpu.cpu), instr};
++          kernel_instr.is_kernel = true;
++          cpu.input_queue.push_back(trace.stamp(kernel_instr));
++        }
++      }
++    }
++
+     for (auto pkt_count = cpu.IN_QUEUE_SIZE - static_cast<long>(std::size(cpu.input_queue)); !trace.eof() && pkt_count > 0; --pkt_count) {
+       cpu.input_queue.push_back(trace());
+     }
+@@ -121,7 +152,14 @@ phase_stats do_phase(const phase_info& phase, environment& env, std::vector<trac
+       livelock_timer = 0;
+     }
+ 
+-    if (stalled_cycle >= DEADLOCK_CYCLE || livelock_trigger) {
++    if (stalled_cycle >= deadlock_cycle_threshold || livelock_trigger) {
++      if (!livelock_trigger) {
++        fmt::print(stderr,
++                   "No progress for {} cycles. If the configuration models stalls longer than this "
++                   "(a realistic minor page fault is microseconds, i.e. thousands of cycles), raise "
++                   "the threshold with --deadlock-cycle rather than shortening the stall.\n",
++                   stalled_cycle);
++      }
+       std::for_each(std::begin(operables), std::end(operables), [](champsim::operable& c) { c.print_deadlock(); });
+       abort();
+     }
+@@ -181,6 +219,8 @@ phase_stats do_phase(const phase_info& phase, environment& env, std::vector<trac
+ }
+ 
+ // simulation entry point
++void set_deadlock_threshold(long cycles) { deadlock_cycle_threshold = cycles; }
++
+ std::vector<phase_stats> main(environment& env, std::vector<phase_info>& phases, std::vector<tracereader>& traces)
+ {
+   for (champsim::operable& op : env.operable_view()) {
+diff --git a/src/main.cc b/src/main.cc
+index 48a5eee..2e19e0c 100644
+--- a/src/main.cc
++++ b/src/main.cc
+@@ -72,6 +72,11 @@ int main(int argc, char** argv) // NOLINT(bugprone-exception-escape)
+ 
+   app.add_flag("-c,--cloudsuite", knob_cloudsuite, "Read all traces using the cloudsuite format");
+   app.add_flag("--hide-heartbeat", set_heartbeat_callback, "Hide the heartbeat output");
++  long deadlock_cycle_threshold{500};
++  app.add_option("--deadlock-cycle", deadlock_cycle_threshold,
++                 "Cycles without progress before the deadlock detector fires. Raise this when the "
++                 "configuration models stalls longer than the default 500 cycles, such as a "
++                 "measured (microsecond-scale) minor page fault");
+   auto* warmup_instr_option = app.add_option("-w,--warmup-instructions", warmup_instructions, "The number of instructions in the warmup phase");
+   auto* deprec_warmup_instr_option =
+       app.add_option("--warmup_instructions", warmup_instructions, "[deprecated] use --warmup-instructions instead")->excludes(warmup_instr_option);
+@@ -120,6 +125,8 @@ int main(int argc, char** argv) // NOLINT(bugprone-exception-escape)
+   fmt::print("\n*** ChampSim Multicore Out-of-Order Simulator ***\nWarmup Instructions: {}\nSimulation Instructions: {}\nNumber of CPUs: {}\nPage size: {}\n\n",
+              phases.at(0).length, phases.at(1).length, std::size(gen_environment.cpu_view()), PAGE_SIZE);
+ 
++  champsim::set_deadlock_threshold(deadlock_cycle_threshold);
++
+   auto phase_stats = champsim::main(gen_environment, phases, traces);
+ 
+   fmt::print("\nChampSim completed all CPUs\n\n");
+diff --git a/src/ooo_cpu.cc b/src/ooo_cpu.cc
+index add01bf..d312c80 100644
+--- a/src/ooo_cpu.cc
++++ b/src/ooo_cpu.cc
+@@ -272,6 +272,7 @@ bool O3_CPU::do_fetch_instruction(std::deque<ooo_model_instr>::iterator begin, s
+   fetch_packet.v_address = begin->ip;
+   fetch_packet.instr_id = begin->instr_id;
+   fetch_packet.ip = begin->ip;
++  fetch_packet.is_translated = begin->is_kernel;
+ 
+   std::transform(begin, end, std::back_inserter(fetch_packet.instr_depend_on_me), [](const auto& instr) { return instr.instr_id; });
+ 
+@@ -512,7 +513,7 @@ void O3_CPU::do_memory_scheduling(ooo_model_instr& instr)
+   for (auto& smem : instr.source_memory) {
+     auto q_entry = std::find_if_not(std::begin(LQ), std::end(LQ), [](const auto& lq_entry) { return lq_entry.has_value(); });
+     assert(q_entry != std::end(LQ));
+-    q_entry->emplace(smem, instr.instr_id, instr.ip, instr.asid); // add it to the load queue
++    q_entry->emplace(smem, instr.instr_id, instr.ip, instr.asid, instr.is_kernel); // add it to the load queue
+ 
+     // Check for forwarding
+     auto sq_it = std::max_element(std::begin(SQ), std::end(SQ), [smem](const auto& lhs, const auto& rhs) {
+@@ -536,7 +537,7 @@ void O3_CPU::do_memory_scheduling(ooo_model_instr& instr)
+ 
+   // store
+   for (auto& dmem : instr.destination_memory) {
+-    SQ.emplace_back(dmem, instr.instr_id, instr.ip, instr.asid); // add it to the store queue
++    SQ.emplace_back(dmem, instr.instr_id, instr.ip, instr.asid, instr.is_kernel); // add it to the store queue
+   }
+ 
+   if constexpr (champsim::debug_print) {
+@@ -608,6 +609,7 @@ bool O3_CPU::do_complete_store(const LSQ_ENTRY& sq_entry)
+   data_packet.v_address = sq_entry.virtual_address;
+   data_packet.instr_id = sq_entry.instr_id;
+   data_packet.ip = sq_entry.ip;
++  data_packet.is_translated = sq_entry.is_kernel;
+ 
+   if constexpr (champsim::debug_print) {
+     fmt::print("[SQ] {} instr_id: {} vaddr: {}\n", __func__, data_packet.instr_id, data_packet.v_address);
+@@ -622,6 +624,7 @@ bool O3_CPU::execute_load(const LSQ_ENTRY& lq_entry)
+   data_packet.v_address = lq_entry.virtual_address;
+   data_packet.instr_id = lq_entry.instr_id;
+   data_packet.ip = lq_entry.ip;
++  data_packet.is_translated = lq_entry.is_kernel;
+ 
+   if constexpr (champsim::debug_print) {
+     fmt::print("[LQ] {} instr_id: {} vaddr: {}\n", __func__, data_packet.instr_id, data_packet.v_address);
+@@ -724,7 +727,12 @@ long O3_CPU::retire_rob()
+   }
+ 
+   auto retire_count = std::distance(retire_begin, retire_end);
+-  num_retired += retire_count;
++  /*
++   * Kernel instructions occupy the machine but are not program
++   * progress.  Counting them would make a run with more page faults
++   * look like it retired more work.
++   */
++  num_retired += std::count_if(retire_begin, retire_end, [](const auto& instr) { return !instr.is_kernel; });
+   ROB.erase(retire_begin, retire_end);
+ 
+   return retire_count;
+@@ -802,8 +810,9 @@ void O3_CPU::print_deadlock()
+ }
+ // LCOV_EXCL_STOP
+ 
+-LSQ_ENTRY::LSQ_ENTRY(champsim::address addr, champsim::program_ordered<LSQ_ENTRY>::id_type id, champsim::address local_ip, std::array<uint8_t, 2> local_asid)
+-    : champsim::program_ordered<LSQ_ENTRY>{id}, virtual_address(addr), ip(local_ip), asid(local_asid)
++LSQ_ENTRY::LSQ_ENTRY(champsim::address addr, champsim::program_ordered<LSQ_ENTRY>::id_type id, champsim::address local_ip, std::array<uint8_t, 2> local_asid,
++                     bool kernel)
++    : champsim::program_ordered<LSQ_ENTRY>{id}, virtual_address(addr), ip(local_ip), asid(local_asid), is_kernel(kernel)
+ {
+ }
+ 
+@@ -829,8 +838,14 @@ void LSQ_ENTRY::finish(ooo_model_instr& rob_entry) const
+ 
+ bool CacheBus::issue_read(request_type data_packet)
+ {
++  /*
++   * @kanellok: kernel accesses never reach a TLB.
++   *
++   * is_translated set by the caller means the address is already
++   * physical and must not go through the TLBs.  That is how MimicOS's
++   * own accesses stay out of the translation path.
++   */
+   data_packet.address = data_packet.v_address;
+-  data_packet.is_translated = false;
+   data_packet.cpu = cpu;
+   data_packet.type = access_type::LOAD;
+ 
+@@ -840,7 +855,6 @@ bool CacheBus::issue_read(request_type data_packet)
+ bool CacheBus::issue_write(request_type data_packet)
+ {
+   data_packet.address = data_packet.v_address;
+-  data_packet.is_translated = false;
+   data_packet.cpu = cpu;
+   data_packet.type = access_type::WRITE;
+   data_packet.response_requested = false;
+diff --git a/src/ptw.cc b/src/ptw.cc
+index b555659..0c1ceab 100644
+--- a/src/ptw.cc
++++ b/src/ptw.cc
+@@ -209,8 +209,19 @@ void PageTableWalker::finish_packet(const response_type& packet)
+   auto matches_addr = [block = champsim::block_number{packet.address}](auto x) {
+     return champsim::block_number{x.address} == block;
+   };
+-  auto is_last_step = [](auto x) {
+-    return x.translation_level <= 0;
++  /*
++   * @kanellok: where a page walk stops.
++   *
++   * The stock model walks every level, so the last step is level 0.  A
++   * large page puts its leaf higher up and the walk has to stop there.
++   * vmem reports 0 when MimicOS is off, so nothing changes without it.
++   *
++   * The first walk of a page still runs to full depth: nothing is
++   * mapped yet, so there is no leaf to stop at.  It shortens from the
++   * second access, once the fault has installed the entry.
++   */
++  auto is_last_step = [this](const auto& x) {
++    return x.translation_level <= this->vmem->min_translation_level(x.cpu, champsim::page_number{x.v_address});
+   };
+   auto last_finished = std::partition(std::begin(MSHR), std::end(MSHR), matches_addr);
+ 
+diff --git a/src/vmem.cc b/src/vmem.cc
+index 84137af..18f3108 100644
+--- a/src/vmem.cc
++++ b/src/vmem.cc
+@@ -17,16 +17,19 @@
+ #include "vmem.h"
+ 
+ #include <cassert>
++#include <cstdlib>
++#include <fstream>
+ #include <fmt/core.h>
+ 
+ #include "champsim.h"
+ #include "dram_controller.h"
+ #include "util/bits.h"
++#include "vmem_mimicos.h"
+ 
+ using namespace champsim::data::data_literals;
+ 
+ VirtualMemory::VirtualMemory(champsim::data::bytes page_table_page_size, std::size_t page_table_levels, champsim::chrono::clock::duration minor_penalty,
+-                             MEMORY_CONTROLLER& dram_, std::optional<uint64_t> randomization_seed_)
++                             MEMORY_CONTROLLER& dram_, std::optional<uint64_t> randomization_seed_, std::string mimicos_config)
+     : randomization_seed(randomization_seed_), dram(dram_), minor_fault_penalty(minor_penalty), pt_levels(page_table_levels),
+       pte_page_size(page_table_page_size),
+       next_pte_page(
+@@ -46,14 +49,83 @@ VirtualMemory::VirtualMemory(champsim::data::bytes page_table_page_size, std::si
+   }
+   populate_pages();
+   shuffle_pages();
++
++  /*
++   * @kanellok: MIMICOS_CONFIG switches this run over to MimicOS.
++   * Without it, everything below behaves as stock ChampSim.
++   */
++  if (const char* from_env = std::getenv("MIMICOS_CONFIG"); from_env != nullptr && from_env[0] != '\0') {
++    mimicos_config = from_env;
++  }
++
++  /* Replay the recorded handler on every fault instead of stalling. */
++  if (const char* trace_path = std::getenv("MIMICOS_FAULT_TRACE"); trace_path != nullptr && trace_path[0] != '\0') {
++    std::ifstream handler_file{trace_path, std::ios::binary};
++    if (!handler_file) {
++      fmt::print(stderr, "[VMEM] ERROR: cannot read MimicOS fault trace '{}'\n", trace_path);
++      std::exit(EXIT_FAILURE);
++    }
++    input_instr instr{};
++    while (handler_file.read(reinterpret_cast<char*>(&instr), sizeof(instr))) {
++      fault_handler.push_back(instr);
++    }
++    if (fault_handler.empty()) {
++      fmt::print(stderr, "[VMEM] ERROR: MimicOS fault trace '{}' is empty\n", trace_path);
++      std::exit(EXIT_FAILURE);
++    }
++    fmt::print("[VMEM] MimicOS fault handler: {} instructions from '{}'\n", std::size(fault_handler), trace_path);
++  }
++
++  if (!mimicos_config.empty()) {
++    std::string err;
++    mimicos = MimicOSBinding::attach(mimicos_config, pt_levels, dram.size().count(), &err);
++    if (mimicos == nullptr) {
++      /* Falling back would report results MimicOS never computed. */
++      fmt::print(stderr, "[VMEM] ERROR: could not attach MimicOS from '{}': {}\n", mimicos_config, err);
++      std::exit(EXIT_FAILURE);
++    }
++    fmt::print("[VMEM] MimicOS attached from '{}' ({} page-table levels)\n", mimicos_config, pt_levels);
++  }
+ }
+ 
++VirtualMemory::~VirtualMemory() = default;
++
+ VirtualMemory::VirtualMemory(champsim::data::bytes page_table_page_size, std::size_t page_table_levels, champsim::chrono::clock::duration minor_penalty,
+                              MEMORY_CONTROLLER& dram_)
+     : VirtualMemory(page_table_page_size, page_table_levels, minor_penalty, dram_, {})
+ {
+ }
+ 
++unsigned VirtualMemory::take_pending_faults(uint32_t cpu_num)
++{
++  if (std::size(pending_faults) <= cpu_num) {
++    return 0;
++  }
++  const auto count = pending_faults[cpu_num];
++  pending_faults[cpu_num] = 0;
++  return count;
++}
++
++bool VirtualMemory::mimicos_enabled() const { return mimicos != nullptr; }
++
++unsigned VirtualMemory::page_shift(uint32_t cpu_num, champsim::page_number vaddr) const
++{
++  if (mimicos == nullptr) {
++    return LOG2_PAGE_SIZE;
++  }
++  return mimicos->page_shift(cpu_num, vaddr.to<uint64_t>());
++}
++
++std::string VirtualMemory::mimicos_summary() const { return mimicos == nullptr ? std::string{} : mimicos->summary(); }
++
++std::size_t VirtualMemory::min_translation_level(uint32_t cpu_num, champsim::page_number vaddr)
++{
++  if (mimicos == nullptr) {
++    return 0;
++  }
++  return mimicos->min_translation_level(cpu_num, vaddr.to<uint64_t>());
++}
++
+ void VirtualMemory::populate_pages()
+ {
+   assert(dram.size() > 1_MiB);
+@@ -102,10 +174,44 @@ void VirtualMemory::ppage_pop()
+   }
+ }
+ 
+-std::size_t VirtualMemory::available_ppages() const { return (ppage_free_list.size()); }
++std::size_t VirtualMemory::available_ppages() const
++{
++  if (mimicos != nullptr) {
++    return static_cast<std::size_t>(mimicos->available_frames());
++  }
++  return (ppage_free_list.size());
++}
+ 
+ std::pair<champsim::page_number, champsim::chrono::clock::duration> VirtualMemory::va_to_pa(uint32_t cpu_num, champsim::page_number vaddr)
+ {
++  if (mimicos != nullptr) {
++    const auto result = mimicos->translate(cpu_num, vaddr.to<uint64_t>());
++    if (!result.ok) {
++      fmt::print(stderr, "[VMEM] ERROR: MimicOS could not back virtual page {} for cpu {} (out of physical memory?)\n", vaddr, cpu_num);
++      std::exit(EXIT_FAILURE);
++    }
++
++    auto penalty = champsim::chrono::clock::duration::zero();
++    if (result.faulted && replaying_fault_handler()) {
++      /* The handler is about to run; a latency on top would double count. */
++      if (std::size(pending_faults) <= cpu_num) {
++        pending_faults.resize(cpu_num + 1, 0);
++      }
++      pending_faults[cpu_num]++;
++    } else if (result.faulted) {
++      /* Zero means the config has no cost model; keep ChampSim's own. */
++      penalty = result.fault_latency_ns > 0 ? champsim::chrono::clock::duration{champsim::chrono::nanoseconds{result.fault_latency_ns}}
++                                            : minor_fault_penalty;
++    }
++
++    if constexpr (champsim::debug_print) {
++      fmt::print("[VMEM] {} mimicos paddr: {} vpage: {} page_size_bits: {} fault: {}\n", __func__, champsim::page_number{result.ppn}, vaddr,
++                 result.page_size_bits, result.faulted);
++    }
++
++    return std::pair{champsim::page_number{result.ppn}, penalty};
++  }
++
+   auto [ppage, fault] = vpage_to_ppage_map.try_emplace({cpu_num, champsim::page_number{vaddr}}, ppage_front());
+ 
+   // this vpage doesn't yet have a ppage mapping
+@@ -124,6 +230,25 @@ std::pair<champsim::page_number, champsim::chrono::clock::duration> VirtualMemor
+ 
+ std::pair<champsim::address, champsim::chrono::clock::duration> VirtualMemory::get_pte_pa(uint32_t cpu_num, champsim::page_number vaddr, std::size_t level)
+ {
++  if (mimicos != nullptr) {
++    uint64_t pte_paddr = 0;
++    if (!mimicos->pte_paddr(cpu_num, vaddr.to<uint64_t>(), level, &pte_paddr)) {
++      /* min_translation_level() should have stopped the walker already. */
++      fmt::print(stderr, "[VMEM] ERROR: MimicOS has no level-{} page-table entry for vpage {} (cpu {})\n", level, vaddr, cpu_num);
++      std::exit(EXIT_FAILURE);
++    }
++
++    /*
++     * MimicOS creates interior tables while resolving the walk and
++     * charges them to the fault, so the step itself is free here.
++     */
++    if constexpr (champsim::debug_print) {
++      fmt::print("[VMEM] {} mimicos paddr: {} vaddr: {} translation_level: {}\n", __func__, champsim::address{pte_paddr}, vaddr, level);
++    }
++
++    return {champsim::address{pte_paddr}, champsim::chrono::clock::duration::zero()};
++  }
++
+   if (champsim::page_offset{next_pte_page} == champsim::page_offset{0}) {
+     active_pte_page = ppage_front();
+     ppage_pop();
+diff --git a/src/vmem_mimicos.cc b/src/vmem_mimicos.cc
+new file mode 100644
+index 0000000..223f1a2
+--- /dev/null
++++ b/src/vmem_mimicos.cc
+@@ -0,0 +1,233 @@
++/*
++ *    MimicOS integration for ChampSim.
++ *
++ *    Licensed under the Apache License, Version 2.0 (the "License");
++ *    you may not use this file except in compliance with the License.
++ *    You may obtain a copy of the License at
++ *
++ *    http://www.apache.org/licenses/LICENSE-2.0
++ */
++
++/*
++ * @kanellok: every question ChampSim asks MimicOS goes through here.
++ *
++ *   translate()   which frame backs this page, and how big is it
++ *   pte_paddr()   where the page table entry for this level lives, so
++ *                 the walker can actually fetch it
++ *   page_shift()  4K or 2M, for the TLBs
++ *
++ * Built without -DCHAMPSIM_MIMICOS this file is all stubs.
++ */
++#include "vmem_mimicos.h"
++
++#include <cstdlib>
++#include <sstream>
++
++#ifdef CHAMPSIM_MIMICOS
++
++#include "mimicos_embed.h"
++
++#include <fmt/core.h>
++
++namespace
++{
++constexpr uint64_t LOG2_4KB = 12;
++
++mimicos::FaultRequest make_request(uint32_t cpu_num, uint64_t vpage)
++{
++  mimicos::FaultRequest req;
++  req.vaddr = vpage << LOG2_4KB;
++  /* One page table per core, matching ChampSim's own vpage_to_ppage_map key. */
++  req.asid = cpu_num;
++  req.core_id = cpu_num;
++  /*
++   * Traces carry no mapping type or permissions, so every fault is an
++   * anonymous write.  The standalone kernel assumes the same when it has
++   * no VMA information.
++   */
++  req.access = mimicos::AccessType::WRITE;
++  req.mapping = mimicos::MappingType::ANON;
++  return req;
++}
++} // namespace
++
++struct MimicOSBinding::Impl {
++  std::unique_ptr<mimicos::Kernel> kernel;
++  std::size_t pt_levels = 0;
++  uint64_t translations = 0;
++};
++
++bool MimicOSBinding::available() { return true; }
++
++MimicOSBinding::MimicOSBinding() : impl(std::make_unique<Impl>()) {}
++MimicOSBinding::~MimicOSBinding()
++{
++  if (impl && impl->kernel) {
++    impl->kernel->flush_mapping_trace();
++  }
++}
++
++std::unique_ptr<MimicOSBinding> MimicOSBinding::attach(const std::string& ini_path, std::size_t pt_levels, uint64_t dram_bytes,
++                                                       std::string* err)
++{
++  mimicos::KernelConfig cfg;
++  if (!mimicos::KernelConfig::from_ini(ini_path, &cfg, err)) {
++    return nullptr;
++  }
++
++  /*
++   * ChampSim's depth is fixed at configuration time and baked into the
++   * PSCL geometry, so MimicOS has to build a tree of the same depth or
++   * the entries it hands back belong to a different walk.
++   */
++  cfg.pt_levels = static_cast<int>(pt_levels);
++
++  auto kernel = mimicos::Kernel::create(cfg, err);
++  if (kernel == nullptr) {
++    return nullptr;
++  }
++
++  /* Frames above the end of DRAM are addresses nothing can serve. */
++  const uint64_t mimicos_bytes = cfg.memory_size_mb * 1024ull * 1024ull;
++  if (mimicos_bytes > dram_bytes) {
++    std::ostringstream oss;
++    oss << "MimicOS physical memory (" << cfg.memory_size_mb << " MB) exceeds ChampSim DRAM (" << (dram_bytes / (1024 * 1024))
++        << " MB); reduce [pmem_alloc] memory_size or enlarge the DRAM model";
++    if (err != nullptr) {
++      *err = oss.str();
++    }
++    return nullptr;
++  }
++
++  std::unique_ptr<MimicOSBinding> binding(new MimicOSBinding());
++  binding->impl->kernel = std::move(kernel);
++  binding->impl->pt_levels = pt_levels;
++
++  /*
++   * In the standalone kernel [fault_calibration] holds corrections on
++   * top of handler code that SDE simulates instruction by instruction.
++   * Here MimicOS runs natively and is never simulated, so those values
++   * are the whole cost model.  A config carried over from a Sniper run
++   * reads zero, which would make faults free, so say something.
++   */
++  mimicos::FaultRequest probe;
++  if (binding->impl->kernel->minor_fault_latency_ns(probe, 12, true) == 0) {
++    fmt::print(stderr,
++               "[VMEM] WARNING: MimicOS config '{}' has an all-zero [fault_calibration] section.\n"
++               "                Under the embedding library those values are the whole minor-fault\n"
++               "                cost model, not a correction on top of simulated kernel execution,\n"
++               "                so ChampSim's configured minor_fault_penalty will be used instead.\n",
++               ini_path);
++  }
++
++  /* Log mapping decisions so a run can be replayed and compared. */
++  if (const char* trace_path = std::getenv("MIMICOS_MAPPING_TRACE"); trace_path != nullptr && trace_path[0] != '\0') {
++    std::string trace_err;
++    if (!binding->impl->kernel->enable_mapping_trace(trace_path, &trace_err)) {
++      if (err != nullptr) {
++        *err = trace_err;
++      }
++      return nullptr;
++    }
++    fmt::print("[VMEM] MimicOS mapping trace -> '{}'\n", trace_path);
++  }
++
++  return binding;
++}
++
++auto MimicOSBinding::translate(uint32_t cpu_num, uint64_t vpage) -> MapResult
++{
++  MapResult out;
++  const auto t = impl->kernel->translate(make_request(cpu_num, vpage));
++  impl->translations++;
++
++  out.ok = t.ok;
++  out.ppn = t.ppn;
++  out.page_size_bits = t.page_size_bits;
++  out.faulted = t.faulted;
++  out.fault_latency_ns = t.fault_latency_ns;
++  return out;
++}
++
++bool MimicOSBinding::pte_paddr(uint32_t cpu_num, uint64_t vpage, std::size_t level, uint64_t* out)
++{
++  mimicos::PtwStep step;
++  if (!impl->kernel->pte_address(make_request(cpu_num, vpage), static_cast<uint32_t>(level), &step)) {
++    return false;
++  }
++  if (out != nullptr) {
++    *out = step.pte_paddr;
++  }
++  return true;
++}
++
++uint64_t MimicOSBinding::root_paddr(uint32_t cpu_num) { return impl->kernel->root_table_paddr(cpu_num); }
++
++std::size_t MimicOSBinding::min_translation_level(uint32_t cpu_num, uint64_t vpage)
++{
++  /*
++   * MimicOS names the level its leaf sits at; ChampSim counts levels
++   * remaining and reaches 0 on the final step.  Hence the -1.
++   */
++  const uint32_t leaf = impl->kernel->leaf_level(cpu_num, vpage << LOG2_4KB);
++  return static_cast<std::size_t>(leaf > 0 ? leaf - 1 : 0);
++}
++
++unsigned MimicOSBinding::page_shift(uint32_t cpu_num, uint64_t vpage) const
++{
++  uint64_t ppn = 0;
++  uint32_t bits = 12;
++  if (!impl->kernel->probe(cpu_num, vpage << LOG2_4KB, &ppn, &bits)) {
++    return 12;
++  }
++  return bits;
++}
++
++uint64_t MimicOSBinding::available_frames() const { return impl->kernel->available_frames(); }
++
++std::string MimicOSBinding::summary() const
++{
++  const auto s = impl->kernel->stats();
++  std::ostringstream oss;
++  oss << "MimicOS: " << s.translations << " translations, " << s.minor_faults << " minor faults (" << s.huge_page_faults
++      << " huge), " << s.data_frames_allocated << " data frames, " << s.pt_frames_allocated << " page-table frames";
++  if (s.failed_allocations > 0) {
++    oss << ", " << s.failed_allocations << " FAILED allocations";
++  }
++  if (s.aliased_frames > 0) {
++    oss << ", " << s.aliased_frames << " ALIASED frames";
++  }
++  return oss.str();
++}
++
++#else /* !CHAMPSIM_MIMICOS — stubs so a stock build has no MimicOS dependency */
++
++struct MimicOSBinding::Impl {
++};
++
++bool MimicOSBinding::available() { return false; }
++
++MimicOSBinding::MimicOSBinding() : impl(nullptr) {}
++MimicOSBinding::~MimicOSBinding() = default;
++
++std::unique_ptr<MimicOSBinding> MimicOSBinding::attach(const std::string& ini_path, std::size_t pt_levels, uint64_t dram_bytes,
++                                                       std::string* err)
++{
++  (void)ini_path;
++  (void)pt_levels;
++  (void)dram_bytes;
++  if (err != nullptr) {
++    *err = "this ChampSim was built without MimicOS support; rebuild with MIMICOS_HOME=<path to mimicos> to enable it";
++  }
++  return nullptr;
++}
++
++auto MimicOSBinding::translate(uint32_t, uint64_t) -> MapResult { return MapResult{}; }
++bool MimicOSBinding::pte_paddr(uint32_t, uint64_t, std::size_t, uint64_t*) { return false; }
++uint64_t MimicOSBinding::root_paddr(uint32_t) { return 0; }
++std::size_t MimicOSBinding::min_translation_level(uint32_t, uint64_t) { return 0; }
++unsigned MimicOSBinding::page_shift(uint32_t, uint64_t) const { return 12; }
++uint64_t MimicOSBinding::available_frames() const { return 0; }
++std::string MimicOSBinding::summary() const { return {}; }
++
++#endif
+diff --git a/test/cpp/src/804-vmem-mimicos.cc b/test/cpp/src/804-vmem-mimicos.cc
+new file mode 100644
+index 0000000..52ba904
+--- /dev/null
++++ b/test/cpp/src/804-vmem-mimicos.cc
+@@ -0,0 +1,343 @@
++#include <catch.hpp>
++
++#include <cstdio>
++#include <cstdlib>
++#include <fstream>
++#include <set>
++#include <string>
++#include <unistd.h>
++
++#include "dram_controller.h"
++#include "vmem.h"
++
++/*
++ * MimicOS-backed VirtualMemory.
++ *
++ * These are ChampSim-side tests: they check that the *adapter* behaves, given
++ * that libmimicos itself is covered by mimicos/tests/embed_smoke.cc. The
++ * distinction matters -- a bug here looks identical to a bug there unless the
++ * two are tested separately.
++ *
++ * Without -DCHAMPSIM_MIMICOS the whole file reduces to one test asserting that
++ * MimicOS is reported as unavailable, so the suite still builds and passes in
++ * a stock checkout.
++ */
++
++namespace
++{
++MEMORY_CONTROLLER make_dram()
++{
++  return MEMORY_CONTROLLER{champsim::chrono::picoseconds{3200},
++                           champsim::chrono::picoseconds{6400},
++                           std::size_t{18},
++                           std::size_t{18},
++                           std::size_t{18},
++                           std::size_t{38},
++                           champsim::chrono::microseconds{64000},
++                           {},
++                           64,
++                           64,
++                           1,
++                           champsim::data::bytes{8},
++                           65536,
++                           1024,
++                           4,
++                           8,
++                           4,
++                           8192};
++}
++
++/*
++ * A MimicOS config small enough to fit inside the DRAM model above, written to
++ * a temporary file. Generating it here rather than shipping a fixture keeps the
++ * test honest about exactly which knobs it depends on.
++ */
++class TempConfig
++{
++public:
++  explicit TempConfig(const std::string& allocator, unsigned levels = 5, double promotion_threshold = 0.5)
++  {
++    char name_template[] = "/tmp/champsim_mimicos_XXXXXX";
++    const int fd = mkstemp(name_template);
++    REQUIRE(fd >= 0);
++    ::close(fd);
++    path_ = name_template;
++
++    std::ofstream out(path_);
++    out << "[allocator]\n"
++        << "memory_allocator = " << allocator << "\n"
++        << "max_order = 12\n\n"
++        << "[page_table]\n"
++        << "levels = " << levels << "\n"
++        << "page_size = 4096\n\n"
++        << "[pmem_alloc]\n"
++        << "memory_size = 1024\n"
++        << "kernel_size = 128\n"
++        << "max_order = 12\n"
++        << "frag_type = largepage\n"
++        << "target_fragmentation = 0.0\n"
++        << "threshold_for_promotion = " << promotion_threshold << "\n\n"
++        << "[fault_calibration]\n"
++        << "vma_lookup_base = 100\n"
++        << "pt_page_alloc_cost = 200\n"
++        << "phys_page_alloc_cost = 400\n"
++        << "zero_fill_cost = 800\n"
++        << "pte_install_cost = 50\n";
++  }
++
++  ~TempConfig() { std::remove(path_.c_str()); }
++
++  TempConfig(const TempConfig&) = delete;
++  TempConfig& operator=(const TempConfig&) = delete;
++
++  const std::string& path() const { return path_; }
++
++private:
++  std::string path_;
++};
++} // namespace
++
++#ifdef CHAMPSIM_MIMICOS
++
++SCENARIO("MimicOS backs the virtual memory when a config is supplied")
++{
++  GIVEN("A virtual memory with MimicOS attached")
++  {
++    constexpr unsigned levels = 5;
++    TempConfig config{"baseline", levels};
++    auto dram = make_dram();
++    VirtualMemory uut{champsim::data::bytes{1ull << 12}, levels, std::chrono::nanoseconds{6400}, dram, {}, config.path()};
++
++    THEN("It reports MimicOS as enabled") { REQUIRE(uut.mimicos_enabled()); }
++
++    WHEN("A page is translated twice")
++    {
++      const champsim::page_number vpage{0x12345};
++      auto [ppage_a, delay_a] = uut.va_to_pa(0, vpage);
++      auto [ppage_b, delay_b] = uut.va_to_pa(0, vpage);
++
++      THEN("The first access faults and the second does not")
++      {
++        REQUIRE(delay_a > champsim::chrono::clock::duration::zero());
++        REQUIRE(delay_b == champsim::chrono::clock::duration::zero());
++      }
++
++      THEN("The translation is stable") { REQUIRE(ppage_a == ppage_b); }
++
++      THEN("The fault carries MimicOS's calibrated cost, not ChampSim's default")
++      {
++        // 100 + 200 + 400 + 800 + 50 = 1550 ns for a 4 KiB anonymous write
++        // that installs page-table pages.
++        REQUIRE(delay_a == champsim::chrono::clock::duration{std::chrono::nanoseconds{1550}});
++      }
++    }
++
++    WHEN("Many distinct pages are translated")
++    {
++      std::set<champsim::page_number> seen;
++      constexpr int count = 400;
++      for (int i = 0; i < count; i++) {
++        auto [ppage, delay] = uut.va_to_pa(0, champsim::page_number{0x40000 + static_cast<uint64_t>(i)});
++        (void)delay;
++        seen.insert(ppage);
++      }
++
++      THEN("No two virtual pages share a frame") { REQUIRE(seen.size() == count); }
++    }
++
++    WHEN("Two address spaces translate the same virtual page")
++    {
++      const champsim::page_number vpage{0x9999};
++      auto [ppage_a, delay_a] = uut.va_to_pa(0, vpage);
++      auto [ppage_b, delay_b] = uut.va_to_pa(1, vpage);
++      (void)delay_a;
++      (void)delay_b;
++
++      THEN("They get different frames") { REQUIRE(ppage_a != ppage_b); }
++    }
++  }
++}
++
++SCENARIO("MimicOS supplies the page-table entry addresses for a walk")
++{
++  GIVEN("A virtual memory with MimicOS attached")
++  {
++    constexpr unsigned levels = 5;
++    TempConfig config{"baseline", levels};
++    auto dram = make_dram();
++    VirtualMemory uut{champsim::data::bytes{1ull << 12}, levels, std::chrono::nanoseconds{6400}, dram, {}, config.path()};
++
++    WHEN("A full walk is performed")
++    {
++      const champsim::page_number vpage{0x123456};
++      std::vector<champsim::address> entries;
++      for (std::size_t level = levels; level >= 1; level--) {
++        auto [paddr, delay] = uut.get_pte_pa(0, vpage, level);
++        (void)delay;
++        entries.push_back(paddr);
++      }
++
++      THEN("There is one entry per level") { REQUIRE(entries.size() == levels); }
++
++      THEN("Every entry is 8-byte aligned")
++      {
++        for (auto entry : entries) {
++          REQUIRE(entry.to<uint64_t>() % 8 == 0);
++        }
++      }
++
++      THEN("Each level lives in its own page-table frame")
++      {
++        std::set<uint64_t> frames;
++        for (auto entry : entries) {
++          frames.insert(entry.to<uint64_t>() / 4096);
++        }
++        REQUIRE(frames.size() == levels);
++      }
++
++      THEN("The entry offsets match the virtual address's index bits")
++      {
++        const uint64_t vaddr = champsim::address{vpage}.to<uint64_t>();
++        for (std::size_t depth = 0; depth < levels; depth++) {
++          const uint64_t shift = 12 + 9 * (levels - 1 - depth);
++          const uint64_t expected = (vaddr >> shift) & 0x1ff;
++          const uint64_t actual = (entries.at(depth).to<uint64_t>() % 4096) / 8;
++          REQUIRE(actual == expected);
++        }
++      }
++    }
++
++    WHEN("A 4 KiB page has been mapped")
++    {
++      const champsim::page_number vpage{0x777777};
++      auto [ppage, delay] = uut.va_to_pa(0, vpage);
++      (void)ppage;
++      (void)delay;
++
++      THEN("The walk runs to full depth") { REQUIRE(uut.min_translation_level(0, vpage) == 0); }
++    }
++  }
++}
++
++SCENARIO("A promoted huge page shortens the walk")
++{
++  GIVEN("A virtual memory backed by the reservation-THP allocator")
++  {
++    constexpr unsigned levels = 5;
++    // Promote as soon as a 2 MiB region is touched at all, so the test does
++    // not depend on how many pages the allocator wants to see first.
++    TempConfig config{"reserve_thp", levels, 0.0};
++    auto dram = make_dram();
++    VirtualMemory uut{champsim::data::bytes{1ull << 12}, levels, std::chrono::nanoseconds{6400}, dram, {}, config.path()};
++
++    WHEN("A page in a promoted region is translated")
++    {
++      const champsim::page_number vpage{0x20000};
++      auto [ppage, delay] = uut.va_to_pa(0, vpage);
++      (void)delay;
++
++      THEN("The frame is 2 MiB aligned") { REQUIRE(ppage.to<uint64_t>() % 512 == 0); }
++
++      THEN("The walk stops one level early") { REQUIRE(uut.min_translation_level(0, vpage) == 1); }
++
++      AND_WHEN("Another page inside the same 2 MiB region is translated")
++      {
++        const champsim::page_number inner{vpage.to<uint64_t>() + 100};
++        auto [inner_ppage, inner_delay] = uut.va_to_pa(0, inner);
++
++        THEN("It resolves inside the huge frame without faulting")
++        {
++          REQUIRE(inner_ppage.to<uint64_t>() == ppage.to<uint64_t>() + 100);
++          REQUIRE(inner_delay == champsim::chrono::clock::duration::zero());
++        }
++      }
++    }
++  }
++}
++
++SCENARIO("The virtual memory reports the page size it handed out")
++{
++  GIVEN("A virtual memory backed by the reservation-THP allocator")
++  {
++    constexpr unsigned levels = 5;
++    TempConfig config{"reserve_thp", levels, 0.0};
++    auto dram = make_dram();
++    VirtualMemory uut{champsim::data::bytes{1ull << 12}, levels, std::chrono::nanoseconds{6400}, dram, {}, config.path()};
++
++    WHEN("A page has not been touched")
++    {
++      THEN("It reads as a small page rather than faulting anything in")
++      {
++        REQUIRE(uut.page_shift(0, champsim::page_number{0x50000}) == 12);
++        REQUIRE(uut.available_ppages() > 0);
++      }
++    }
++
++    WHEN("A 2 MiB page has been mapped")
++    {
++      const champsim::page_number vpage{0x40000};
++      auto [ppage, delay] = uut.va_to_pa(0, vpage);
++      (void)delay;
++
++      THEN("Every small page inside it reports the huge size")
++      {
++        REQUIRE(uut.page_shift(0, vpage) == 21);
++        for (uint64_t off : {uint64_t{1}, uint64_t{17}, uint64_t{511}}) {
++          REQUIRE(uut.page_shift(0, champsim::page_number{vpage.to<uint64_t>() + off}) == 21);
++        }
++      }
++
++      THEN("Their translations stay inside the same huge frame")
++      {
++        const auto base = ppage.to<uint64_t>();
++        for (uint64_t off : {uint64_t{1}, uint64_t{17}, uint64_t{511}}) {
++          auto [inner, inner_delay] = uut.va_to_pa(0, champsim::page_number{vpage.to<uint64_t>() + off});
++          (void)inner_delay;
++          REQUIRE(inner.to<uint64_t>() == base + off);
++        }
++      }
++    }
++  }
++}
++
++SCENARIO("A virtual memory without a MimicOS config keeps the stock model")
++{
++  GIVEN("A virtual memory built the stock way")
++  {
++    auto dram = make_dram();
++    VirtualMemory uut{champsim::data::bytes{1ull << 12}, 5, std::chrono::nanoseconds{6400}, dram};
++
++    THEN("MimicOS is not enabled") { REQUIRE_FALSE(uut.mimicos_enabled()); }
++
++    THEN("Every walk runs to full depth") { REQUIRE(uut.min_translation_level(0, champsim::page_number{0x1234}) == 0); }
++
++    THEN("Every page reads as a small page") { REQUIRE(uut.page_shift(0, champsim::page_number{0x1234}) == 12); }
++
++    WHEN("A page faults")
++    {
++      auto [ppage, delay] = uut.va_to_pa(0, champsim::page_number{0x1234});
++      (void)ppage;
++
++      THEN("The configured minor fault penalty is charged")
++      {
++        REQUIRE(delay == champsim::chrono::clock::duration{std::chrono::nanoseconds{6400}});
++      }
++    }
++  }
++}
++
++#else
++
++SCENARIO("A build without MimicOS support reports it as unavailable")
++{
++  GIVEN("A stock virtual memory")
++  {
++    auto dram = make_dram();
++    VirtualMemory uut{champsim::data::bytes{1ull << 12}, 5, std::chrono::nanoseconds{6400}, dram};
++
++    THEN("MimicOS is not enabled") { REQUIRE_FALSE(uut.mimicos_enabled()); }
++    THEN("Every walk runs to full depth") { REQUIRE(uut.min_translation_level(0, champsim::page_number{0x1234}) == 0); }
++  }
++}
++
++#endif
+-- 
+2.34.1
+

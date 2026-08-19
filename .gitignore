@@ -114,3 +114,13 @@ simulator/sniper/test_results/
 simulator/sniper/.vscode/*
 .vscode/*
 
+
+# MimicOS embedding library build artifacts
+mimicos/build/libmimicos.a
+mimicos/build/libmimicos.so
+mimicos/build/libobj/
+mimicos/build/embed_smoke
+mimicos/build/mimicos_replay
+mimicos/build/fault_driver
+mimicos/build/fault_driver_static
+mimicos/build/mimicos_gem5_server

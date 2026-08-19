@@ -34,6 +34,7 @@ namespace Virtuoso {
             /* Logging */
             void log(const std::string &msg) const { 
                 /* std::cout; no log_file */
+                if (!mimicos_log::enabled()) return;
                 std::cout << msg << std::endl;
             }
         };

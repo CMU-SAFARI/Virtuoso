@@ -16,20 +16,24 @@ namespace Virtuoso {
         struct NoMetricsPolicy
         {
             template <typename Allocator>
-            void on_init(const String& name, int memory_size, int kernel_size, int threshold_for_promotion, Allocator* phys_mem_alloc) {
+            void on_init(const String& name, int memory_size, int kernel_size, double threshold_for_promotion, Allocator* phys_mem_alloc) {
                 auto& stats = phys_mem_alloc->getStats();
-                std::cout << "[MimicOS] Reservation-based THP Allocator" << std::endl;
-                std::cout << "[MimicOS] ReserveTHP: threshold_for_promotion = " << threshold_for_promotion << std::endl;
+                if (mimicos_log::enabled()) {
+                    std::cout << "[MimicOS] Reservation-based THP Allocator" << std::endl;
+                    std::cout << "[MimicOS] ReserveTHP: threshold_for_promotion = " << threshold_for_promotion << std::endl;
+                }
             }
 
             /* Logging */
             void log(const std::string &msg) const { 
                 /* std::cout; no log_file */
+                if (!mimicos_log::enabled()) return;
                 std::cout << msg << std::endl;
             }
 
             template <typename... Args>
             void log(Args&&... args) const {
+                if (!mimicos_log::enabled()) return;
                 std::ostringstream oss;
                 (oss << ... << std::forward<Args>(args));
                 std::cout << oss.str() << std::endl;

@@ -12,11 +12,11 @@ namespace Virtuoso {
                          int /*kernel*/,
                          Alloc* /*alloc*/)
             {
-                std::cout << "[VirtuOS] LinuxBuddyAnon Allocator (per-CPU pageset + buddy fallback)" << std::endl;
+                if (mimicos_log::enabled()) std::cout << "[VirtuOS] LinuxBuddyAnon Allocator (per-CPU pageset + buddy fallback)" << std::endl;
             }
 
             void log(const std::string& msg) const
-            { std::cout << msg << '\n'; }
+            { if (mimicos_log::enabled()) std::cout << msg << '\n'; }
         };
     }
 }
