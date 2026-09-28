@@ -10,6 +10,7 @@
 #include "TemporalPTEPrefetcher.h"
 #include "BertiTLBPrefetcher.h"
 #include <string>
+#include "log.h"
 
 namespace ParametricDramDirectoryMSI
 {
@@ -18,13 +19,39 @@ namespace ParametricDramDirectoryMSI
 	public:
 		static TLBPrefetcherBase *createASPPrefetcher(String mmu_name, String prefetcher_name, String pq_index, Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model)
 		{
-			int table_size = Sim()->getCfg()->getInt("perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/table_size");
+			// Table size.  The key is called table_size but was always used as
+			// log2(entries): baseline_asp.cfg's table_size=8 means 256 entries.
+			// trail_comparison_v4/v4_asp.cfg sets table_size=64, i.e. 1 << 64 --
+			// undefined behaviour on a 32-bit int; on x86 the shift count wraps
+			// mod 32 and the table silently had ONE entry.  Resolve it here:
+			//   table_entries (new, explicit)  -> used as is
+			//   table_size <= 30               -> log2(entries), as before
+			//   table_size  > 30               -> cannot be a log2; treated as an
+			//                                     entry count, with a warning
+			String asp_base = "perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/";
+			int table_size;
+			if (Sim()->getCfg()->hasKey(asp_base + "table_entries"))
+				table_size = Sim()->getCfg()->getInt(asp_base + "table_entries");
+			else
+			{
+				int raw = Sim()->getCfg()->getInt(asp_base + "table_size");
+				if (raw > 30)
+				{
+					std::cout << "[TLBPF asp] WARNING: " << asp_base << "table_size=" << raw
+					          << " is read as log2(entries) and would overflow; using " << raw
+					          << " ENTRIES instead. Set table_entries to make this explicit." << std::endl;
+					table_size = raw;
+				}
+				else
+					table_size = 1 << raw;
+			}
 			int prefetch_threshold = Sim()->getCfg()->getInt("perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/prefetch_threshold");
 			bool extra_prefetch = Sim()->getCfg()->getBool("perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/extra_prefetch");
 			int lookahead = Sim()->getCfg()->getInt("perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/lookahead");
 			int degree = Sim()->getCfg()->getInt("perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/degree");
 			bool install_pq = Sim()->getCfg()->getBoolDefault("perf_model/"+mmu_name+"/tlb_prefetch/pq" + pq_index + "/asp_prefetcher/install_pq", true);
-			return new ArbitraryStridePrefetcher(core, memory_manager, shmem_perf_model, table_size, prefetch_threshold, extra_prefetch, lookahead, degree, prefetcher_name, install_pq);
+			bool skip_zero_stride = Sim()->getCfg()->getBoolDefault(asp_base + "skip_zero_stride", true);   // false = legacy
+			return new ArbitraryStridePrefetcher(core, memory_manager, shmem_perf_model, table_size, prefetch_threshold, extra_prefetch, lookahead, degree, prefetcher_name, install_pq, skip_zero_stride);
 		}
 		static TLBPrefetcherBase *createTLBPrefetcherStride(String mmu_name, String prefetcher_name, String pq_index, Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model)
 		{
@@ -55,11 +82,17 @@ namespace ParametricDramDirectoryMSI
 			uint32_t masp_degree      = Sim()->getCfg()->hasKey(cfg_base + "masp_degree")
 				? static_cast<uint32_t>(Sim()->getCfg()->getInt(cfg_base + "masp_degree")) : 1;
 
-			return new AgileTLBPrefetcher(core, memory_manager, shmem_perf_model, prefetcher_name,
+			AgileTLBPrefetcher *atp = new AgileTLBPrefetcher(core, memory_manager, shmem_perf_model, prefetcher_name,
 				pq_size, sampler_size, fpq_size, fdt_counter_bits, fdt_threshold,
 				enable_pref_bits, select1_bits, select2_bits,
 				masp_entries, masp_assoc, page_shift,
 				masp_lookahead, masp_degree);
+			// Model fixes; defaults keep the original behaviour (see AgileTLBPrefetcher.h)
+			atp->configureModelFixes(
+				Sim()->getCfg()->getBoolDefault(cfg_base + "functional_demand_lookup", false),
+				Sim()->getCfg()->getBoolDefault(cfg_base + "probe_allocates", true),
+				Sim()->getCfg()->getBoolDefault(cfg_base + "fpq_insert_free", true));
+			return atp;
 		}
 		static TLBPrefetcherBase *createRecencyTLBPrefetcher(String mmu_name, String prefetcher_name, String pq_index, Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model)
 		{
@@ -74,10 +107,13 @@ namespace ParametricDramDirectoryMSI
 			bool     consume_pq_on_hit        = Sim()->getCfg()->getBool(cfg_base + "consume_pq_on_hit");
 			bool     model_pointer_chase       = Sim()->getCfg()->getBool(cfg_base + "model_pointer_chase");
 
-			return new RecencyTLBPrefetcher(core, memory_manager, shmem_perf_model, prefetcher_name,
+			RecencyTLBPrefetcher *rp = new RecencyTLBPrefetcher(core, memory_manager, shmem_perf_model, prefetcher_name,
 				page_shift, prefetch_same_recency, prefetch_recency_minus_1,
 				prefetch_recency_plus_1, prefetch_on_tlb_hit,
 				model_prefetch_walks, consume_pq_on_hit, model_pointer_chase);
+			// legacy_model=true reproduces the pre-fix behaviour (see RecencyTLBPrefetcher.h).
+			rp->configureLegacyModel(Sim()->getCfg()->getBoolDefault(cfg_base + "legacy_model", false));
+			return rp;
 		}
 		static TLBPrefetcherBase *createDistanceTLBPrefetcher(String mmu_name, String prefetcher_name, String pq_index, Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model)
 		{
@@ -164,7 +200,13 @@ namespace ParametricDramDirectoryMSI
 			else if (repl_str == "lru")
 				repl = TemporalPTEReplacement::LRU;
 
-			return new TemporalPTEPrefetcher(core, memory_manager, shmem_perf_model, prefetcher_name,
+			// max_prefetches_per_access appears in the shipped configs but no code
+			// reads it; say so rather than let it look like a live limit.
+			if (Sim()->getCfg()->hasKey(cfg_base + "max_prefetches_per_access"))
+				std::cout << "[TLBPF temporal_pte] NOTE: " << cfg_base
+				          << "max_prefetches_per_access is set but has no effect (not implemented)" << std::endl;
+
+			TemporalPTEPrefetcher *tp = new TemporalPTEPrefetcher(core, memory_manager, shmem_perf_model, prefetcher_name,
 				num_offsets, offset_bits, conf_bits, base_bit,
 				conf_threshold, page_shift, region_shift,
 				mode, repl, conf_init, enable_decay, decay_period,
@@ -180,6 +222,8 @@ namespace ParametricDramDirectoryMSI
 				payload_in_side_table, side_table_base_pa, side_table_payload_bits,
 				side_table_radix, side_table_levels, side_table_bits_per_level, side_table_pwc_entries,
 				model_payload_writeback, prefetch_install_pq);
+			tp->configureModelFixes(Sim()->getCfg()->getBoolDefault(cfg_base + "sibling_allocates", true));
+			return tp;
 		}
 		static TLBPrefetcherBase *createBertiTLBPrefetcher(String mmu_name, String prefetcher_name, String pq_index, Core *core, MemoryManagerBase *memory_manager, ShmemPerfModel *shmem_perf_model)
 		{
@@ -234,8 +278,13 @@ namespace ParametricDramDirectoryMSI
 			}
 			else
 			{
-				std::cout << "[CONFIG ERROR] No such TLB prefetcher: " << prefetcher_name << std::endl;
-				
+				// Returning nullptr here used to be stored straight into the
+				// prefetcher array by the TLB subsystem and dereferenced on the
+				// first lookup, so a typo in prefetcher_list surfaced as a
+				// segfault mid-sweep rather than as a config error.
+				LOG_PRINT_ERROR("No such TLB prefetcher: '%s' (perf_model/%s/tlb_prefetch/pq%s/prefetcher_list). "
+					"Known: stride, h2, asp, atp, recency, dp, temporal_pte, berti",
+					prefetcher_name.c_str(), mmu_name.c_str(), pq_index.c_str());
 				return nullptr;
 			}
 		}

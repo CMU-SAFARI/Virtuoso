@@ -16,7 +16,8 @@ namespace ParametricDramDirectoryMSI
 		stats.successful_prefetches = 0;
 		stats.failed_prefetches = 0;
 
-		std::cout << "Stride prefetcher created with length " << length << std::endl;
+		std::cout << logPrefix() << "config: length=" << length
+		          << " (walks VPN-" << length << "..VPN+" << length << ", " << 2 * length << " walks per access)" << std::endl;
 		registerStatsMetric("tlb_stride", core->getId(), "prefetch_attempts", &stats.prefetch_attempts);
 		registerStatsMetric("tlb_stride", core->getId(), "successful_prefetches", &stats.successful_prefetches);
 		registerStatsMetric("tlb_stride", core->getId(), "failed_prefetches", &stats.failed_prefetches);
@@ -26,6 +27,7 @@ namespace ParametricDramDirectoryMSI
 	{
 		vector<query_entry> result;
 		IntPtr VPN = address >> 12; // We assume that the page size is 4KB
+		// Both directions, skipping the accessed page itself.
 		for (int i = -length; i <= length; i++)
 		{
 			if (i != 0)

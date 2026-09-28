@@ -2,6 +2,8 @@
 #include "cache_cntlr.h"
 #include "stats.h"
 #include <cstring>
+#include <cstdlib>
+#include <cstdio>
 #include <iostream>
 
 namespace ParametricDramDirectoryMSI
@@ -9,8 +11,8 @@ namespace ParametricDramDirectoryMSI
 
 	ArbitraryStridePrefetcher::ArbitraryStridePrefetcher(
 		Core *_core, MemoryManagerBase *_memory_manager, ShmemPerfModel *_shmem_perf_model,
-		int table_bits, int _prefetch_threshold, bool _extra_prefetch,
-		int _lookahead, int _degree, String name, bool _install_pq)
+		int table_entries, int _prefetch_threshold, bool _extra_prefetch,
+		int _lookahead, int _degree, String name, bool _install_pq, bool _skip_zero_stride)
 		: TLBPrefetcherBase(_core, _memory_manager, _shmem_perf_model, name),
 		  core(_core),
 		  memory_manager(_memory_manager),
@@ -19,9 +21,11 @@ namespace ParametricDramDirectoryMSI
 		  extra_prefetch(_extra_prefetch),
 		  lookahead(_lookahead),
 		  degree(_degree),
-		  install_pq(_install_pq)
+		  install_pq(_install_pq),
+		  skip_zero_stride(_skip_zero_stride)
 	{
-		int entries = 1 << table_bits;
+		LOG_ASSERT_ERROR(table_entries >= 1, "ASP table must have at least one entry (got %d)", table_entries);
+		int entries = table_entries;
 		table_size = entries;
 		table = new entry_prefetcher[entries];
 
@@ -30,6 +34,7 @@ namespace ParametricDramDirectoryMSI
 			table[i].PC = 0;
 			table[i].vaddr = 0;
 			table[i].stride = -1;
+			table[i].stride_valid = false;
 			table[i].saturation_counter = 0;
 		}
 
@@ -39,9 +44,13 @@ namespace ParametricDramDirectoryMSI
 		log_file_name = std::string(Sim()->getConfig()->getOutputDirectory().c_str()) + "/" + log_file_name;
 		log_file.open(log_file_name);
 
-		std::cout << "Arbitrary Stride prefetcher created with "
-				  << "table bits: " << table_bits << " prefetch threshold: "
-				  << _prefetch_threshold << std::endl;
+		std::cout << logPrefix() << "config: entries=" << entries
+		          << " threshold=" << prefetch_threshold << " lookahead=" << lookahead
+		          << " degree=" << degree << " extra_prefetch=" << extra_prefetch
+		          << " install_pq=" << install_pq << " skip_zero_stride=" << skip_zero_stride
+		          << (skip_zero_stride ? "" : "  (LEGACY: stride-0 entries prefetch the page being accessed)")
+		          << (entries == 1 ? "  (LEGACY: 1-entry table, as in the pre-2026-09-28 v4 runs)" : "")
+		          << std::endl;
 
 		registerStatsMetric("asp_tlb", core->getId(), "successful_prefetches", &stats.successful_prefetches);
 		registerStatsMetric("asp_tlb", core->getId(), "prefetch_attempts", &stats.prefetch_attempts);
@@ -71,6 +80,8 @@ namespace ParametricDramDirectoryMSI
 		registerStatsMetric("asp_tlb", core->getId(), "prefetch_distance_sum", &stats.prefetch_distance_sum);
 		registerStatsMetric("asp_tlb", core->getId(), "max_saturation_counter", &stats.max_saturation_counter);
 		registerStatsMetric("asp_tlb", core->getId(), "table_accesses", &stats.table_accesses);
+		registerStatsMetric("asp_tlb", core->getId(), "zero_stride_skipped", &stats.zero_stride_skipped);
+		registerStatsMetric("asp_tlb", core->getId(), "targets_out_of_range", &stats.targets_out_of_range);
 	}
 
 	std::vector<query_entry> ArbitraryStridePrefetcher::performPrefetch(
@@ -99,9 +110,25 @@ namespace ParametricDramDirectoryMSI
 			else
 				stats.negative_stride++;
 
-			if (table[index].stride == -1)
+			// Strict mode: a stride-0 observation carries no prediction (the
+			// next page would be this page), so it neither trains nor predicts.
+			// Just refresh the last VPN and leave the stride/confidence alone.
+			if (skip_zero_stride && new_stride == 0)
+			{
+				stats.zero_stride_skipped++;
+				table[index].vaddr = VPN;
+				if (!install_pq) result.clear();
+				return result;
+			}
+
+			// "Unset" test: explicit valid bit in strict mode; the legacy code
+			// used stride == -1, which is also a legitimate stride.
+			const bool stride_unset = skip_zero_stride ? !table[index].stride_valid
+			                                           : (table[index].stride == -1);
+			if (stride_unset)
 			{
 				table[index].stride = new_stride;
+				table[index].stride_valid = true;
 				table[index].saturation_counter++;
 				stats.new_stride_observed++;
 			}
@@ -134,6 +161,19 @@ namespace ParametricDramDirectoryMSI
 					long long prefetch_vpn_signed = static_cast<long long>(VPN) + offset;
 					IntPtr prefetch_vpn = static_cast<IntPtr>(prefetch_vpn_signed);
 
+					// A stride learned between two unrelated regions (e.g. heap at
+					// 0x0b70_9000 and an mmap area at 0x126b_0000_0000: ~4.9e9 pages)
+					// can put the target below 0 or beyond the 48-bit address space
+					// the page table decodes (bits 48.. carry the app id, see
+					// vpnInTriggerSpace).  Such an address cannot be mapped;
+					// walking it would alias into the low 48 bits and allocate a
+					// junk page.  Drop it before the walk (no walk is charged).
+					if (!vpnInTriggerSpace(prefetch_vpn_signed, VPN))
+					{
+						stats.targets_out_of_range++;
+						continue;
+					}
+
 					long long dist = (offset >= 0) ? offset : -offset;
 					stats.prefetch_distance_sum += static_cast<UInt64>(dist);
 
@@ -155,21 +195,30 @@ namespace ParametricDramDirectoryMSI
 
 				if (extra_prefetch)
 				{
-					stats.extra_prefetches_issued++;
+					// One walk behind the current page, at VPN - stride.
 					long long extra_vpn_signed = static_cast<long long>(VPN) - table[index].stride;
-					IntPtr extra_vpn = static_cast<IntPtr>(extra_vpn_signed);
-					query_entry extra_result = PTWTransparent(extra_vpn << 12, eip, lock, modeled, count, pt);
-
-					if (extra_result.ppn != 0)
+					if (!vpnInTriggerSpace(extra_vpn_signed, VPN))
 					{
-						stats.extra_prefetches_successful++;
-						stats.successful_prefetches++;
-						result.push_back(extra_result);
+						stats.targets_out_of_range++;   // same guard as above; not walked
 					}
 					else
 					{
-						stats.extra_prefetches_failed++;
-						stats.failed_prefetches++;
+						stats.extra_prefetches_issued++;
+						stats.prefetch_attempts++;   // the extra walk is a walk too
+						IntPtr extra_vpn = static_cast<IntPtr>(extra_vpn_signed);
+						query_entry extra_result = PTWTransparent(extra_vpn << 12, eip, lock, modeled, count, pt);
+
+						if (extra_result.ppn != 0)
+						{
+							stats.extra_prefetches_successful++;
+							stats.successful_prefetches++;
+							result.push_back(extra_result);
+						}
+						else
+						{
+							stats.extra_prefetches_failed++;
+							stats.failed_prefetches++;
+						}
 					}
 				}
 			}
@@ -182,9 +231,11 @@ namespace ParametricDramDirectoryMSI
 			if (table[index].PC != 0)
 				stats.pc_evictions++;
 
+			// New PC (or a conflict in the direct-mapped table): start over.
 			table[index].PC = eip;
 			table[index].vaddr = VPN;
 			table[index].stride = -1;
+			table[index].stride_valid = false;
 			table[index].saturation_counter = 0;
 		}
 
@@ -194,6 +245,20 @@ namespace ParametricDramDirectoryMSI
 			result.clear();
 
 		return result;
+	}
+
+
+	void ArbitraryStridePrefetcher::appendSummary(std::ostream &os) const
+	{
+		os << " queries=" << stats.queries
+		   << " pc_hits=" << stats.pc_hits
+		   << " zero_stride=" << stats.zero_stride
+		   << " zero_stride_skipped=" << stats.zero_stride_skipped
+		   << " out_of_range=" << stats.targets_out_of_range
+		   << " trained(>thr)=" << stats.threshold_reached
+		   << " walks=" << stats.prefetch_attempts
+		   << " walks_ok=" << stats.successful_prefetches
+		   << " avg|dist|=" << (stats.prefetch_attempts ? stats.prefetch_distance_sum / stats.prefetch_attempts : 0);
 	}
 
 }

@@ -144,6 +144,19 @@ namespace ParametricDramDirectoryMSI
 
         void notifyInstall(IntPtr address, int page_size) override;
 
+        /// sibling_allocates: when a predicted region is fanned out, only the
+        /// first page of each PTE cache line gets a modelled walk; its 7
+        /// siblings share that walk's PTE cache line and are read with an
+        /// untimed lookup.  true (default): an unmapped sibling is faulted in,
+        /// like the leader -- prefetch walks allocate pages by design, to
+        /// emulate steady state.  false: unmapped siblings are skipped.
+        /// Called by the factory after construction; also prints the config.
+        void configureModelFixes(bool sibling_allocates);
+
+    protected:
+        void appendSummary(std::ostream &os) const override;
+    public:
+
         // Called by the MMU after the demand PTW completes: dirty the PTE
         // cacheline(s) whose in-PTE payload was updated this access, so the
         // cache models the resulting DRAM writeback traffic.
@@ -152,6 +165,7 @@ namespace ParametricDramDirectoryMSI
     private:
         // --- Codec ---
         PTEOffsetCodec m_codec;
+        bool m_sibling_allocates = true;   ///< see configureModelFixes()
 
         // --- Logging ---
         SimLog m_sim_log;

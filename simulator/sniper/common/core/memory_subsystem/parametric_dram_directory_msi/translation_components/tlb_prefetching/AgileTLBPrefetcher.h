@@ -137,6 +137,7 @@ public:
 		UInt64 free_candidates_seen;
 		UInt64 free_inserted_pq;
 		UInt64 free_inserted_sampler;
+		UInt64 sbfp_demand_unmapped;   // functional demand lookup found no mapping (page not yet faulted in)
 
 		// Per-distance stats: index 0..13 maps to distances -7..-1, +1..+7
 		UInt64 dist_seen[14];
@@ -183,6 +184,35 @@ public:
 		bool modeled, bool count, PageTable *pt,
 		bool instruction = false, bool tlb_hit = false,
 		bool pq_hit = false, int page_size = 12) override;
+
+	void onDemandWalkComplete(IntPtr address, SubsecondTime walk_latency) override;
+
+protected:
+	void appendSummary(std::ostream &os) const override
+	{
+		os << " misses=" << m_stats.queries
+		   << " pq_hits=" << m_stats.pq_hits
+		   << " demand_walks=" << m_stats.demand_walks
+		   << " choice(off/h2p/masp/stp)=" << m_stats.atp_choice_disable
+		   << "/" << m_stats.atp_choice_h2p << "/" << m_stats.atp_choice_masp
+		   << "/" << m_stats.atp_choice_stp
+		   << " walks=" << m_stats.real_prefetch_walks_issued
+		   << " walks_ok=" << m_stats.real_prefetch_successful
+		   << " free_to_pq=" << m_stats.free_inserted_pq
+		   << " sbfp_unmapped=" << m_stats.sbfp_demand_unmapped;
+	}
+public:
+
+	// Model fixes, all off by default so existing configs reproduce old results:
+	//   functional_demand_lookup: run SBFP on the MMU's own demand walk instead of
+	//     issuing a second, modeled walk of the missed address (no cache traffic,
+	//     no page allocation); free neighbours become ready one average demand-walk
+	//     latency after the miss.
+	//   probe_allocates: existence checks (SBFP neighbours, FPQ training) allocate
+	//     unmapped pages. Set false so they only report whether a mapping exists.
+	//   fpq_insert_free: also insert SBFP-admitted free neighbours of each fake
+	//     prediction into the FPQs.
+	void configureModelFixes(bool functional_demand_lookup, bool probe_allocates, bool fpq_insert_free);
 
 private:
 	// ── Configuration ───────────────────────────────────────────────
@@ -245,6 +275,12 @@ private:
 	// ── Bookkeeping ─────────────────────────────────────────────────
 	bool m_current_instruction;
 
+	// ── Model-fix switches (see configureModelFixes) ────────────────
+	bool m_functional_demand_lookup;
+	bool m_probe_allocates;
+	bool m_fpq_insert_free;
+	SubsecondTime m_avg_demand_walk_latency;  // EWMA of MMU demand-walk latency
+
 	// ── Stats ───────────────────────────────────────────────────────
 	ATPStats m_stats;
 	void registerAllStats(core_id_t core_id);
@@ -284,7 +320,8 @@ private:
 
 	// ── Direct page table lookup ────────────────────────────────────
 	bool directPageTableLookupVPN(PageTable *pt, uint64_t vpn,
-								  uint64_t &ppn, uint32_t &page_size) const;
+								  uint64_t &ppn, uint32_t &page_size,
+								  bool allow_allocate = true) const;
 
 	// ── Predictors ──────────────────────────────────────────────────
 	std::vector<uint64_t> predictH2P(uint64_t vpn) const;

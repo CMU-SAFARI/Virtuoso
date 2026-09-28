@@ -777,7 +777,11 @@ std::vector<query_entry> TemporalPTEPrefetcher::performPrefetch(
     // reports page_size=12 even when the underlying mapping is 2MB.
     bool page_mapped = false;
     {
-        PTWResult probe = pt->initializeWalk(address, /*count*/ false, /*is_prefetch*/ false, /*restart*/ false);
+        // restart=false: a pure probe, it never allocates.  (The page table
+        // used to count an unmapped probe as a demand page fault, doubling
+        // radix_4level.page_faults; pagetable_radix.cc no longer counts
+        // probes that neither count stats nor handle the fault.)
+        PTWResult probe = pt->initializeWalk(withTag(address), /*count*/ false, /*is_prefetch*/ false, /*restart*/ false);   // tagged for the page table (see m_addr_tag)
         if (!probe.fault_happened && probe.page_size > 0)
         {
             page_size = probe.page_size;
@@ -1207,7 +1211,7 @@ std::vector<query_entry> TemporalPTEPrefetcher::performPrefetch(
                     IntPtr page_addr = static_cast<IntPtr>(base_vpn_of_region + p) << fan_page_shift;
                     for (auto *tlb : m_tlb_hierarchy)
                     {
-                        if (tlb->contains(page_addr, fan_page_shift))
+                        if (tlb->contains(withTag(page_addr), fan_page_shift))   // TLBs hold tagged addresses (see m_addr_tag)
                         {
                             pages_in_tlb++;
                             break;  // Found in at least one TLB, no need to check others
@@ -1295,7 +1299,12 @@ std::vector<query_entry> TemporalPTEPrefetcher::performPrefetch(
                 {
                     // Sibling page within the same PTE cache line — lightweight lookup
                     m_stats.prefetch_attempts++;
-                    PTWResult sibling_result = pt->initializeWalk(target_addr, /*count*/ false, /*is_prefetch*/ true, /*restart_walk*/ true);
+                    // restart_walk: see configureModelFixes().  Allocating an
+                    // unmapped sibling matches the leader walk, which allocates
+                    // too (prefetch walks fault pages in to emulate steady state).
+                    PTWResult sibling_result = pt->initializeWalk(withTag(target_addr), /*count*/ false, /*is_prefetch*/ true, /*restart_walk*/ m_sibling_allocates);   // tagged for the page table (see m_addr_tag)
+                    if (sibling_result.fault_happened && !m_sibling_allocates)
+                        sibling_result.ppn = 0;   // unmapped and not allocated: skip this page
                     q.address = target_addr;
                     q.ppn = sibling_result.ppn;
                     q.page_size = sibling_result.page_size;
@@ -2721,7 +2730,7 @@ void TemporalPTEPrefetcher::flushPendingPayloadWritebacks(PageTable *pt)
                                        : (static_cast<IntPtr>(vpn) << m_page_shift);
 
         // Functional walk (no timing/count) to find the leaf/PMD PTE's PA.
-        PTWResult r = pt->initializeWalk(addr, /*count*/ false, /*is_prefetch*/ true, /*restart_walk*/ true);
+        PTWResult r = pt->initializeWalk(withTag(addr), /*count*/ false, /*is_prefetch*/ true, /*restart_walk*/ true);   // tagged for the page table (see m_addr_tag)
         if (r.fault_happened)
             continue;
 
@@ -2742,6 +2751,42 @@ void TemporalPTEPrefetcher::flushPendingPayloadWritebacks(PageTable *pt)
         }
     }
     m_pending_payload_wb.clear();
+}
+
+
+// ============================================================================
+// Logging
+// ============================================================================
+
+void TemporalPTEPrefetcher::configureModelFixes(bool sibling_allocates)
+{
+    m_sibling_allocates = sibling_allocates;
+    std::cout << logPrefix() << "config: region_shift=" << m_region_shift
+              << " (" << m_region_pages << " pages/region)"
+              << " conf_threshold=" << m_conf_threshold
+              << " mode=" << static_cast<int>(m_mode)
+              << " max_prefetch_depth=" << m_max_prefetch_depth
+              << " prefetch_on_hit=" << m_prefetch_on_hit
+              << " learn_on_hit=" << m_learn_on_hit
+              << " stride_direct=" << m_stride_direct_prefetch
+              << " side_table=" << m_payload_in_side_table
+              << " install_pq=" << m_prefetch_install_pq
+              << " sibling_allocates=" << m_sibling_allocates
+              << (m_sibling_allocates ? "" : "  (unmapped sibling pages are skipped, not allocated)")
+              << std::endl;
+}
+
+void TemporalPTEPrefetcher::appendSummary(std::ostream &os) const
+{
+    os << " queries=" << m_stats.queries
+       << " predicted=" << m_stats.predictions_issued
+       << " walks=" << m_stats.prefetch_attempts
+       << " walks_ok=" << m_stats.prefetch_successful
+       << " pages=" << m_stats.region_pages_prefetched
+       << " timely=" << m_stats.demand_hit_installed
+       << " late=" << m_stats.demand_hit_inflight
+       << " evicted_before_use=" << m_stats.demand_hit_installed_evicted
+       << " not_prefetched=" << m_stats.demand_miss_not_prefetched;
 }
 
 } // namespace ParametricDramDirectoryMSI
