@@ -126,13 +126,27 @@ namespace ParametricDramDirectoryMSI
                         {
                             String name = Sim()->getCfg()->getStringArray("perf_model/" + mmu_name + "/tlb_prefetch/pq" + pqIndexString + "/prefetcher_list", i);
                             prefetchers[i] = TLBprefetcherFactory::createTLBPrefetcher(mmu_name, name, pqIndexString, core, memory_manager, shmem_perf_model);
+                            LOG_ASSERT_ERROR(prefetchers[i] != NULL,
+                                "Failed to create TLB prefetcher '%s' for PQ %s", name.c_str(), pqIndexString.c_str());
                             std::cout << "[TLB] Created TLB Prefetcher of type: " << name << " for PQ " << pqIndex << std::endl;
 
                         }
 
                         ComponentLatency latency = ComponentLatency(core->getDvfsDomain(), Sim()->getCfg()->getInt("perf_model/" + mmu_name + "/tlb_prefetch/pq" + pqIndexString + "/access_latency"));
                         int assoc = Sim()->getCfg()->getInt("perf_model/" + mmu_name + "/tlb_prefetch/pq" + pqIndexString + "/assoc");
-                        TLB *pq = new TLB(pqname, pqconfigstring, core->getId(), latency, size, assoc, page_size_list, page_size_count, type, false, true, prefetchers, number_of_prefetchers);
+
+                        // Depth of the in-flight prefetch-walk queue.  Distinct from
+                        // "size" above, which is the PQ TLB's entry count.  Was
+                        // previously stuck at the TLB constructor default because this
+                        // argument was never passed.
+                        String max_in_flight_key = "perf_model/" + mmu_name + "/tlb_prefetch/pq" + pqIndexString + "/max_in_flight";
+                        int max_in_flight = Sim()->getCfg()->hasKey(max_in_flight_key)
+                            ? Sim()->getCfg()->getInt(max_in_flight_key) : 1000;
+                        LOG_ASSERT_ERROR(max_in_flight > 0,
+                            "perf_model/%s/tlb_prefetch/pq%s/max_in_flight must be > 0 (got %d)",
+                            mmu_name.c_str(), pqIndexString.c_str(), max_in_flight);
+
+                        TLB *pq = new TLB(pqname, pqconfigstring, core->getId(), latency, size, assoc, page_size_list, page_size_count, type, false, true, prefetchers, number_of_prefetchers, max_in_flight);
 
                         std::cout << "[TLB] Created TLB Prefetch Queue of size: " << size << " for PQ " << pqIndex << std::endl;
                         std::cout << "[TLB] PQ Properties - Size: " << size << ", Assoc: " << assoc << ", Page Size Count: " << page_size_count << std::endl;

@@ -131,6 +131,7 @@ namespace ParametricDramDirectoryMSI
 			SubsecondTime total_translation_latency;
 			SubsecondTime total_tlb_latency;
 			SubsecondTime total_fault_latency;
+			UInt64 pq_hit_latency_charges;   ///< translations served by the PQ alone (no L2 TLB hit), charged the PQ's latency
 			SubsecondTime walker_is_active;
 			SubsecondTime *tlb_latency_per_level;
 			UInt64 *tlb_hit_page_sizes;
