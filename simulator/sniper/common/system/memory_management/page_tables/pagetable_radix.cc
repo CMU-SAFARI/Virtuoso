@@ -175,8 +175,16 @@ namespace ParametricDramDirectoryMSI
                                                 sniper_handler->handle_page_fault(fault_ctx);
                                         }
 
-                                        if (!is_prefetch) stats.page_faults++;
-                                        else stats.prefetch_page_faults++;
+                                        // A pure probe (count = false, restart = false)
+                                        // handles no fault and allocates nothing; it only
+                                        // asks whether a mapping exists.  Counting it here
+                                        // double-counted every first touch that a
+                                        // prefetcher probed before the demand walk.
+                                        if (count || restart_walk_after_fault)
+                                        {
+                                                if (!is_prefetch) stats.page_faults++;
+                                                else stats.prefetch_page_faults++;
+                                        }
                                         is_pagefault = true;
 
                                         m_log->detailed("PAGE FAULT RESOLVED for address: ", SimLog::hex(address));
@@ -229,8 +237,16 @@ namespace ParametricDramDirectoryMSI
                                                 sniper_handler->handle_page_fault(fault_ctx);
                                         }
 
-                                        if (!is_prefetch) stats.page_faults++;
-                                        else stats.prefetch_page_faults++;
+                                        // A pure probe (count = false, restart = false)
+                                        // handles no fault and allocates nothing; it only
+                                        // asks whether a mapping exists.  Counting it here
+                                        // double-counted every first touch that a
+                                        // prefetcher probed before the demand walk.
+                                        if (count || restart_walk_after_fault)
+                                        {
+                                                if (!is_prefetch) stats.page_faults++;
+                                                else stats.prefetch_page_faults++;
+                                        }
                                         is_pagefault = true;
 
                                         m_log->detailed("Page fault resolved for address: ", SimLog::hex(address));
