@@ -13,6 +13,7 @@ public:
 		PREFETCH,
 		WARMUP,
 		PREFETCH_FROM_DRAM,   // Set alongside PREFETCH when the fill came from DRAM (vs NUCA/LLC)
+		PTW_PREFETCH,         // Page-table line filled by a prefetch page walk, not yet used by a demand walk
 		NUM_OPTIONS
 	};
 

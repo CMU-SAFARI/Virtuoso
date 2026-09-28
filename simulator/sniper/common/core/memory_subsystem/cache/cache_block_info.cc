@@ -10,6 +10,7 @@ const char *CacheBlockInfo::option_names[] =
         "prefetch",
         "warmup",
         "prefetch_from_dram",
+        "ptw_prefetch",
 };
 
 const char *CacheBlockInfo::getOptionName(option_t option)

@@ -1,4 +1,5 @@
 #include "nuca_cache.h"
+#include "metadata_info.h"
 #include "memory_manager_base.h"
 #include "pr_l1_cache_block_info.h"
 #include "config.hpp"
@@ -56,6 +57,10 @@ NucaCache::NucaCache(MemoryManagerBase* memory_manager, ShmemPerfModel* shmem_pe
    registerStatsMetric("nuca-cache", m_core_id, "writes", &m_writes);
    registerStatsMetric("nuca-cache", m_core_id, "read-misses", &m_read_misses);
    registerStatsMetric("nuca-cache", m_core_id, "write-misses", &m_write_misses);
+   m_ptw_pf_fills = m_ptw_pf_used = m_ptw_pf_evicted_unused = 0;
+   registerStatsMetric("nuca-cache", m_core_id, "ptw-pf-fills", &m_ptw_pf_fills);
+   registerStatsMetric("nuca-cache", m_core_id, "ptw-pf-used", &m_ptw_pf_used);
+   registerStatsMetric("nuca-cache", m_core_id, "ptw-pf-evicted-unused", &m_ptw_pf_evicted_unused);
 
 #if DEBUG_NUCA_CONTENT >= DEBUG_BASIC
    m_last_log_access_count = 0;
@@ -78,7 +83,7 @@ NucaCache::~NucaCache()
 }
 
 boost::tuple<SubsecondTime, HitWhere::where_t>
-NucaCache::read(IntPtr address, Byte* data_buf, SubsecondTime now, ShmemPerf *perf, bool count,bool is_metadata)
+NucaCache::read(IntPtr address, Byte* data_buf, SubsecondTime now, ShmemPerf *perf, bool count,bool is_metadata, core_id_t requester)
 {
    //std::cout<<"Nuca Read:"<<is_metadata<<"\n";
    HitWhere::where_t hit_where = HitWhere::MISS;
@@ -128,6 +133,17 @@ NucaCache::read(IntPtr address, Byte* data_buf, SubsecondTime now, ShmemPerf *pe
    
    if (block_info)
    {
+      // Page-table line brought in by a prefetch walk, now touched by a demand walk
+      core_id_t req = (requester == INVALID_CORE_ID) ? m_core_id : requester;
+      if (block_info->hasOption(CacheBlockInfo::PTW_PREFETCH)
+          && MetadataContext::isValid(req)
+          && MetadataContext::get(req).is_metadata
+          && !MetadataContext::get(req).is_ptw_prefetch)
+      {
+         ++m_ptw_pf_used;
+         block_info->clearOption(CacheBlockInfo::PTW_PREFETCH);
+      }
+
       m_cache->accessSingleLine(address, Cache::LOAD, data_buf, m_cache_block_size, now + latency, true);
 
       latency += accessDataArray(Cache::LOAD, now + latency, perf);
@@ -179,7 +195,8 @@ NucaCache::read(IntPtr address, Byte* data_buf, SubsecondTime now, ShmemPerf *pe
 }
 
 boost::tuple<SubsecondTime, HitWhere::where_t>
-NucaCache::write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_address, Byte* evict_buf, SubsecondTime now, bool count,bool is_metadata)
+NucaCache::write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_address, Byte* evict_buf, SubsecondTime now, bool count,bool is_metadata,
+   core_id_t requester, CacheBlockInfo::block_type_t block_type)
 {
    HitWhere::where_t hit_where = HitWhere::MISS;
 
@@ -201,6 +218,25 @@ NucaCache::write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_a
       m_cache->insertSingleLine(address, data_buf,
          &eviction, &evict_address, &evict_block_info, evict_buf,
          now + latency);
+
+      // Tag page-table lines filled on behalf of a TLB-prefetcher page walk
+      core_id_t req = (requester == INVALID_CORE_ID) ? m_core_id : requester;
+      if (CacheBlockInfo::isMetadataBlockType(block_type)
+          && MetadataContext::isValid(req)
+          && MetadataContext::get(req).is_metadata
+          && MetadataContext::get(req).is_ptw_prefetch)
+      {
+         CacheBlockInfo* inserted = m_cache->peekSingleLine(address);
+         if (inserted)
+         {
+            inserted->setOption(CacheBlockInfo::PTW_PREFETCH);
+            ++m_ptw_pf_fills;
+         }
+      }
+
+      // Page-table line fetched by a prefetch walk, evicted without a demand walk using it
+      if (eviction && evict_block_info.hasOption(CacheBlockInfo::PTW_PREFETCH))
+         ++m_ptw_pf_evicted_unused;
 
       if (eviction)
       {

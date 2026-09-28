@@ -17,6 +17,7 @@ struct MetadataInfo
    UInt32 table_id;         // Which table (for multi-table walks, e.g., different page sizes)
    UInt64 ptw_id;           // Unique identifier for this PTW (for correlation)
    bool is_pte;             // True if this is the final PTE access that completes the walk
+   bool is_ptw_prefetch = false; // True if the walk is a prefetch walk (TLB prefetcher), not a demand walk
    
    // Data access tracking (set when data access follows a PTW)
    bool is_data_after_ptw;  // True if this is a data access that followed a PTW

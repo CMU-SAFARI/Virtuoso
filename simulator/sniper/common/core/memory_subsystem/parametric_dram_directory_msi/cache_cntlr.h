@@ -20,6 +20,7 @@
 #include "boost/tuple/tuple.hpp"
 #include "utopia_cache_template.h"
 #include "mmu_cache_interface.h"
+#include "metadata_info.h"   // MetadataContext (isPtwPrefetchRequest)
 class DramCntlrInterface;
 class ATD;
 
@@ -314,6 +315,21 @@ namespace ParametricDramDirectoryMSI
 
            UInt64 prefetches;
            UInt64 prefetches_fillup; // We track only the prefetches that actually caused a fillup in the L2 cache
+
+           // The PREFETCH line option is set both by the cache's data
+           // prefetchers (DATA lines) and by tagMMUPrefetch for lines a TLB-
+           // prefetcher page walk brought in (page-table lines).  The
+           // prefetches/hits-prefetch/evict-prefetch counters count DATA lines
+           // only; the mmu_* counters below count page-table lines.  Old
+           // combined value = data counter + mmu counter.
+           UInt64 mmu_prefetches;              // PT lines tagged by tagMMUPrefetch (walk access served from beyond this cache)
+           UInt64 mmu_prefetches_fillup;       // ...of which filled from DRAM
+           UInt64 mmu_hits_prefetch;           // demand access hit a tagged PT line (first use)
+           UInt64 mmu_hits_prefetch_dram;      // ...line had come from DRAM
+           UInt64 mmu_hits_prefetch_nuca;      // ...line had come from the LLC
+           UInt64 mmu_evict_prefetch;          // tagged PT line evicted unused
+           UInt64 mmu_evict_prefetch_dram;
+           UInt64 mmu_evict_prefetch_nuca;
            UInt64 late_metadata_prefetches;
 
            // Per-fill-source useful/wasted (Stat 2)
@@ -321,6 +337,10 @@ namespace ParametricDramDirectoryMSI
            UInt64 hits_prefetch_nuca;     // useful prefetch fills sourced from NUCA/LLC
            UInt64 evict_prefetch_dram;    // wasted prefetch fills sourced from DRAM
            UInt64 evict_prefetch_nuca;    // wasted prefetch fills sourced from NUCA/LLC
+           // Page-table lines filled by TLB-prefetcher page walks (PTW_PREFETCH)
+           UInt64 ptw_pf_fills;           // lines inserted by a prefetch walk
+           UInt64 ptw_pf_used;            // later touched by a demand walk (includes merging with the in-flight fill)
+           UInt64 ptw_pf_evicted_unused;  // evicted before any demand walk touched them
 
            UInt64 spec_evict_total;    // L2 evictions caused by speculative prefetches
            UInt64 spec_evict_harmful;  // of those, demand misses within access window
@@ -523,6 +543,22 @@ namespace ParametricDramDirectoryMSI
             m_doing_spec_prefetch = false;
          }
 
+         /// A PREFETCH-tagged line was brought in by a TLB-prefetcher page walk
+         /// (not by a data prefetcher) iff it holds page-table data: the data
+         /// prefetchers only ever fill DATA lines.
+         /// True while this core is performing a TLB-prefetcher page walk.
+         /// Such a request must not consume a line's PREFETCH / per-PTE credit:
+         /// only a demand access proves a prefetched line useful.
+         bool isPtwPrefetchRequest() const
+         {
+            return MetadataContext::isValid(m_core_id) && MetadataContext::get(m_core_id).is_ptw_prefetch;
+         }
+
+         static bool isMMUPrefetchLine(CacheBlockInfo *b)
+         {
+            return b && CacheBlockInfo::isMetadataBlockType(b->getBlockType());
+         }
+
          void tagMMUPrefetch(IntPtr cache_address, HitWhere::where_t hit_where = HitWhere::UNKNOWN) override
          {
             // Only tag with PREFETCH when the walk actually brought data into
@@ -538,11 +574,13 @@ namespace ParametricDramDirectoryMSI
             if (info) {
                info->setOption(CacheBlockInfo::PREFETCH);
                info->markPrefetchedLine();   // per-PTE (sub-line) credit tracking
-               ++stats.prefetches;
+               // Own counters: stats.prefetches / prefetches_fillup belong to the
+               // cache's data prefetchers (see isMMUPrefetchLine).
+               ++stats.mmu_prefetches;
                bool from_dram = (hit_where == HitWhere::DRAM_LOCAL || hit_where == HitWhere::DRAM_REMOTE || hit_where == HitWhere::DRAM);
                if (from_dram) {
                   info->setOption(CacheBlockInfo::PREFETCH_FROM_DRAM);
-                  ++stats.prefetches_fillup;
+                  ++stats.mmu_prefetches_fillup;
                } else {
                   info->clearOption(CacheBlockInfo::PREFETCH_FROM_DRAM);
                }
