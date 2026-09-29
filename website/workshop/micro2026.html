@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Virtuoso at MICRO 2026: the third edition of our workshop and tutorial on ideas and infrastructures for novel hardware/OS interfaces. Saturday afternoon, October 31, 2026, in Athens, Greece.">
+    <meta name="theme-color" content="#0d4f70">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Virtuoso Workshop &amp; Tutorial at MICRO 2026">
+    <meta property="og:description" content="Ideas and infrastructures for novel HW/OS interfaces. An afternoon of invited talks and hands-on work with Virtuoso in Athens, October 31, 2026.">
+    <meta property="og:image" content="https://cmu-safari.github.io/Virtuoso/img/virtuoso-logo.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <title>Virtuoso Workshop &amp; Tutorial | MICRO 2026</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&amp;family=GFS+Didot&amp;family=GFS+Neohellenic:ital,wght@0,400;0,700;1,400;1,700&amp;display=swap" rel="stylesheet">
+    <link rel="icon" href="../img/favicon.ico">
+
+    <style>
+        :root {
+            --ink: #123548;
+            --ink-deep: #0b2837;
+            --ink-soft: #526c79;
+            --paper: #f7f5ef;
+            --paper-deep: #e9eee8;
+            --white: #fffdf8;
+            --sky: #d9ecf2;
+            --aegean: #1a6fb5;
+            --sand: #f6e9cf;
+            --red: #d0603f;
+            --red-dark: #a3452c;
+            --teal: #0d6b88;
+            --teal-deep: #164f67;
+            --yellow: #e4b968;
+            --olive: #667852;
+            --line: #cbd8d8;
+            --line-light: rgba(255, 255, 255, 0.22);
+            --shadow: 0 16px 40px rgba(18, 53, 72, 0.1);
+            /* Greek Font Society faces: Didot for display, Neohellenic for labels. Both ship Latin glyphs. */
+            --serif: 'GFS Didot', 'Didot', 'Bodoni MT', 'Times New Roman', serif;
+            --label: 'GFS Neohellenic', 'DM Sans', 'Helvetica Neue', Arial, sans-serif;
+            --sans: 'DM Sans', 'Helvetica Neue', Arial, sans-serif;
+            --mono: 'SFMono-Regular', 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
+        }
+
+        * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body {
+            margin: 0;
+            color: var(--ink);
+            background: var(--paper);
+            font-family: var(--sans);
+            line-height: 1.65;
+            -webkit-font-smoothing: antialiased;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            opacity: 0.42;
+            background-image: radial-gradient(rgba(13, 107, 136, 0.16) 1.2px, transparent 1.3px);
+            background-size: 26px 26px;
+            pointer-events: none;
+        }
+        a { color: inherit; }
+        img { max-width: 100%; }
+        button, a { -webkit-tap-highlight-color: transparent; }
+        :focus-visible { outline: 3px solid var(--yellow); outline-offset: 3px; }
+        .icon { width: 1em; height: 1em; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+        .container { width: min(1140px, calc(100% - 40px)); margin: 0 auto; }
+        /* Grid and flex children must be allowed to shrink below their content's min width,
+           otherwise the terminal's long command line widens the layout on narrow screens. */
+        .hero-content > *, .intro > *, .lab-layout > *, .agenda > *, .logistics-grid > *, .section-head > *, .speak-cta > * { min-width: 0; }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.55rem;
+            margin: 0 0 1rem;
+            color: var(--red-dark);
+            font-size: 0.76rem;
+            font-weight: 800;
+            letter-spacing: 0.13em;
+            text-transform: uppercase;
+        }
+        .eyebrow::before { content: ''; width: 28px; height: 3px; background: var(--red); }
+        h1, h2, h3, h4 { margin: 0; font-family: var(--serif); line-height: 1.1; letter-spacing: 0.005em; word-spacing: -0.08em; font-weight: 400; }
+        h2 { max-width: 820px; font-size: clamp(2.3rem, 5.4vw, 4.2rem); }
+        h3 { font-size: 1.5rem; }
+        p { margin: 0; }
+        .section { padding: 96px 0; }
+        .section-head { display: flex; justify-content: space-between; align-items: end; gap: 2rem; margin-bottom: 48px; }
+        .section-head > p { max-width: 470px; color: var(--ink-soft); }
+        .chapter { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; color: var(--teal); font-size: 0.74rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+        .chapter span { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid currentColor; font-family: var(--serif); font-size: 1rem; }
+        .on-dark .chapter { color: var(--yellow); }
+        .on-dark .eyebrow { color: var(--yellow); }
+        .on-dark .eyebrow::before { background: var(--yellow); }
+        .on-dark .section-head > p { color: rgba(255, 255, 255, 0.66); }
+
+        /* ---------- Progress bar + header ---------- */
+        .progress { position: fixed; top: 0; left: 0; z-index: 30; height: 3px; width: 0; background: linear-gradient(90deg, var(--yellow), var(--red)); transition: width 80ms linear; }
+        .site-header {
+            position: fixed;
+            inset: 0 0 auto;
+            z-index: 20;
+            color: var(--white);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+            background: rgba(13, 79, 112, 0.94);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            transition: background 220ms ease, box-shadow 220ms ease;
+        }
+        .site-header.scrolled { background: rgba(11, 40, 55, 0.96); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18); }
+        .nav-wrap { height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 2rem; }
+        .brand { display: flex; align-items: center; gap: 0.85rem; text-decoration: none; }
+        /* The logo is an opaque RGB PNG (black + blue on white), so on dark surfaces it sits on a
+           deliberate white plate instead of a hacked-away background. */
+        .logo-plate { display: inline-flex; align-items: center; background: #fff; border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22); }
+        .brand .logo-plate { padding: 5px 10px; }
+        .brand-mark { display: block; width: auto; height: 26px; }
+        .brand-edition { padding-left: 0.85rem; border-left: 1px solid rgba(255, 255, 255, 0.35); font: 400 0.92rem/1.2 var(--serif); letter-spacing: 0.01em; white-space: nowrap; }
+        .brand-edition small { display: block; color: var(--yellow); font: 800 0.62rem var(--sans); letter-spacing: 0.14em; text-transform: uppercase; }
+        .nav-links { display: flex; align-items: center; gap: 1.45rem; margin: 0; padding: 0; list-style: none; }
+        .nav-links a { position: relative; color: rgba(255, 253, 249, 0.8); font-size: 0.82rem; font-weight: 700; text-decoration: none; transition: color 160ms ease; }
+        .nav-links a:not(.nav-cta)::after { content: ''; position: absolute; left: 0; right: 0; bottom: -6px; height: 2px; background: var(--yellow); transform: scaleX(0); transform-origin: left; transition: transform 200ms ease; }
+        .nav-links a:hover, .nav-links a:focus-visible, .nav-links a.active { color: var(--white); }
+        .nav-links a.active::after, .nav-links a:hover::after { transform: scaleX(1); }
+        .nav-cta { padding: 0.62rem 0.9rem; border: 1px solid rgba(255, 255, 255, 0.5); }
+        .nav-cta:hover { border-color: var(--white); background: rgba(255, 255, 255, 0.08); }
+        .menu-toggle { display: none; width: 42px; height: 42px; padding: 0; color: var(--white); background: none; border: 1px solid rgba(255, 255, 255, 0.35); cursor: pointer; }
+        .menu-toggle .icon { width: 20px; height: 20px; }
+        .menu-toggle .icon-x { display: none; }
+        .menu-toggle[aria-expanded="true"] .icon-menu { display: none; }
+        .menu-toggle[aria-expanded="true"] .icon-x { display: block; }
+
+        /* ---------- Hero ---------- */
+        .hero {
+            position: relative;
+            min-height: min(920px, 96vh);
+            display: flex;
+            align-items: center;
+            text-align: center;
+            color: var(--white);
+            isolation: isolate;
+            overflow: hidden;
+            background-color: #0d4f70;
+            background-image: url('https://images.unsplash.com/photo-1603565816030-6b389eeb23cb?auto=format&fit=crop&w=2200&q=88');
+            background-position: center 56%;
+            background-size: cover;
+        }
+        .hero::before { content: ''; position: absolute; inset: 0; z-index: -1; background: radial-gradient(ellipse 70% 80% at 50% 45%, rgba(8, 54, 78, 0.9), rgba(8, 54, 78, 0.55) 60%, rgba(8, 54, 78, 0.35)); }
+        .hero::after { content: ''; position: absolute; inset: auto 0 0; z-index: -1; height: 45%; background: linear-gradient(transparent, rgba(8, 54, 78, 0.75)); }
+        .hero-content { display: flex; flex-direction: column; align-items: center; padding: 130px 0 64px; }
+        .hero-logo { padding: 16px 30px; border-radius: 10px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.25); animation: rise 900ms ease both; }
+        .hero-logo img { display: block; width: auto; height: clamp(54px, 8vw, 84px); }
+        @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+        .edition-line { display: flex; align-items: center; justify-content: center; gap: 1rem; margin: 34px 0 22px; color: var(--yellow); font-size: 0.8rem; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; }
+        .edition-line::before, .edition-line::after { content: ''; width: 56px; height: 1px; background: currentColor; }
+        .hero h1 { max-width: 1040px; margin: 0 auto; font-size: clamp(3rem, 6.6vw, 5.9rem); line-height: 1.05; text-wrap: balance; text-shadow: 0 2px 24px rgba(4, 30, 45, 0.55); }
+        .hero h1 em { font-style: italic; color: var(--yellow); }
+        .hero-summary { max-width: 700px; margin: 24px auto 0; color: rgba(255, 253, 249, 0.88); font-size: clamp(1rem, 2vw, 1.2rem); text-wrap: balance; }
+        .hero-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 30px; }
+        .event-facts { display: grid; grid-template-columns: auto repeat(3, 1fr); gap: 1px; width: min(100%, 960px); margin: 44px auto 0; background: rgba(255, 255, 255, 0.28); border: 1px solid rgba(255, 255, 255, 0.28); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+        .event-fact { padding: 18px 16px; background: rgba(8, 54, 78, 0.6); }
+        .event-fact span { display: block; color: rgba(255, 255, 255, 0.62); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+        .event-fact strong { display: block; margin-top: 0.25rem; font-family: var(--serif); font-size: 1.08rem; font-weight: 400; white-space: nowrap; }
+        .countdown { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 26px; }
+        .countdown-label { color: rgba(255, 255, 255, 0.7); font-size: 0.7rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+        .countdown-units { display: flex; gap: 6px; }
+        .countdown-unit { min-width: 58px; padding: 8px 6px; text-align: center; border: 1px solid rgba(255, 255, 255, 0.4); background: rgba(8, 54, 78, 0.45); }
+        .countdown-unit b { display: block; font: 400 1.35rem/1.1 var(--serif); font-variant-numeric: tabular-nums; }
+        .countdown-unit small { display: block; margin-top: 2px; color: rgba(255, 255, 255, 0.62); font-size: 0.58rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+        .countdown-done { display: none; font: 400 1.05rem var(--serif); color: var(--yellow); }
+        .countdown.is-done .countdown-units, .countdown.is-done .countdown-label { display: none; }
+        .countdown.is-done .countdown-done { display: block; }
+
+        .btn { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; gap: 0.55rem; padding: 0.76rem 1.1rem; border: 1px solid transparent; background: var(--red); color: var(--white); font-size: 0.82rem; font-weight: 800; letter-spacing: 0.02em; text-decoration: none; cursor: pointer; transition: background 180ms ease, border-color 180ms ease, transform 180ms ease; }
+        .btn:hover { background: var(--red-dark); transform: translateY(-2px); }
+        .btn-secondary { border-color: rgba(255, 255, 255, 0.65); background: transparent; }
+        .btn-secondary:hover { border-color: var(--white); background: rgba(255, 255, 255, 0.1); }
+        .btn-dark { background: var(--ink); }
+        .btn-dark:hover { background: #263842; }
+        .btn-outline-dark { border-color: var(--ink); background: transparent; color: var(--ink); }
+        .btn-outline-dark:hover { background: var(--ink); color: var(--white); }
+        .btn .icon { width: 17px; height: 17px; }
+
+        /* ---------- Ticker ---------- */
+        .ticker { overflow: hidden; background: #dbe8e2; color: var(--ink); border-bottom: 1px solid var(--line); }
+        .ticker-track { width: max-content; display: flex; animation: marquee 30s linear infinite; }
+        .ticker:hover .ticker-track { animation-play-state: paused; }
+        .ticker-group { display: flex; align-items: center; gap: 2.5rem; padding: 13px 1.25rem; font-size: 0.74rem; font-weight: 800; letter-spacing: 0.11em; text-transform: uppercase; white-space: nowrap; }
+        .ticker-group span::after { content: '/'; margin-left: 2.5rem; color: var(--red-dark); }
+        @keyframes marquee { to { transform: translateX(-50%); } }
+
+        /* ---------- About ---------- */
+        .manifesto { background: var(--white); }
+        .intro { display: grid; justify-items: start; gap: 22px; max-width: 760px; margin: 0 auto; text-align: left; }
+        .intro .chapter { margin-bottom: 6px; }
+        .intro .eyebrow { margin: 0; }
+        .lead { font: 400 clamp(1.4rem, 2.4vw, 1.8rem)/1.4 var(--serif); word-spacing: -0.06em; text-wrap: pretty; }
+        .lead .accent { color: var(--aegean); }
+        .lead-callout { justify-self: center; width: 100%; text-align: center; text-wrap: balance; }
+        .intro p:not(.lead) { max-width: 68ch; color: var(--ink-soft); font-size: 1.02rem; text-wrap: pretty; }
+        .intro-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+        .btn-github { background: var(--ink-deep); }
+        .btn-github:hover { background: #000; }
+        .link-arrow { display: inline-flex; align-items: center; gap: 0.55rem; width: fit-content; color: var(--red-dark); font-weight: 800; text-decoration: none; }
+        .link-arrow:hover { text-decoration: underline; }
+
+        /* ---------- Program ---------- */
+        .program { background: var(--teal-deep); color: var(--white); }
+        .agenda { display: grid; grid-template-columns: 0.9fr 1.1fr; gap: clamp(2.5rem, 6vw, 6rem); margin-top: 8px; align-items: start; }
+        .agenda-copy p { margin-top: 18px; color: rgba(255, 255, 255, 0.68); }
+        .agenda-copy h3 { font-size: clamp(1.7rem, 3vw, 2.4rem); }
+        .tag { display: inline-block; margin-top: 22px; padding: 6px 10px; border: 1px solid var(--yellow); color: var(--yellow); font-size: 0.68rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
+        .timeline { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line-light); }
+        .timeline li { display: grid; grid-template-columns: 128px 1fr; gap: 20px; padding: 16px 0; border-bottom: 1px solid var(--line-light); }
+        .timeline time { font: 600 0.86rem/1.6 var(--mono); color: var(--yellow); white-space: nowrap; }
+        .timeline strong { display: block; font-family: var(--serif); font-size: 1.08rem; font-weight: 400; }
+        .timeline span { display: block; color: rgba(255, 255, 255, 0.62); font-size: 0.84rem; }
+        .timeline li.break { background: rgba(255, 255, 255, 0.04); }
+        .timeline li.break time { color: rgba(255, 255, 255, 0.5); }
+        .timeline li.break strong { font-family: var(--sans); font-size: 0.8rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255, 255, 255, 0.55); }
+        .speak-cta { display: flex; align-items: center; justify-content: space-between; gap: 2rem; margin-top: 60px; padding: 28px 32px; border: 1px solid var(--yellow); background: rgba(228, 185, 104, 0.08); }
+        .speak-cta h3 { font-size: 1.5rem; }
+        .speak-cta p { margin-top: 8px; max-width: 620px; color: rgba(255, 255, 255, 0.72); font-size: 0.92rem; }
+
+        /* ---------- Hands-on ---------- */
+        .lab { background: var(--paper); }
+        .lab-layout { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(2.5rem, 6vw, 5rem); align-items: start; }
+        .lab-copy .eyebrow { margin: 0 0 18px; }
+        .lab-copy > p:not(.eyebrow) { color: var(--ink-soft); }
+        .lab-terminal { margin-top: 28px; overflow: hidden; background: var(--ink); color: #d9e6e5; box-shadow: var(--shadow); }
+        .terminal-top { display: flex; align-items: center; gap: 7px; padding: 11px 14px; background: #22323b; }
+        .terminal-top .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); }
+        .terminal-top .dot:nth-child(2) { background: var(--yellow); }
+        .terminal-top .dot:nth-child(3) { background: var(--teal); }
+        .terminal-top .terminal-title { flex: 1; margin-left: 8px; color: #7f969e; font: 600 0.72rem var(--mono); }
+        .copy-btn { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid rgba(255, 255, 255, 0.25); background: transparent; color: #d9e6e5; font: 700 0.68rem var(--sans); letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; }
+        .copy-btn:hover { border-color: var(--yellow); color: var(--yellow); }
+        .copy-btn .icon { width: 13px; height: 13px; }
+        .terminal-code { margin: 0; padding: 22px 24px; font: 0.8rem/1.85 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+        .terminal-code .prompt { color: var(--yellow); }
+        .terminal-code .muted { color: #7f969e; }
+        .lab-layout > .reveal:last-child { align-self: stretch; }
+        .takeaways { margin-top: 0; height: 100%; display: flex; flex-direction: column; justify-content: center; padding: 28px 30px; background: var(--white); border-left: 4px solid var(--teal); box-shadow: var(--shadow); }
+        .takeaways h3 { font-size: 1.25rem; }
+        .takeaways ul { display: grid; gap: 10px; margin: 16px 0 0; padding: 0; list-style: none; }
+        .takeaways li { display: flex; gap: 10px; align-items: flex-start; color: var(--ink-soft); font-size: 0.9rem; }
+        .takeaways li .icon { margin-top: 4px; width: 15px; height: 15px; color: var(--teal); stroke-width: 3; }
+
+        /* ---------- Attend ---------- */
+        .logistics { background: var(--teal); color: var(--white); }
+        .logistics-grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: clamp(3rem, 8vw, 8rem); }
+        .h2-compact { font-size: clamp(1.7rem, 3vw, 2.4rem); }
+        .logistics-list { margin-top: 28px; border-top: 1px solid rgba(255, 255, 255, 0.34); }
+        .logistics-row { display: grid; grid-template-columns: 120px 1fr; gap: 28px; padding: 20px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.34); }
+        .logistics-row span { color: rgba(255, 255, 255, 0.68); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+        .logistics-row strong { font-family: var(--serif); font-size: 1.12rem; font-weight: 400; }
+        .logistics-row small { display: block; margin-top: 4px; color: rgba(255, 255, 255, 0.66); font-size: 0.82rem; }
+        .logistics-row a { color: var(--yellow); }
+        .logistics-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+        .prep { padding: 32px; border: 1px solid rgba(255, 255, 255, 0.42); background: rgba(8, 54, 78, 0.18); }
+        .prep h3 { font-size: 1.6rem; }
+        .prep p { margin-top: 10px; color: rgba(255, 255, 255, 0.7); font-size: 0.9rem; }
+        .checklist { display: grid; gap: 14px; margin: 24px 0 0; padding: 0; list-style: none; }
+        .checklist li { display: grid; grid-template-columns: 22px 1fr; gap: 12px; align-items: start; color: rgba(255, 255, 255, 0.85); font-size: 0.9rem; }
+        .checklist li::before { content: ''; width: 18px; height: 18px; margin-top: 3px; border: 1.5px solid var(--yellow); background: linear-gradient(135deg, transparent 45%, var(--yellow) 45% 55%, transparent 55%); }
+
+        /* ---------- Organizers ---------- */
+        .people { background: var(--white); }
+        .people-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 460px)); justify-content: center; gap: 24px; }
+        .person { display: flex; flex-direction: column; gap: 16px; padding: 24px; background: var(--paper); border: 1px solid var(--line); transition: transform 220ms ease, box-shadow 220ms ease; }
+        .person:hover { transform: translateY(-4px); box-shadow: var(--shadow); }
+        .person-photo { display: flex; align-items: center; gap: 16px; }
+        .person-photo img { width: 72px; height: 72px; flex: none; border-radius: 50%; object-fit: cover; object-position: center 22%; border: 3px solid var(--white); box-shadow: 0 0 0 2px var(--yellow); transition: transform 300ms cubic-bezier(.34,1.56,.64,1); }
+        .person:hover .person-photo img { transform: scale(1.06) rotate(-4deg); }
+        .person-head h3 { font-size: 1.25rem; line-height: 1.15; }
+        .person-head p { margin-top: 3px; color: var(--ink-soft); font-size: 0.82rem; }
+        .person-bio { display: flex; flex-direction: column; flex: 1; gap: 14px; }
+        .person-bio p { color: var(--ink-soft); font-size: 0.88rem; }
+        .person-bio a { margin-top: auto; font-size: 0.8rem; }
+
+        /* ---------- FAQ ---------- */
+
+        /* ---------- Updates ---------- */
+
+        /* ---------- Past editions ---------- */
+        .past { background: var(--paper-deep); }
+        .past-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 44px; }
+        .past-card { display: flex; flex-direction: column; gap: 16px; padding: 30px; background: var(--white); border: 1px solid var(--line); border-top: 3px solid var(--teal); transition: transform 220ms ease, box-shadow 220ms ease; }
+        .past-card:hover { transform: translateY(-4px); box-shadow: var(--shadow); }
+        .past-meta { display: flex; justify-content: space-between; gap: 1rem; color: var(--red-dark); font-size: 0.74rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+        .past-card h3 { font-size: clamp(1.5rem, 2.6vw, 2rem); }
+        .past-card p { color: var(--ink-soft); font-size: 0.92rem; }
+        .past-links { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: auto; padding-top: 8px; }
+        .past-links a { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: 0.82rem; font-weight: 800; text-decoration: none; }
+        .past-links a:hover { color: var(--red-dark); }
+        .past-links .icon { width: 15px; height: 15px; }
+
+        /* ---------- Footer ---------- */
+        .site-footer { padding: 56px 0 40px; background: var(--ink-deep); color: var(--white); }
+        .footer-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: start; }
+        .footer-col h4 { margin-bottom: 14px; font: 800 0.7rem var(--sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--yellow); }
+        .footer-col ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 9px; }
+        .footer-col a { color: rgba(255, 255, 255, 0.76); font-size: 0.86rem; font-weight: 600; text-decoration: none; }
+        .footer-col a:hover { color: var(--white); text-decoration: underline; }
+        .footer-bottom { display: flex; justify-content: space-between; align-items: center; gap: 2rem; margin-top: 44px; padding-top: 22px; border-top: 1px solid rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.55); font-size: 0.78rem; }
+        .safari-plate { display: inline-block; padding: 8px 12px; background: #fff; }
+        .safari-plate img { display: block; height: 38px; width: auto; }
+
+        .back-to-top { position: fixed; right: 22px; bottom: 22px; z-index: 15; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 0; background: var(--red); color: var(--white); opacity: 0; visibility: hidden; cursor: pointer; transition: opacity 180ms ease, visibility 180ms ease, transform 180ms ease; }
+        .back-to-top.show { opacity: 1; visibility: visible; }
+        .back-to-top:hover { transform: translateY(-2px); }
+        .back-to-top .icon { width: 19px; height: 19px; }
+
+        /* ---------- Label face ---------- */
+        .eyebrow, .chapter, .edition-line, .nav-links a, .btn, .ticker-group, .event-fact span,
+        .countdown-label, .countdown-unit small, .logistics-row span, .footer-col h4, .tag, .past-meta, .copy-btn,
+        .brand-edition small, .timeline li.break strong, .past-links a, .link-arrow, .person-head p { font-family: var(--label); }
+        .eyebrow { font-size: 0.9rem; letter-spacing: 0.16em; }
+        .chapter { font-size: clamp(1.6rem, 2.6vw, 2.1rem); letter-spacing: 0.14em; gap: 18px; }
+        .chapter span { width: 58px; height: 58px; font-family: var(--serif); font-size: 1.6rem; }
+        .edition-line { font-size: 0.95rem; letter-spacing: 0.18em; }
+        .nav-links a { font-size: 0.98rem; letter-spacing: 0.06em; }
+        .btn { font-size: 0.98rem; letter-spacing: 0.08em; text-transform: uppercase; }
+        .ticker-group { font-size: 0.88rem; letter-spacing: 0.14em; }
+        .event-fact span, .countdown-label, .logistics-row span, .footer-col h4, .tag, .past-meta { font-size: 0.82rem; letter-spacing: 0.16em; }
+        .countdown-unit small { font-size: 0.7rem; letter-spacing: 0.14em; }
+        .brand-edition small { font-size: 0.74rem; letter-spacing: 0.18em; }
+        .timeline li.break strong { font-size: 0.95rem; letter-spacing: 0.14em; }
+        .past-links a, .link-arrow { font-size: 1rem; letter-spacing: 0.04em; }
+        .person-head p { font-size: 0.95rem; letter-spacing: 0.06em; text-transform: uppercase; }
+        .copy-btn { font-size: 0.8rem; }
+
+        /* ---------- Playful layer ---------- */
+        ::selection { background: var(--yellow); color: var(--ink-deep); }
+        .btn, .nav-cta, .copy-btn, .back-to-top { border-radius: 999px; }
+        .btn:hover { transform: translateY(-3px) scale(1.02); }
+        .btn:active { transform: translateY(0) scale(0.98); }
+        .logo-plate, .hero-logo, .lab-terminal, .speak-cta, .takeaways, .prep, .person, .past-card, .event-facts, .countdown-unit, .safari-plate, .tag { border-radius: 14px; }
+        .brand .logo-plate { border-radius: 10px; }
+        .hero-logo { border-radius: 18px; transition: transform 300ms cubic-bezier(.34,1.56,.64,1); }
+        .hero-logo:hover { transform: rotate(-2deg) scale(1.03); }
+        .chapter span { border-radius: 50%; background: var(--yellow); border-color: var(--yellow); color: var(--ink-deep); transform: rotate(-6deg); }
+        .eyebrow::before { border-radius: 999px; }
+        .edition-line::before, .edition-line::after { width: 8px; height: 8px; border-radius: 50%; }
+        .hero h1 .marker { position: relative; display: inline-block; }
+        .hero h1 .marker svg { position: absolute; left: -2%; right: -2%; bottom: -0.12em; width: 104%; height: 0.28em; overflow: visible; }
+        .hero h1 .marker path { fill: none; stroke: var(--yellow); stroke-width: 6; stroke-linecap: round; stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw 1.1s ease 700ms forwards; }
+        @keyframes draw { to { stroke-dashoffset: 0; } }
+        .hero-wave { position: absolute; left: 0; right: 0; bottom: -1px; width: 100%; height: 56px; display: block; color: var(--sky); }
+        .hero { padding-bottom: 30px; }
+        .ticker { background: var(--sky); border-bottom: 0; }
+        .ticker-group span::after { content: '\2726'; color: var(--red); }
+        .tag { padding: 7px 14px; border-radius: 999px; background: var(--yellow); color: var(--ink-deep); border-color: var(--yellow); transform: rotate(-3deg); }
+        .timeline li.break { border-radius: 10px; }
+        .timeline li.break strong { color: var(--yellow); }
+        .speak-cta { border-style: dashed; border-width: 2px; }
+        .takeaways { border-left: 0; border-top: 5px solid var(--yellow); }
+        .takeaways li .icon { color: var(--red); }
+        .checklist li::before { border-radius: 5px; }
+        .person { border-top: 0; }
+        .person:hover { transform: translateY(-5px) rotate(-0.8deg); }
+        .person:nth-child(2):hover { transform: translateY(-5px) rotate(0.8deg); }
+        .past { background: var(--sky); }
+        .past-card { border: 0; border-top: 6px solid var(--teal); }
+        .past-card:nth-child(2) { border-top-color: var(--red); }
+        .past-card:hover { transform: translateY(-5px) rotate(0.6deg); }
+        .past-card:nth-child(2):hover { transform: translateY(-5px) rotate(-0.6deg); }
+        .past-meta span:first-child { padding: 3px 10px; border-radius: 999px; background: var(--sand); }
+        .countdown-unit { border-radius: 12px; }
+        .countdown-unit b { color: var(--yellow); }
+        .back-to-top:hover { transform: translateY(-3px) rotate(-8deg); }
+        .progress { height: 4px; border-radius: 0 999px 999px 0; }
+
+        [id] { scroll-margin-top: 88px; }
+        .reveal { opacity: 0; transform: translateY(20px); transition: opacity 650ms ease, transform 650ms ease; }
+        .reveal.visible { opacity: 1; transform: none; }
+
+        @media (max-width: 960px) {
+            .nav-links { display: none; position: absolute; top: 72px; left: 0; right: 0; padding: 22px 20px 26px; background: var(--ink-deep); border-top: 1px solid rgba(255, 255, 255, 0.15); flex-direction: column; align-items: flex-start; gap: 18px; }
+            .nav-links.open { display: flex; }
+            .nav-links a:not(.nav-cta)::after { display: none; }
+            .menu-toggle { display: grid; place-items: center; }
+            .hero { min-height: 0; }
+            .lab-layout, .logistics-grid, .agenda { grid-template-columns: 1fr; }
+            .event-facts { grid-template-columns: 1fr 1fr; }
+            .people-grid { grid-template-columns: 1fr 1fr; }
+            .footer-wrap { grid-template-columns: 1fr 1fr; }
+        }
+
+        @media (max-width: 680px) {
+            .container { width: min(100% - 32px, 1140px); }
+            .section { padding: 70px 0; }
+            .section-head { align-items: start; flex-direction: column; margin-bottom: 34px; }
+            .brand-edition { display: none; }
+            .hero { background-position: 58% center; }
+            .hero-content { padding: 112px 0 48px; }
+            .hero-logo { padding: 12px 20px; }
+            .hero-wave { height: 32px; }
+            .hero h1 { font-size: clamp(2.5rem, 12.5vw, 4.2rem); }
+            .event-facts { grid-template-columns: 1fr; }
+            .countdown { flex-direction: column; align-items: center; gap: 10px; }
+            .countdown-unit { min-width: 0; flex: 1; }
+            .countdown-units { width: 100%; }
+            .ticker-track { animation-duration: 20s; }
+            .timeline li { grid-template-columns: 1fr; gap: 4px; }
+            .speak-cta { align-items: start; flex-direction: column; padding: 24px; }
+            .logistics-row { grid-template-columns: 1fr; gap: 4px; }
+            .people-grid { grid-template-columns: 1fr; }
+            .past-grid { grid-template-columns: 1fr; }
+            .footer-wrap { grid-template-columns: 1fr; }
+            .footer-bottom { flex-direction: column; align-items: flex-start; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+            *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+            .reveal { opacity: 1; transform: none; }
+            .ticker-track { width: auto; animation: none; }
+            .ticker-group + .ticker-group { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+        <symbol id="i-arrow-up-right" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></symbol>
+        <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+        <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+        <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+        <symbol id="i-mail" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></symbol>
+        <symbol id="i-github" viewBox="0 0 24 24"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></symbol>
+        <symbol id="i-calendar" viewBox="0 0 24 24"><path d="M8 2v4M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></symbol>
+        <symbol id="i-map-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></symbol>
+        <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+        <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+        <symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></symbol>
+        <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></symbol>
+    </svg>
+
+    <div class="progress" id="progress" aria-hidden="true"></div>
+
+    <header class="site-header" id="siteHeader">
+        <div class="container nav-wrap">
+            <a class="brand" href="../index.html" aria-label="Virtuoso home">
+                <span class="logo-plate"><img class="brand-mark" src="../img/virtuoso-logo.png" alt="Virtuoso" width="2804" height="728"></span>
+                <span class="brand-edition"><small>MICRO 2026</small>Workshop &amp; Tutorial</span>
+            </a>
+            <button class="menu-toggle" id="menuToggle" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="mainNav">
+                <svg class="icon icon-menu"><use href="#i-menu"/></svg>
+                <svg class="icon icon-x"><use href="#i-x"/></svg>
+            </button>
+            <nav aria-label="Main navigation">
+                <ul class="nav-links" id="mainNav">
+                    <li><a href="#about">About</a></li>
+                    <li><a href="#program">Program</a></li>
+                    <li><a href="#hands-on">Hands-on</a></li>
+                    <li><a href="#attend">Attend</a></li>
+                    <li><a href="#organizers">Organizers</a></li>
+                    <li><a class="nav-cta" href="https://www.microarch.org/micro59/program/workshops-new.php" target="_blank" rel="noopener">MICRO 2026</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero" aria-labelledby="hero-title">
+            <div class="container hero-content">
+                <div class="hero-logo logo-plate"><img src="../img/virtuoso-logo.png" alt="Virtuoso" width="2804" height="728"></div>
+                <div class="edition-line">Third edition ✦ Workshop and tutorial </div>
+                <h1 id="hero-title">Ideas and Infrastructures for <em class="marker">Novel<svg viewBox="0 0 200 20" aria-hidden="true" preserveAspectRatio="none"><path d="M4 14 C 40 4, 70 18, 100 10 S 165 4, 196 12"/></svg></em> HW/OS Interfaces</h1>
+                <p class="hero-summary">An afternoon for researchers rethinking the boundary between hardware and operating systems, grounded in practical work with the Virtuoso simulation framework.</p>
+                <div class="hero-actions">
+                    <a class="btn" href="#program">See the program <svg class="icon"><use href="#i-arrow-up-right"/></svg></a>
+                    <a class="btn btn-secondary" href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener"><svg class="icon"><use href="#i-github"/></svg> Explore Virtuoso</a>
+                </div>
+                <div class="countdown" id="countdown" data-start="2026-10-31T13:00:00+02:00" data-end="2026-10-31T17:00:00+02:00">
+                    <div class="countdown-units" aria-live="off">
+                        <div class="countdown-unit"><b id="cd-days">--</b><small>days</small></div>
+                        <div class="countdown-unit"><b id="cd-hours">--</b><small>hours</small></div>
+                        <div class="countdown-unit"><b id="cd-mins">--</b><small>min</small></div>
+                        <div class="countdown-unit"><b id="cd-secs">--</b><small>sec</small></div>
+                    </div>
+                    <p class="countdown-done" id="countdownDone"></p>
+                </div>
+                <div class="event-facts" aria-label="Event details">
+                    <div class="event-fact"><span>Date</span><strong>Sat, October 31, 2026</strong></div>
+                    <div class="event-fact"><span>Place</span><strong>Athens, Greece</strong></div>
+                    <div class="event-fact"><span>Conference</span><strong>MICRO 2026</strong></div>
+                    <div class="event-fact"><span>Format</span><strong>Half day, 13:00 – 17:00</strong></div>
+                </div>
+            </div>
+            <svg class="hero-wave" viewBox="0 0 1440 56" preserveAspectRatio="none" aria-hidden="true"><path fill="currentColor" d="M0 30 C 180 60, 360 0, 540 26 S 900 56, 1080 24 S 1350 8, 1440 30 V56 H0 Z"/></svg>
+        </section>
+
+        <div class="ticker" aria-hidden="true">
+            <div class="ticker-track">
+                <div class="ticker-group"><span>Hardware / OS co-design</span><span>Virtual memory</span><span>Open infrastructure</span><span>Hands-on research</span><span>Invited talks</span><span>Athens, October 31</span></div>
+                <div class="ticker-group"><span>Hardware / OS co-design</span><span>Virtual memory</span><span>Open infrastructure</span><span>Hands-on research</span><span>Invited talks</span><span>Athens, October 31</span></div>
+            </div>
+        </div>
+
+        <section class="section manifesto" id="about">
+            <div class="container">
+                <div class="intro reveal">
+                    <div class="chapter"><span>01</span> Why Virtuoso</div>
+                    <p class="eyebrow">About the workshop and tutorial</p>
+                    <p class="lead">Building on the success of our workshops at MICRO 2025 and ASPLOS 2026, we are excited to bring the Virtuoso Workshop to MICRO 2026 in Athens!</p>
+                    <p class="lead lead-callout"><span class="accent">This third edition continues to explore the frontier of hardware/OS co-design for memory management, featuring new talks, updated demos, and fresh perspectives from leading researchers.</span></p>
+                    <p>Traditional computing systems face significant challenges due to rigid interfaces between hardware and operating systems (OS). These interfaces struggle to meet the performance, efficiency, and security demands of modern applications. For example, the growth in data requirements has turned virtual memory (VM) into a major performance bottleneck.</p>
+                    <p>This has led to a paradigm shift towards hardware/OS co-design, where hardware components and OS mechanisms are designed in tandem to optimize the system. This tutorial and workshop will provide a comprehensive introduction to this area, focusing on memory management.</p>
+                    <p>A core component will be a hands-on exploration of Virtuoso, a simulation framework that enables rapid prototyping and evaluation of HW/OS co-designs. Published at ASPLOS 2025, Virtuoso provides a practical environment for attendees to experiment with co-design strategies and gain practical skills. The workshop is designed for students, engineers, and researchers in computer architecture and operating systems.</p>
+                    <div class="intro-actions">
+                        <a class="btn btn-github" href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener"><svg class="icon"><use href="#i-github"/></svg> Virtuoso on GitHub</a>
+                        <a class="btn btn-outline-dark" href="https://arxiv.org/abs/2403.04635" target="_blank" rel="noopener">Read the paper <svg class="icon"><use href="#i-arrow-up-right"/></svg></a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section program on-dark" id="program">
+            <div class="container">
+                <div class="section-head reveal">
+                    <div>
+                        <div class="chapter"><span>02</span> The day</div>
+                    </div>
+                </div>
+
+                <div class="agenda reveal">
+                    <div class="agenda-copy">
+                        <p class="eyebrow">Outline</p>
+                        <h3>13:00 to 17:00 EET, in the Saturday afternoon slot of MICRO 2026.</h3>
+                        <p>The 15:00 coffee break is shared with the other MICRO 2026 workshops. Session titles and speakers will replace the placeholders below as they are confirmed.</p>
+                        <span class="tag">Tentative</span>
+                    </div>
+                    <ol class="timeline" aria-label="Tentative schedule">
+                        <li><time>13:00 – 13:10</time><div><strong>Welcome and opening remarks</strong><span>Why HW/OS interfaces, and what the afternoon covers.</span></div></li>
+                        <li><time>13:10 – 14:30</time><div><strong>Invited talks</strong><span>Speakers to be announced.</span></div></li>
+                        <li><time>14:30 – 15:00</time><div><strong>Inside Virtuoso</strong><span>Methodology, MimicOS, simulator integration, and the component library.</span></div></li>
+                        <li class="break"><time>15:00 – 15:30</time><div><strong>☕ Coffee break</strong></div></li>
+                        <li><time>15:30 – 16:45</time><div><strong>Hands-on tutorial</strong><span>Guided implementation and evaluation of a cross-layer idea.</span></div></li>
+                        <li><time>16:45 – 17:00</time><div><strong>Wrap-up and open discussion</strong><span>Where the infrastructure goes next.</span></div></li>
+                    </ol>
+                </div>
+
+                <div class="speak-cta reveal">
+                    <div>
+                        <h3>Working on HW/OS interfaces? Present it in Athens.</h3>
+                        <p>We are assembling the invited talk lineup now. If you have recent or ongoing work on virtual memory, memory management, or cross-layer system design, we would like to hear about it.</p>
+                    </div>
+                    <a class="btn" href="mailto:konkanello@gmail.com?subject=Virtuoso%20at%20MICRO%202026%3A%20talk%20proposal">Propose a talk <svg class="icon"><use href="#i-mail"/></svg></a>
+                </div>
+            </div>
+        </section>
+
+        <section class="section lab" id="hands-on">
+            <div class="container">
+                <div class="chapter reveal"><span>03</span> The working session</div>
+                <div class="lab-layout">
+                    <div class="lab-copy reveal">
+                        <p class="eyebrow">Hands-on</p>
+                        <p>The tutorial is designed around the actual research loop: understand the system, change one policy or mechanism, run a controlled experiment, and inspect the result. Everything runs on your own laptop or on a prepared cloud machine.</p>
+                        <div class="lab-terminal">
+                            <div class="terminal-top">
+                                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                                <span class="terminal-title">getting-started.sh</span>
+                                <button class="copy-btn" id="copyCmd" type="button" aria-label="Copy the setup commands"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button>
+                            </div>
+<pre class="terminal-code" id="setupCmd"><span class="muted"># Get the framework</span>
+<span class="prompt">$</span> git clone --recursive https://github.com/CMU-SAFARI/Virtuoso.git
+<span class="prompt">$</span> cd Virtuoso/simulator/sniper
+<span class="prompt">$</span> sh run_example.sh</pre>
+                        </div>
+                    </div>
+                    <div class="reveal">
+                        <aside class="takeaways">
+                            <h3>What you take home</h3>
+                            <ul>
+                                <li><svg class="icon"><use href="#i-check"/></svg><span>A working Virtuoso installation with the tutorial configurations.</span></li>
+                                <li><svg class="icon"><use href="#i-check"/></svg><span>A mental model of how the OS and hardware pieces fit together in the simulator.</span></li>
+                                <li><svg class="icon"><use href="#i-check"/></svg><span>One end-to-end experiment you implemented, ran, and measured yourself.</span></li>
+                                <li><svg class="icon"><use href="#i-check"/></svg><span>Direct contact with the people who maintain the framework.</span></li>
+                            </ul>
+                        </aside>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section logistics on-dark" id="attend">
+            <div class="container">
+                <div class="chapter reveal"><span>04</span> Plan your day</div>
+                <div class="logistics-grid reveal">
+                    <div>
+                        <p class="eyebrow">Attend</p>
+                        <h2 class="h2-compact">In the heart of Athens.</h2>
+                        <div class="logistics-list">
+                            <div class="logistics-row"><span>When</span><div><strong>Saturday, October 31, 2026</strong><small>Afternoon session, 13:00 to 17:00 EET (UTC+2)</small></div></div>
+                            <div class="logistics-row"><span>Venue</span><div><strong>InterContinental Athenaeum Athens Hotel</strong><small>MICRO 2026 conference venue. <a href="https://www.google.com/maps/search/?api=1&amp;query=InterContinental+Athenaeum+Athens" target="_blank" rel="noopener">Open in maps</a></small></div></div>
+                            <div class="logistics-row"><span>Room</span><div><strong>To be announced by MICRO 2026</strong></div></div>
+                            <div class="logistics-row"><span>Registration</span><div><strong>Through MICRO 2026 registration</strong><small>Select the workshop day when registering. A direct link will be posted here once registration opens.</small></div></div>
+                            <div class="logistics-row"><span>Remote</span><div><strong>Livestream planned</strong><small>Previous editions were streamed and recorded on YouTube. The link will appear here closer to the date.</small></div></div>
+                        </div>
+                        <div class="logistics-actions">
+                            <a class="btn" href="https://calendar.google.com/calendar/render?action=TEMPLATE&amp;text=Virtuoso%20Workshop%20%26%20Tutorial%20%40%20MICRO%202026&amp;dates=20261031T110000Z/20261031T150000Z&amp;details=Ideas%20and%20Infrastructures%20for%20Novel%20HW/OS%20Interfaces.%20https://cmu-safari.github.io/Virtuoso/workshop/micro2026.html&amp;location=InterContinental%20Athenaeum%20Athens%20Hotel%2C%20Athens%2C%20Greece" target="_blank" rel="noopener"><svg class="icon"><use href="#i-calendar"/></svg> Add to calendar</a>
+                            <a class="btn btn-secondary" href="https://www.microarch.org/micro59/" target="_blank" rel="noopener">MICRO 2026 website <svg class="icon"><use href="#i-arrow-up-right"/></svg></a>
+                        </div>
+                    </div>
+                    <aside class="prep">
+                        <h3>Prepare for the tutorial</h3>
+                        <p>Nothing to install in advance. If you want to follow along on your own machine, this is what helps.</p>
+                        <ul class="checklist">
+                            <li>A laptop with a terminal and a code editor.</li>
+                            <li>Basic familiarity with C/C++ and command-line tools.</li>
+                            <li>Linux is recommended. Windows attendees can use WSL2, and macOS works with Docker.</li>
+                            <li>Cloud and local setup instructions will be published here before the event.</li>
+                            <li>A question you want to answer. The tutorial is more useful with a concrete idea in mind.</li>
+                        </ul>
+                    </aside>
+                </div>
+            </div>
+        </section>
+
+        <section class="section people" id="organizers">
+            <div class="container">
+                <div class="section-head reveal">
+                    <div>
+                        <div class="chapter"><span>05</span> Workshop team</div>
+                    </div>
+                </div>
+                <div class="people-grid reveal">
+                    <article class="person">
+                        <div class="person-photo">
+                            <img src="../img/organizers/kon_image.jpeg" alt="Konstantinos Kanellopoulos" loading="lazy">
+                            <div class="person-head"><h3>Konstantinos Kanellopoulos</h3><p>ETH Zurich</p></div>
+                        </div>
+                        <div class="person-bio">
+                            <p>Recent PhD graduate from ETH Zurich, advised by Prof. Onur Mutlu. Works at the intersection of hardware, software, and operating systems, focusing on performance, programmability, and security. Lead developer of Virtuoso.</p>
+                            <a class="link-arrow" href="https://konkanello.github.io/" target="_blank" rel="noopener">Personal site <svg class="icon"><use href="#i-arrow-up-right"/></svg></a>
+                        </div>
+                    </article>
+                    <article class="person">
+                        <div class="person-photo">
+                            <img src="../img/organizers/onur_image.jpeg" alt="Onur Mutlu" loading="lazy">
+                            <div class="person-head"><h3>Onur Mutlu</h3><p>ETH Zurich</p></div>
+                        </div>
+                        <div class="person-bio">
+                            <p>Professor of Computer Science at ETH Zurich and head of the SAFARI Research Group. Designs energy-efficient, high-performance, and robust computing systems with an emphasis on computer architecture, hardware security, and memory. ACM and IEEE Fellow.</p>
+                            <a class="link-arrow" href="https://people.inf.ethz.ch/omutlu/" target="_blank" rel="noopener">Personal site <svg class="icon"><use href="#i-arrow-up-right"/></svg></a>
+                        </div>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <section class="section past" id="past-editions">
+            <div class="container">
+                <div class="section-head reveal">
+                    <div>
+                        <div class="chapter"><span>06</span> Past editions</div>
+                    </div>
+                </div>
+                <div class="past-grid reveal">
+                    <article class="past-card">
+                        <div class="past-meta"><span>2nd edition</span><span>March 23, 2026</span></div>
+                        <h3>Virtuoso at ASPLOS 2026, Pittsburgh</h3>
+                        <p>A full day of invited talks on address translation, learned page tables, tiered memory, and cross-layer metadata, followed by a Virtuoso deep dive and guided demos.</p>
+                        <div class="past-links">
+                            <a href="asplos2026.html"><svg class="icon"><use href="#i-file"/></svg> Program and speakers</a>
+                            <a href="https://youtube.com/live/giP8NaZp3JA" target="_blank" rel="noopener"><svg class="icon"><use href="#i-play"/></svg> Watch the recording</a>
+                        </div>
+                    </article>
+                    <article class="past-card">
+                        <div class="past-meta"><span>1st edition</span><span>October 19, 2025</span></div>
+                        <h3>Virtuoso at MICRO 2025, Seoul</h3>
+                        <p>The first workshop introduced HW/OS co-design for memory management, with talks on demand paging, prefetching, cloud-native architectures, and throughput processors, plus the first hands-on tutorial.</p>
+                        <div class="past-links">
+                            <a href="micro2025.html"><svg class="icon"><use href="#i-file"/></svg> Program and speakers</a>
+                            <a href="https://www.youtube.com/live/fi6ttrmu_OM" target="_blank" rel="noopener"><svg class="icon"><use href="#i-play"/></svg> Watch the recording</a>
+                        </div>
+                    </article>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="container">
+            <div class="footer-wrap">
+                <div class="footer-col">
+                    <h4>Virtuoso</h4>
+                    <ul>
+                        <li><a href="../index.html">Project home</a></li>
+                        <li><a href="https://github.com/CMU-SAFARI/Virtuoso" target="_blank" rel="noopener">GitHub repository</a></li>
+                        <li><a href="https://arxiv.org/abs/2403.04635" target="_blank" rel="noopener">ASPLOS 2025 paper</a></li>
+                        <li><a href="../trail.html">TRAIL</a></li>
+                        <li><a href="../revelator.html">Revelator</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>Workshops</h4>
+                    <ul>
+                        <li><a href="#program">MICRO 2026, Athens</a></li>
+                        <li><a href="asplos2026.html">ASPLOS 2026, Pittsburgh</a></li>
+                        <li><a href="micro2025.html">MICRO 2025, Seoul</a></li>
+                        <li><a href="https://www.microarch.org/micro59/" target="_blank" rel="noopener">MICRO 2026 website</a></li>
+                        <li><a href="mailto:konkanello@gmail.com">Contact the organizers</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <span>SAFARI Research Group, ETH Zurich and New York University. Questions: <a href="mailto:konkanello@gmail.com" style="color:inherit">K. Kanellopoulos</a> and <a href="mailto:omutlu@gmail.com" style="color:inherit">O. Mutlu</a>.</span>
+                <a class="safari-plate" href="https://safari.ethz.ch/" target="_blank" rel="noopener" aria-label="SAFARI Research Group at ETH Zurich"><img src="../img/safari-eth-logo.jpg" alt="" loading="lazy"></a>
+            </div>
+        </div>
+    </footer>
+
+    <button class="back-to-top" id="backToTop" type="button" aria-label="Back to top"><svg class="icon"><use href="#i-arrow-up"/></svg></button>
+
+    <script>
+        (function () {
+            const header = document.getElementById('siteHeader');
+            const progress = document.getElementById('progress');
+            const backToTop = document.getElementById('backToTop');
+            const menuToggle = document.getElementById('menuToggle');
+            const mainNav = document.getElementById('mainNav');
+
+            /* Mobile navigation */
+            function setMenu(open) {
+                mainNav.classList.toggle('open', open);
+                menuToggle.setAttribute('aria-expanded', String(open));
+                menuToggle.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation');
+            }
+            menuToggle.addEventListener('click', () => setMenu(!mainNav.classList.contains('open')));
+            mainNav.querySelectorAll('a').forEach(link => link.addEventListener('click', () => setMenu(false)));
+            document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(false); });
+
+            /* Scroll effects: header shade, progress bar, back-to-top */
+            function onScroll() {
+                const y = window.scrollY;
+                const max = document.documentElement.scrollHeight - window.innerHeight;
+                header.classList.toggle('scrolled', y > 40);
+                progress.style.width = (max > 0 ? Math.min(100, (y / max) * 100) : 0) + '%';
+                backToTop.classList.toggle('show', y > 700);
+            }
+            window.addEventListener('scroll', onScroll, { passive: true });
+            onScroll();
+            backToTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+
+            /* Reveal on scroll */
+            if ('IntersectionObserver' in window) {
+                const revealObserver = new IntersectionObserver(entries => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting) {
+                            entry.target.classList.add('visible');
+                            revealObserver.unobserve(entry.target);
+                        }
+                    });
+                }, { threshold: 0.1 });
+                document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
+
+                /* Highlight the section currently in view */
+                const navLinks = Array.from(mainNav.querySelectorAll('a[href^="#"]'));
+                const sections = navLinks.map(link => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+                const sectionObserver = new IntersectionObserver(entries => {
+                    entries.forEach(entry => {
+                        if (!entry.isIntersecting) return;
+                        navLinks.forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#' + entry.target.id));
+                    });
+                }, { rootMargin: '-45% 0px -50% 0px' });
+                sections.forEach(section => sectionObserver.observe(section));
+            } else {
+                document.querySelectorAll('.reveal').forEach(el => el.classList.add('visible'));
+            }
+
+            /* Countdown to doors opening */
+            const countdown = document.getElementById('countdown');
+            const start = new Date(countdown.dataset.start).getTime();
+            const end = new Date(countdown.dataset.end).getTime();
+            const fields = ['cd-days', 'cd-hours', 'cd-mins', 'cd-secs'].map(id => document.getElementById(id));
+            const doneText = document.getElementById('countdownDone');
+            function pad(n) { return String(n).padStart(2, '0'); }
+            function tick() {
+                const now = Date.now();
+                if (now >= start) {
+                    countdown.classList.add('is-done');
+                    doneText.textContent = now <= end ? 'Happening now at MICRO 2026.' : 'This edition has concluded. Thank you for joining us in Athens.';
+                    return;
+                }
+                let diff = Math.floor((start - now) / 1000);
+                const days = Math.floor(diff / 86400); diff -= days * 86400;
+                const hours = Math.floor(diff / 3600); diff -= hours * 3600;
+                const mins = Math.floor(diff / 60);
+                const secs = diff - mins * 60;
+                fields[0].textContent = days;
+                fields[1].textContent = pad(hours);
+                fields[2].textContent = pad(mins);
+                fields[3].textContent = pad(secs);
+                setTimeout(tick, 1000);
+            }
+            tick();
+
+            /* Copy setup commands */
+            const copyBtn = document.getElementById('copyCmd');
+            const setupCmd = document.getElementById('setupCmd');
+            copyBtn.addEventListener('click', async () => {
+                const text = setupCmd.textContent.split('\n').filter(line => line.startsWith('$')).map(line => line.replace(/^\$\s*/, '')).join('\n');
+                const label = copyBtn.querySelector('span');
+                const icon = copyBtn.querySelector('use');
+                try {
+                    await navigator.clipboard.writeText(text);
+                    label.textContent = 'Copied';
+                    icon.setAttribute('href', '#i-check');
+                } catch (err) {
+                    label.textContent = 'Select and copy';
+                }
+                setTimeout(() => { label.textContent = 'Copy'; icon.setAttribute('href', '#i-copy'); }, 1800);
+            });
+        })();
+    </script>
+</body>
+</html>
