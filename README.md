@@ -1,4 +1,102 @@
-# Virtuoso: Fast and Accurate Virtual Memory Research via Imitation-based OS Simulation
+# TRAIL: Scalable and Low-Cost Temporal TLB Prefetching via Page-Table-Embedded Deltas
+
+[![MICRO 2026](https://img.shields.io/badge/MICRO-2026-blue)](#citing-trail)
+[![Artifact](https://img.shields.io/badge/Artifact-Zenodo-orange)](https://doi.org/10.5281/zenodo.21541804)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+> Konstantinos Kanellopoulos, Konstantinos Sgouras, Harsh Songara, Rahul Bera, and Onur Mutlu,
+> "TRAIL: Scalable and Low-Cost Temporal TLB Prefetching via Page-Table-Embedded Deltas," **MICRO 2026**.
+
+This branch (`trail-artifact-release`) is the artifact of the TRAIL paper.
+
+## What TRAIL does
+
+Address translation is a major bottleneck for data-intensive workloads, and prefetching
+virtual-to-physical mappings before they are needed can hide much of its latency. Prior
+temporal TLB prefetchers keep their history in fixed-size hardware tables, which cannot
+keep up with the memory footprint of modern applications.
+
+A characterization of 200 translation-intensive workloads shows that page table walks
+are structured even when memory accesses look irregular. Each virtual memory region has
+a small set of recurring per-PC *deltas* to the regions that walk next, and more than 94%
+of those deltas fit in 18 bits.
+
+**TRAIL** stores each region's deltas directly in **unused bits of its last-level page
+table entries**:
+
+- **Recording.** A 64-entry PC table remembers, for each instruction, the region of its
+  last page table walk. On the next walk from that PC, TRAIL writes the delta between the
+  two regions into the source region's PTE cache block.
+- **Prefetching.** A page table walk fetches the region's PTE block, and the deltas arrive
+  with it at no extra memory access. TRAIL prefetches the PTEs of the predicted regions
+  into the TLBs and the cache hierarchy, and chains through the payloads it fetches.
+- **Scaling.** Delta storage lives in PTEs the OS already allocates, so it grows with the
+  application's footprint. When no PTE bits are available, TRAIL-External keeps the same
+  payload in a small OS-managed table.
+
+## Key results
+
+| | single-core (200 workloads) | four-core (100 mixes) |
+|--|--:|--:|
+| TRAIL over No-TLB-Prefetcher | **+5.7%** | **+11.5%** |
+| TRAIL over the best prior TLB prefetcher (Recency) | **+1.6%** | **+2.6%** |
+| TRAIL + Next-Page over No-TLB-Prefetcher | **+7.6%** | **+14.1%** |
+
+TRAIL reduces total demand page-table-walk latency by about 60% on the 50 most
+translation-intensive workloads (Recency: 42%), keeps its benefit across LLC sizes, DRAM
+bandwidths and large-page fractions, and needs only a 64-entry PC table in the core.
+
+## Reproducing the paper
+
+**All artifact instructions are in [`experiments/ae/README.md`](experiments/ae/README.md).**
+Three setup steps build and validate the simulator; one command then runs every
+experiment (on a SLURM cluster or a single machine) and renders each paper figure and
+table:
+
+```bash
+git clone --branch trail-artifact-release https://github.com/CMU-SAFARI/Virtuoso.git
+cd Virtuoso/experiments/ae
+bash lib/install_deps.sh                       # system packages (sudo)
+bash build_and_validate.sh --skip-deps         # build, fetch traces, sanity check
+bash ae_run_all.sh --mode slurm                # or: --mode local --jobs $(nproc)
+bash ae_run_all.sh --status                    # until every suite reads DONE
+bash ae_run_all.sh --results                   # figures and tables in ae_out/
+```
+
+| data | location |
+|--|--|
+| Simulation traces and trace lists | [`konkanello/trail_traces`](https://huggingface.co/datasets/konkanello/trail_traces) |
+| Page-table-walk dumps (motivation figures) | [`konkanello/trail_ptw_dumps`](https://huggingface.co/datasets/konkanello/trail_ptw_dumps) |
+| Archived artifact | [doi.org/10.5281/zenodo.21541804](https://doi.org/10.5281/zenodo.21541804) |
+
+## Where TRAIL lives in the code
+
+| what | path |
+|--|--|
+| TRAIL prefetcher | [`TemporalPTEPrefetcher.cc`](simulator/sniper/common/core/memory_subsystem/parametric_dram_directory_msi/translation_components/tlb_prefetching/TemporalPTEPrefetcher.cc) |
+| Other TLB prefetchers (IP-Stride, Next-Page, DP, Recency, ATP, Berti) | [`tlb_prefetching/`](simulator/sniper/common/core/memory_subsystem/parametric_dram_directory_msi/translation_components/tlb_prefetching/) |
+| Evaluated configurations | [`config/address_translation_schemes/trail_comparison_v4/`](simulator/sniper/config/address_translation_schemes/trail_comparison_v4/), [`mmu_temporal_pte.cfg`](simulator/sniper/config/mmu_configs/mmu_temporal_pte.cfg) |
+| Experiment lists | [`experiments/clist_prefetcher_v3.yaml`](experiments/clist_prefetcher_v3.yaml), [`experiments/clist_multicore.yaml`](experiments/clist_multicore.yaml) |
+| Code walkthrough of the mechanism | [`docs/trail_walkthrough.html`](docs/trail_walkthrough.html) |
+
+## Citing TRAIL
+
+```bibtex
+@inproceedings{kanellopoulos2026trail,
+    title={{TRAIL: Scalable and Low-Cost Temporal TLB Prefetching
+            via Page-Table-Embedded Deltas}},
+    author={Konstantinos Kanellopoulos and Konstantinos Sgouras and
+            Harsh Songara and Rahul Bera and Onur Mutlu},
+    year={2026},
+    booktitle={MICRO}
+}
+```
+
+TRAIL is implemented in Virtuoso; please also cite Virtuoso (see [Citation](#citation)).
+
+---
+
+# Built on Virtuoso: Fast and Accurate Virtual Memory Research via Imitation-based OS Simulation
 
 [![ASPLOS 2025](https://img.shields.io/badge/ASPLOS-2025-blue)](https://arxiv.org/pdf/2403.04635v2)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -13,23 +111,8 @@ Virtuoso integrates with diverse architectural simulators, each specializing in 
 
 ---
 
-## 🔬 Artifact Evaluation — TRAIL (TLB Prefetcher)
-
-**Reproducing the TRAIL paper?** All artifact instructions — dependencies, the
-one-command setup, running each claim, and the paper figure/table it reproduces
-— are in **[`experiments/ae/README.md`](experiments/ae/README.md)**. Start there.
-
-The artifact lives on the `trail-artifact-release` branch; the traces and
-page-table-walk dumps are the public Hugging Face datasets
-[`konkanello/trail_traces`](https://huggingface.co/datasets/konkanello/trail_traces)
-and
-[`konkanello/trail_ptw_dumps`](https://huggingface.co/datasets/konkanello/trail_ptw_dumps).
-
----
-
 ## Table of Contents
 
-- [Artifact Evaluation — TRAIL](experiments/ae/README.md)
 - [Key Features](#key-features)
 - [Repository Structure](#repository-structure)
 - [Prerequisites](#prerequisites)
