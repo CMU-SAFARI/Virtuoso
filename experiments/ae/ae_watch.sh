@@ -59,9 +59,12 @@ if [ "$KIND" = "mot" ]; then
   # file written before the sidecar existed.
   UNIT="analysed workloads"
   MOTNAMES="$AE_OUT/$SUITE.jobnames"
-  count_valid() {  # complete JSONs, not merely present ones
+  count_valid() {  # workloads with a complete analysis JSON and TLB-simulation JSON
     local f n=0
-    for f in "$results"/*.json; do [ -e "$f" ] || continue; ae_valid_json "$f" && n=$((n+1)); done
+    for f in "$results"/*.json; do
+      [ -e "$f" ] || continue
+      ae_valid_json "$f" && ae_valid_json "$(dirname "$results")/tlbsim/$(basename "$f")" && n=$((n+1))
+    done
     echo "$n"
   }
   if [ -s "$MOTNAMES" ]; then

@@ -16,7 +16,7 @@ ae_valid_result() {  # $1 = rundir (the -d dir)
 # older version (or copied in by hand) could still be truncated, and both the
 # watcher and the resume logic would then treat that workload as finished.
 ae_valid_json() {  # $1 = <workload>.json
-  [ -s "$1" ] && [ "$(tail -c 1 "$1" 2>/dev/null)" = "}" ]
+  [ -s "$1" ] && tail -c 2 "$1" 2>/dev/null | tr -d '\n' | grep -q '}$'
 }
 
 # --- ensure a sbatch line targets the requested partitions (pure bash) ---

@@ -28,7 +28,7 @@ ALL_SUITES="head8mb head2mb table5 table6 multicore abl2mb ${MTPS_SUITES}motivat
 # is driven by motivation/run_motivation.sh instead of a generated jobfile. The
 # phase scripts dispatch on KIND; everything else about a suite — the ae_out
 # status/DONE contract, and therefore ae_run_all's three passes — is identical.
-ae_suite_cfg() {  # sets KIND GEN EXPSUITE DIR PARSER PARGS FIG FIGFILE ; returns 1 on unknown suite
+ae_suite_cfg() {  # sets KIND GEN EXPSUITE DIR FIG FIGFILE ; returns 1 on unknown suite
   KIND=sim; MTPS=""; TOP200_ONLY=""
   case "$1" in
     head2mb_mtps*)
@@ -37,14 +37,14 @@ ae_suite_cfg() {  # sets KIND GEN EXPSUITE DIR PARSER PARGS FIG FIGFILE ; return
       MTPS="${1#head2mb_mtps}"; DIR="${DIR}_mtps${MTPS}"; FIG="Figure 18 (DRAM ${MTPS} MT/s)"; FIGFILE="figure18"
       EXPDIR="$EXP/exp_${DIR}"; RESULTS="$EXPDIR/results"; JOBFILE="$EXPDIR/jobfile.sh"
       return 0;;
-    head8mb)   GEN=sc; EXPSUITE="trail_comparison_v4";             DIR="ae_head8mb"; PARSER=parse_headtohead.py; PARGS="";                 FIG="Figure 11 (bottom, 8 MB LLC)"; FIGFILE="figure11";;
-    head2mb)   GEN=sc; EXPSUITE="trail_comparison_v4_nuca2mb";     DIR="ae_head2mb"; PARSER=parse_headtohead.py; PARGS="--suffix=-nuca2mb"; FIG="Figure 11 (top, 2 MB LLC), Figure 13"; FIGFILE="figure11";;
-    table5)    GEN=sc; EXPSUITE="trail-pte-budget-grid-corrected"; DIR="ae_table5";  PARSER=parse_table5.py;    PARGS="";                 FIG="Table 4";  FIGFILE="table4";;
-    table6)    GEN=sc; EXPSUITE="sidecar-payload-sweep-corrected"; DIR="ae_table6";  PARSER=parse_table6.py;    PARGS="";                 FIG="Table 5";  FIGFILE="table5";;
+    head8mb)   GEN=sc; EXPSUITE="trail_comparison_v4";             DIR="ae_head8mb"; FIG="Figure 11 (bottom, 8 MB LLC)"; FIGFILE="figure11";;
+    head2mb)   GEN=sc; EXPSUITE="trail_comparison_v4_nuca2mb";     DIR="ae_head2mb"; FIG="Figure 11 (top, 2 MB LLC), Figure 13"; FIGFILE="figure11";;
+    table5)    GEN=sc; EXPSUITE="trail-pte-budget-grid-corrected"; DIR="ae_table5";  FIG="Table 4";  FIGFILE="table4";;
+    table6)    GEN=sc; EXPSUITE="sidecar-payload-sweep-corrected"; DIR="ae_table6";  FIG="Table 5";  FIGFILE="table5";;
     # TRAIL component ablation; full TRAIL is v4-trail-nuca2mb in head2mb
-    abl2mb)    GEN=sc; EXPSUITE="trail_ablation_v4_nuca2mb"; DIR="ae_abl2mb"; PARSER=""; PARGS=""; FIG="Figure 19"; FIGFILE="figure19"; TOP200_ONLY=1;;
-    multicore) GEN=mc; EXPSUITE="prefetcher_v4_diverse_4core prefetcher_v4_diverse_4core_x60"; DIR="ae_multicore"; PARSER=parse_multicore.py; PARGS=""; FIG="Figure 16"; FIGFILE="figure16";;
-    motivation) KIND=mot; GEN=mot; EXPSUITE=""; DIR="motivation"; PARSER=""; PARGS=""; FIG="Figures 2, 3, 5, 6, 7"; FIGFILE="figure2_topk_coverage";;
+    abl2mb)    GEN=sc; EXPSUITE="trail_ablation_v4_nuca2mb"; DIR="ae_abl2mb"; FIG="Figure 19"; FIGFILE="figure19"; TOP200_ONLY=1;;
+    multicore) GEN=mc; EXPSUITE="prefetcher_v4_diverse_4core prefetcher_v4_diverse_4core_x60"; DIR="ae_multicore"; FIG="Figure 16"; FIGFILE="figure16";;
+    motivation) KIND=mot; GEN=mot; EXPSUITE=""; DIR="motivation"; FIG="Figures 2, 3, 5, 6, 7"; FIGFILE="figure2_topk_coverage";;
     *) echo "unknown suite: $1 (valid: $ALL_SUITES)" >&2; return 1;;
   esac
   if [ "$KIND" = "mot" ]; then

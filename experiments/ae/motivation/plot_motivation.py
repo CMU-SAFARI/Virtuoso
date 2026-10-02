@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
-"""plot_motivation.py — build the motivation figures from the per-workload JSONs
-(analyze_dump.py) plus, for Figure 6, four example dumps directly. Default font.
+"""plot_motivation.py — the paper's motivation figures.
 
-    plot_motivation.py --json-dir <dir> --dumps-dir <dir> --out-dir <dir>
+    plot_motivation.py --json-dir <dir> --tlb-dir <dir> --out-dir <dir> [--regions <csv>]
 
-Figures (paper numbers):
-  figure4_pc_delta_pairs.pdf     Unique (PC, delta) pairs per workload
-  figure5_topk_coverage.pdf      Top-k successor coverage (global vs PC-conditioned)
-  figure6_transitions_4wl.pdf    Fraction of transitions per source region, 4 workloads
-  figure8_granularity.pdf        Successor-region granularity sweep (top-4 / top-8)
-  figure9_delta_representable.pdf % of representable delta occurrences vs bit-width
+Inputs: one JSON per workload from analyze_dump.py (--json-dir), one JSON per
+workload from tlb_prefetch_sim (--tlb-dir), and the selected source regions of
+Figure 3 (--regions, default data/figure3_selected_regions.csv).  Figures 2, 5,
+6 and 7 average over the top-200 workloads by per-PC coverage at k=4.
+
+  figure2_topk_coverage        Top-k most frequent deltas per region: global vs per-PC
+  figure3_delta_distributions  Per-PC delta distributions of selected 32 KB source regions
+  figure5_granularity          Captured transitions vs destination-region size (top-4 / top-8)
+  figure6_pte_fate             Used vs unused prefetched PTEs in a 1536-entry TLB
+  figure7_delta_bits           Representable delta occurrences vs delta bit-width
 """
-import argparse, csv, glob, gzip, io, json, math, os, sys
-from collections import defaultdict, Counter
+import argparse, colorsys, csv, glob, json, os, sys
+from collections import defaultdict
 
 KS = list(range(1, 9)); BITS = list(range(4, 22, 2))
-SHIFT_LABEL = {0:"4KB",3:"32KB",6:"256KB",9:"2MB",12:"16MB"}
+SHIFTS = [0, 3, 6, 9, 12]
+SHIFT_LABEL = {0: "4KB", 3: "32KB", 6: "256KB", 9: "2MB", 12: "16MB"}
+HERE = os.path.dirname(os.path.abspath(__file__))
 
-# ─────────────────────────────── aggregate figures ───────────────────────────
+
 def load_json(json_dir):
     rows = []
     for p in glob.glob(os.path.join(json_dir, "*.json")):
@@ -25,104 +30,21 @@ def load_json(json_dir):
         except Exception: pass
     return rows
 
+
 def top200(rows):
     r = [d for d in rows if d.get("cov_pc")]
     r.sort(key=lambda d: d["cov_pc"][3], reverse=True)
     return r[:200]
 
-def mean(xs): return sum(xs)/len(xs) if xs else float("nan")
 
-def spines(ax):
-    for s in ("top","right"): ax.spines[s].set_visible(False)
-    for s in ("left","bottom"): ax.spines[s].set_color("black")
+def mean(xs): return sum(xs) / len(xs) if xs else float("nan")
 
-# ─────────────────────────────── Figure 6 (dumps) ────────────────────────────
-def _open(path):
-    return io.TextIOWrapper(gzip.open(path, "rb")) if path.endswith(".gz") else open(path, newline="")
 
-def load_dump_pc_regions(path, region_shift=3):
-    last = {}; data = defaultdict(lambda: defaultdict(Counter))
-    with _open(path) as f:
-        for row in csv.DictReader(f):
-            try: pc = row["EIP"]; vpn = int(row["PTW_Address"]) >> 12
-            except (KeyError, ValueError): continue
-            region = vpn >> region_shift
-            if pc in last and last[pc] != region:
-                data[pc][last[pc]][region - last[pc]] += 1
-            last[pc] = region
-    return data
-
-def find_pc(data, suffix):
-    for pc in data:
-        if pc.endswith(suffix): return pc
-    return None
-
-def draw_panel(ax, data, pc, title, max_regions=14, top_k=8, sort_by_id=False):
-    import numpy as np
-    regions = data.get(pc, {})
-    if sort_by_id:
-        sr = sorted(regions.items(), key=lambda x: x[0])
-    else:
-        sr = sorted(regions.items(), key=lambda x: sum(x[1].values()), reverse=True)
-    sr = sr[:max_regions]
-    cand = Counter()
-    for _, dc in sr:
-        for d, c in dc.most_common(top_k): cand[d] += c
-    top_deltas = [d for d, _ in cand.most_common(top_k)]
-    sr = [(s, dc) for s, dc in sr if sum(dc.values()) and
-          sum(dc.get(d, 0) for d in top_deltas)/sum(dc.values()) >= 0.40]
-    labels = []; bar = {d: [] for d in top_deltas}; other = []
-    for s, dc in sr:
-        tot = sum(dc.values()); labels.append(f"0x{s:x}")
-        for d in top_deltas: bar[d].append(dc.get(d, 0)/tot*100 if tot else 0)
-        other.append((tot - sum(dc.get(d, 0) for d in top_deltas))/tot*100 if tot else 0)
-    import matplotlib.pyplot as plt
-    x = np.arange(len(labels)); bottom = np.zeros(len(labels)); cmap = plt.cm.tab10
-    for i, d in enumerate(top_deltas):
-        v = np.array(bar[d]); sign = "+" if d >= 0 else ""
-        ax.bar(x, v, 0.75, bottom=bottom, color=cmap(i % 10), edgecolor="white", linewidth=0.3,
-               label=f"$\\Delta${sign}{d}"); bottom += v
-    ov = np.array(other)
-    if len(ov) and ov.max() > 1:
-        ax.bar(x, ov, 0.75, bottom=bottom, color="#d9d9d9", edgecolor="white", linewidth=0.3, label="other")
-    ax.set_xticks(x); ax.set_xticklabels(labels, rotation=55, ha="right", fontsize=5.5)
-    ax.set_ylim(0, 105); ax.set_xlabel("Source Region", fontsize=7); ax.set_title(title, fontsize=8, fontweight="bold", pad=4)
-    ax.legend(fontsize=5, ncol=2, loc="upper right", framealpha=0.85, borderpad=0.3, handlelength=1.0, columnspacing=0.5)
-
-def figure6(dumps_dir, out_dir):
-    import matplotlib.pyplot as plt
-    def dump(w):
-        for ext in (".csv.gz", ".csv"):
-            p = os.path.join(dumps_dir, w + ext)
-            if os.path.exists(p): return p
-        return None
-    specs = [("compute_int_315", "4026bc", 14, True), ("sierra.a.4_0009", None, 12, False),
-             ("delta_0000", "a294b6", 8, False), ("605.mcf_s-1644b", "4033f0", 12, False)]
-    paths = [dump(w) for w, *_ in specs]
-    if any(p is None for p in paths):
-        print("  figure6 skipped — example dumps not all present"); return
-    fig, axes = plt.subplots(1, 4, figsize=(7.16, 2.3))
-    letters = "abcd"
-    for ax, (w, suf, mr, sbi), p, L in zip(axes, specs, paths, letters):
-        data = load_dump_pc_regions(p)
-        if suf: pc = find_pc(data, suf)
-        else:
-            tot = Counter({pc: sum(sum(dc.values()) for dc in regs.values()) for pc, regs in data.items()})
-            pc = tot.most_common(1)[0][0] if tot else None
-        if pc is None: continue
-        draw_panel(ax, data, pc, f"({L}) {w}", max_regions=mr, top_k=8, sort_by_id=sbi)
-        if ax is not axes[0]: ax.set_ylabel("")
-        else: ax.set_ylabel("Fraction of transitions (%)", fontsize=7)
-    fig.tight_layout(w_pad=0.8)
-    for ext in ("pdf", "png"):
-        fig.savefig(os.path.join(out_dir, f"figure6_transitions_4wl.{ext}"), bbox_inches="tight", pad_inches=0.1)
-    plt.close(fig); print("  figure6 (4-workload transitions) written")
-
-# ────────────────────────────────── main ─────────────────────────────────────
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--json-dir", required=True); ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--dumps-dir", default=None)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--json-dir", required=True); ap.add_argument("--tlb-dir")
+    ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--regions", default=os.path.join(HERE, "data", "figure3_selected_regions.csv"))
     a = ap.parse_args()
     rows = load_json(a.json_dir)
     if not rows: print(f"no JSONs in {a.json_dir}", file=sys.stderr); sys.exit(1)
@@ -130,73 +52,162 @@ def main():
     print(f"loaded {len(rows)} workloads ({len(sel)} in top-200)")
 
     import matplotlib; matplotlib.use("Agg")
-    import matplotlib.pyplot as plt, matplotlib.ticker as mtick, numpy as np
-    plt.rcParams.update({"savefig.dpi": 600, "axes.linewidth": 1.2, "font.size": 11,
-                         "axes.grid": True, "grid.alpha": 0.3, "grid.linewidth": 0.5})
+    import matplotlib.pyplot as plt, matplotlib.ticker as mtick, matplotlib.font_manager as fm
+    import numpy as np
+    from matplotlib.colors import to_hex, to_rgb
+    roboto = sorted(f for f in fm.findSystemFonts() if os.path.basename(f).startswith("Roboto-") and f.endswith(".ttf"))
+    for f in roboto: fm.fontManager.addfont(f)
+    if any(os.path.basename(f) == "Roboto-Regular.ttf" for f in roboto): plt.rcParams["font.family"] = "Roboto"
+    plt.rcParams.update({"savefig.dpi": 600, "axes.linewidth": 1.2, "grid.linewidth": 0.4, "grid.alpha": 0.3,
+                         "pdf.fonttype": 42})
+
+    def paper_axes(ax, ymajor=20, yminor=10):
+        for sp in ax.spines.values(): sp.set_visible(True); sp.set_color("black"); sp.set_linewidth(1.2)
+        if ymajor: ax.yaxis.set_major_locator(mtick.MultipleLocator(ymajor))
+        if yminor: ax.yaxis.set_minor_locator(mtick.MultipleLocator(yminor))
+        ax.tick_params(axis="both", which="major", direction="out", length=5, width=1.0, top=False, right=False, labelsize=10)
+        ax.tick_params(axis="both", which="minor", direction="out", length=3, width=0.7, top=False, right=False)
+        ax.grid(axis="y"); ax.set_axisbelow(True)
+
     def save(fig, name):
         for ext in ("pdf", "png"): fig.savefig(os.path.join(a.out_dir, f"{name}.{ext}"), bbox_inches="tight")
-        plt.close(fig)
+        plt.close(fig); print(f"  {name}")
 
-    # Figure 5 — top-k successor coverage (global orange / PC-cond blue)
-    g = [mean([d["cov_global"][j] for d in sel]) for j in range(len(KS))]
-    p = [mean([d["cov_pc"][j] for d in sel]) for j in range(len(KS))]
-    fig, ax = plt.subplots(figsize=(4.6, 3.2))
-    ax.plot(KS, p, "o-", color="#1f77b4", lw=2, ms=6, label="PC-conditioned")
-    ax.plot(KS, g, "s-", color="#e08a1e", lw=2, ms=6, label="Global")
-    ax.fill_between(KS, g, p, color="#1f77b4", alpha=0.10)
-    ax.set_xlabel("Number of successor slots $k$"); ax.set_ylabel("Fraction of TLB misses covered")
-    ax.set_xticks(KS); ax.set_ylim(0, 1.02); ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0))
-    spines(ax); ax.legend(loc="lower right", fontsize=10); fig.tight_layout(); save(fig, "figure5_topk_coverage")
+    # Figure 2 — top-k coverage, global vs per-PC (mean ± 1 std dev over workloads)
+    g = np.array([d["cov_global"] for d in sel]) * 100; p = np.array([d["cov_pc"] for d in sel]) * 100
+    gm_, gs = g.mean(0), g.std(0, ddof=1); pm_, ps = p.mean(0), p.std(0, ddof=1); ks = np.array(KS)
+    fig, ax = plt.subplots(figsize=(5.5, 2.5))
+    ax.plot(ks, gm_, "o-", color="#e67e22", lw=2.2, ms=7, mec="white", mew=0.8, label="Global", zorder=3)
+    ax.plot(ks, pm_, "s-", color="#2980b9", lw=2.2, ms=7, mec="white", mew=0.8, label="Per-PC", zorder=3)
+    ax.fill_between(ks, pm_ - ps, pm_ + ps, color="#2980b9", alpha=0.15, zorder=1)
+    ax.fill_between(ks, gm_ - gs, gm_ + gs, color="#e67e22", alpha=0.15, zorder=1, label="±1 std dev")
+    for k in (1, 4, 8):
+        j = KS.index(k); y = (pm_[j] + gm_[j]) / 2
+        ax.annotate(f"+{pm_[j] - gm_[j]:.1f}", xy=(k, y), xytext=(k - 0.5, y), fontsize=10, fontweight="bold",
+                    color="#c0392b", ha="left", va="center",
+                    bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="#c0392b", lw=1.0, alpha=0.95))
+    ax.set_xlabel("Top-K most frequent deltas per virtual memory region", fontsize=12)
+    ax.set_ylabel("Fraction of captured\ntransitions (%)", fontsize=12)
+    ax.set_xticks(KS); ax.set_ylim(0, 100); ax.set_xlim(0.5, 8.5)
+    ax.legend(loc="lower right", fontsize=9, framealpha=0.95, edgecolor="0.8"); paper_axes(ax)
+    fig.tight_layout(); save(fig, "figure2_topk_coverage")
+    print("    per-PC minus global (pp): " + ", ".join(f"k={k}: +{pm_[KS.index(k)] - gm_[KS.index(k)]:.1f}" for k in (1, 4, 8)))
 
-    # Figure 8 — destination-granularity sweep (top-4 / top-8)
-    shifts = [0, 3, 6, 9, 12]
-    m4 = [mean([d[f"cov4_s{s}"] for d in sel if f"cov4_s{s}" in d])*100 for s in shifts]
-    m8 = [mean([d[f"cov8_s{s}"] for d in sel if f"cov8_s{s}" in d])*100 for s in shifts]
-    x = np.arange(len(shifts)); w = 0.34
-    fig, ax = plt.subplots(figsize=(6.4, 2.6))
-    ax.bar(x-w/2, m4, w, color="#5dade2", edgecolor="black", lw=0.8, label="Top-4 successors", zorder=3)
-    ax.bar(x+w/2, m8, w, color="#1a5276", edgecolor="black", lw=0.8, label="Top-8 successors", zorder=3)
-    for xi,v in zip(x-w/2, m4): ax.text(xi, v+1, f"{v:.0f}", ha="center", va="bottom", fontsize=7)
-    for xi,v in zip(x+w/2, m8): ax.text(xi, v+1, f"{v:.0f}", ha="center", va="bottom", fontsize=7)
-    ax.set_xticks(x); ax.set_xticklabels([SHIFT_LABEL[s] for s in shifts])
-    ax.set_xlabel("Successor region granularity"); ax.set_ylabel("Transitions\ncovered (%)")
-    ax.set_ylim(0, 105); ax.grid(axis="y"); spines(ax); ax.legend(fontsize=9, loc="lower left")
-    fig.tight_layout(); save(fig, "figure8_granularity")
+    # Figure 3 — per-PC delta distributions of selected source regions (4 workloads)
+    if os.path.exists(a.regions):
+        panels = defaultdict(list)
+        for row in csv.DictReader(open(a.regions, newline="")):
+            panels[row["workload"]].append({k: int(v) for k, v in row.items()
+                                            if k not in ("workload", "pc_hex", "source_region_hex", "top5_rate", "top6_rate")})
 
-    # Figure 4 — CDF of unique (PC, delta) pairs per workload
-    vals = sorted(d["n_unique_pc_delta"] for d in rows if d.get("n_unique_pc_delta", 0) > 0)
-    ecdf = [(i + 1) / len(vals) * 100 for i in range(len(vals))]
-    fig, ax = plt.subplots(figsize=(4.8, 3.0))
-    ax.plot(vals, ecdf, color="#1f77b4", lw=2.4)
-    ax.set_xscale("log")
-    ax.set_xlabel("Unique (PC, $\\Delta$) pairs per workload"); ax.set_ylabel("Workloads (CDF, %)")
-    ax.set_ylim(0, 100); ax.grid(axis="both", which="both"); spines(ax)
-    if vals:
-        med = vals[len(vals) // 2]
-        ax.axvline(med, color="#c0392b", ls="--", lw=1.2)
-        ax.text(med, 6, f" median {med:,}", color="#c0392b", fontsize=9, ha="left")
-    fig.tight_layout(); save(fig, "figure4_pc_delta_pairs")
-
-    # Figure 9 — % of representable delta occurrences (freq-weighted)
-    gw = [mean([d["global_wt"][j] for d in sel])*100 for j in range(len(BITS))]
-    pw = [mean([d["pc_wt"][j] for d in sel])*100 for j in range(len(BITS))]
-    fig, ax = plt.subplots(figsize=(5.4, 2.6))
-    ax.plot(BITS, gw, "s-", color="tab:orange", lw=2, ms=6, label="Global $\\Delta$")
-    ax.plot(BITS, pw, "^-", color="tab:green", lw=2, ms=6, label="Per-PC $\\Delta$")
-    ax.fill_between(BITS, gw, pw, color="tab:green", alpha=0.12)
-    ax.axvline(18, color="darkgreen", ls=":", lw=1.5, alpha=0.7); ax.axhline(95, color="gray", ls=":", lw=1, alpha=0.5)
-    ax.set_xlabel("Delta bit-width $b_{off}$ (signed)"); ax.set_ylabel("% of Representable\nDelta Occurrences")
-    ax.set_xticks(BITS); ax.set_ylim(0, 103); ax.grid(axis="both"); spines(ax); ax.legend(fontsize=9, loc="lower right")
-    fig.tight_layout(); save(fig, "figure9_delta_representable")
-
-    # Figure 6 — fraction of transitions per source region, 4 example workloads
-    if a.dumps_dir:
-        try: figure6(a.dumps_dir, a.out_dir)
-        except Exception as e: print(f"  figure6 error: {e}")
+        def series(regions):
+            counts = [{r[f"delta{i}"]: r[f"count{i}"] for i in range(1, 7) if r[f"count{i}"] > 0} for r in regions]
+            deltas = sorted(set().union(*(set(c) for c in counts)))
+            return {d: [100 * c.get(d, 0) / r["transitions"] for c, r in zip(counts, regions)] for d in deltas}
+        all_d = sorted(set().union(*(set(series(r)) for r in panels.values())))
+        light = (0.52, 0.64, 0.73)
+        colors = {d: to_hex(colorsys.hls_to_rgb((0.54 + i * 0.61803398875) % 1, light[i % 3], 0.42)) for i, d in enumerate(all_d)}
+        fig, axes = plt.subplots(2, 2, figsize=(9, 7), layout="constrained")
+        for pi, (ax, (wl, regions)) in enumerate(zip(axes.flat, panels.items())):
+            pos = list(range(len(regions))); bottom = [0.0] * len(regions)
+            for d, vals in series(regions).items():
+                act = [i for i, v in enumerate(vals) if v > 0]
+                ax.bar([pos[i] for i in act], [vals[i] for i in act], bottom=[bottom[i] for i in act],
+                       color=colors[d], edgecolor="#303030", linewidth=1.1)
+                r_, g_, b_ = to_rgb(colors[d]); tc = "white" if 0.299 * r_ + 0.587 * g_ + 0.114 * b_ < 0.5 else "black"
+                for x_, v, b in zip(pos, vals, bottom):
+                    if v >= 5: ax.text(x_, b + v / 2, f"{d:+d}", ha="center", va="center", fontsize=8, color=tc)
+                bottom = [b + v for b, v in zip(bottom, vals)]
+            ax.bar(pos, [100 - b for b in bottom], bottom=bottom, color="#dedede", edgecolor="#303030", linewidth=1.1, hatch="//")
+            for x_, cov in zip(pos, bottom): ax.text(x_, 103, f"{cov:.1f}%", ha="center", fontsize=9)
+            ax.set_yticks(range(0, 101, 20)); ax.set_axisbelow(True)
+            ax.yaxis.grid(True, color="#555555", linewidth=0.7, alpha=0.22); ax.xaxis.grid(False)
+            ax.set_xticks(pos, [f"{r['source_region']:#x}\nn={r['transitions']:,}" for r in regions], rotation=25, ha="right", fontsize=8)
+            sp = ax.get_subplotspec()
+            ax.set(ylabel="Observed deltas (%)" if sp.is_first_col() else "",
+                   xlabel="Source 32 KiB region" if sp.is_last_row() else "", ylim=(0, 113))
+            ax.set_title(wl, fontweight="bold", fontsize=13, pad=8)
+            ax.text(0.01, 1.02, f"({chr(ord('a') + pi)})", transform=ax.transAxes, ha="left", va="bottom", fontsize=12, fontweight="bold")
+            for s in ax.spines.values(): s.set_visible(True); s.set_color("#303030"); s.set_linewidth(1.6)
+        save(fig, "figure3_delta_distributions")
     else:
-        print("  figure6 skipped (pass --dumps-dir to enable)")
+        print(f"  figure3 skipped (no {a.regions})")
 
+    # Figure 5 — destination-region granularity (top-4 / top-8), mean ± 1 std dev
+    col = lambda key: np.array([d[key] for d in sel if key in d]) * 100
+    m4 = [col(f"cov4_s{s}").mean() for s in SHIFTS]; s4 = [col(f"cov4_s{s}").std(ddof=1) for s in SHIFTS]
+    m8 = [col(f"cov8_s{s}").mean() for s in SHIFTS]; s8 = [col(f"cov8_s{s}").std(ddof=1) for s in SHIFTS]
+    w = 0.34; x = np.arange(len(SHIFTS)); ek = {"linewidth": 0.7, "color": "0.3"}
+    fig, ax = plt.subplots(figsize=(7.0, 2.6))
+    ax.bar(x - w / 2, m4, w, color="#5dade2", edgecolor="black", linewidth=0.8, yerr=s4, capsize=2, error_kw=ek,
+           label="Top-4 Most-Frequent Deltas", zorder=3)
+    ax.bar(x + w / 2, m8, w, color="#1a5276", edgecolor="black", linewidth=0.8, yerr=s8, capsize=2, error_kw=ek,
+           label="Top-8 Most-Frequent Deltas", zorder=3)
+    for i in range(len(SHIFTS)):
+        ax.text(x[i] - w / 2, m4[i] + s4[i] + 1.0, f"{m4[i]:.1f}", ha="center", va="bottom", fontsize=10, fontweight="bold", color="#2471a3")
+        ax.text(x[i] + w / 2, m8[i] + s8[i] + 1.0, f"{m8[i]:.1f}", ha="center", va="bottom", fontsize=10, fontweight="bold", color="#1a5276")
+    ax.set_xticks(x); ax.set_xticklabels([SHIFT_LABEL[s] for s in SHIFTS], fontsize=14, rotation=20)
+    ax.set_xlabel("Size of Destination Region", fontsize=12); ax.set_ylabel("Fraction of captured \n transitions (%)", fontsize=12)
+    ax.set_ylim(0, max(max(np.add(m8, s8)), max(np.add(m4, s4))) + 18)
+    ax.legend(fontsize=11, loc="lower right", framealpha=0.9); paper_axes(ax)
+    ax.tick_params(axis="x", which="major", length=0); ax.tick_params(axis="y", which="major", labelsize=14)
+    fig.tight_layout(); save(fig, "figure5_granularity")
+    print("    top-4 / top-8 (%): " + ", ".join(f"{SHIFT_LABEL[s]} {u:.1f}/{v:.1f}" for s, u, v in zip(SHIFTS, m4, m8)))
+
+    # Figure 6 — fate of prefetched PTEs in a 1536-entry, 4-way TLB (tlb_prefetch_sim)
+    tlb = {}
+    for f in glob.glob(os.path.join(a.tlb_dir or "", "*.json")):
+        try: d = json.load(open(f)); tlb[d["workload"]] = d
+        except Exception: pass
+    names = [d["workload"] for d in sel if d["workload"] in tlb]
+    if names:
+        def summ(shift, k):
+            used, ev, end = [], [], []
+            for wl in names:
+                r = next((r for r in tlb[wl]["results"] if r["shift"] == shift and r["k"] == k), None)
+                if r and r["pte_fetched"]:
+                    f_ = r["pte_fetched"]; used.append(r["pte_used"] / f_)
+                    ev.append(r["pte_evicted_unused"] / f_); end.append(r["pte_unused_at_end"] / f_)
+            return mean(used) * 100, mean(ev) * 100, mean(end) * 100
+        TK = [4, 8]; BW = 0.34
+        fig, ax = plt.subplots(figsize=(7.0, 3.2)); x = np.arange(len(SHIFTS))
+        for j, k in enumerate(TK):
+            m = np.array([summ(s, k) for s in SHIFTS]); xo = x + (j - 0.5) * BW
+            ax.bar(xo, m[:, 0], BW, color="#71DD9E", edgecolor="black", linewidth=0.8, zorder=3, label="Used" if j == 0 else None)
+            ax.bar(xo, m[:, 1] + m[:, 2], BW, bottom=m[:, 0], color="#2A7348", edgecolor="black", linewidth=0.8, zorder=3,
+                   label="Evicted unused" if j == 0 else None)
+            for xi, u in zip(xo, m[:, 0]):
+                ax.text(xi, u + 1.5, f"{u:.1f}", ha="center", va="bottom", fontsize=10, fontweight="bold", color="white", zorder=4)
+                ax.text(xi, 101.5, f"k={k}", ha="center", va="bottom", fontsize=11)
+            print(f"    k={k} used (%): " + ", ".join(f"{SHIFT_LABEL[s]} {u:.1f}" for s, u in zip(SHIFTS, m[:, 0])))
+        ax.set_xticks(x); ax.set_xticklabels([SHIFT_LABEL[s] for s in SHIFTS], fontsize=14, rotation=20)
+        ax.set_xlabel("Size of Destination Region", fontsize=12); ax.set_ylabel("Prefetched PTEs (%)", fontsize=12)
+        ax.set_ylim(0, 100)
+        ax.legend(fontsize=11, loc="lower center", bbox_to_anchor=(0.5, 1.1), ncol=2, frameon=False)
+        paper_axes(ax, ymajor=25, yminor=None)
+        ax.tick_params(axis="x", which="major", length=0); ax.tick_params(axis="y", which="major", labelsize=14)
+        fig.tight_layout(); save(fig, "figure6_pte_fate")
+    else:
+        print("  figure6 skipped (no TLB-simulation results; pass --tlb-dir)")
+
+    # Figure 7 — representable delta occurrences vs signed bit-width
+    gw = [mean([d["global_wt"][j] for d in sel]) * 100 for j in range(len(BITS))]
+    pw = [mean([d["pc_wt"][j] for d in sel]) * 100 for j in range(len(BITS))]
+    fig, ax = plt.subplots(figsize=(5.5, 2.3))
+    ax.plot(BITS, gw, "s-", color="tab:orange", lw=2, ms=6, label="Global Delta")
+    ax.plot(BITS, pw, "^-", color="tab:green", lw=2, ms=6, label="Per-PC Delta")
+    ax.fill_between(BITS, gw, pw, color="tab:green", alpha=0.15)
+    ax.axvline(18, color="darkgreen", ls=":", lw=1.5, alpha=0.7); ax.axhline(95, color="gray", ls=":", lw=1, alpha=0.5)
+    ax.set_xlabel(r"Bit-width $b_{off}$ (signed)", fontsize=13); ax.set_ylabel("% of Representable\n Delta Occurrences", fontsize=13)
+    ax.set_ylim(0, 105); ax.set_xticks(BITS)
+    ax.legend(fontsize=13, loc="lower right", bbox_to_anchor=(0.4, 0.45)); paper_axes(ax)
+    for s in ax.spines.values(): s.set_linewidth(0.8)
+    ax.tick_params(axis="both", which="major", length=6, labelsize=14); ax.xaxis.set_minor_locator(mtick.MultipleLocator(1))
+    fig.tight_layout(); save(fig, "figure7_delta_bits")
+    j16, j18 = BITS.index(16), BITS.index(18)
+    print(f"    per-PC: 16 bits {pw[j16]:.1f}%, 18 bits {pw[j18]:.1f}%; global: 18 bits {gw[j18]:.1f}%")
     print(f"wrote figures to {a.out_dir}")
+
 
 if __name__ == "__main__":
     main()

@@ -106,25 +106,37 @@ exit 2; }
 [ -d "$DUMPS/ptw_dumps" ] && DUMPS="$DUMPS/ptw_dumps"
 ls "$DUMPS"/*.csv* >/dev/null 2>&1 || { echo "ERROR: no dumps (*.csv/*.csv.gz) in $DUMPS"; exit 1; }
 [ "$JOBS" -lt 1 ] 2>/dev/null && JOBS=1
-JDIR="$OUT/json"; mkdir -p "$JDIR"
+JDIR="$OUT/json"; TDIR="$OUT/tlbsim"; mkdir -p "$JDIR" "$TDIR"
 AN="$HERE/analyze_dump.py"
+# Figure 6: each dump is also replayed through a 1536-entry, 4-way TLB with a
+# region prefetcher (tlb_prefetch_sim), capped at the first 1M page table walks.
+SIM="$HERE/tlb_prefetch_sim"
+SIM_ARGS="--entries 1536 --ways 4 --shifts 0,3,6,9,12 --ks 4,8 --predictor oracle --ptes valid --filter 0 --max-rows 1000000"
+if [ "$ACTION" = "analyse" ] && { [ ! -x "$SIM" ] || [ "$HERE/tlb_prefetch_sim.cc" -nt "$SIM" ]; }; then
+  g++ -O2 -std=c++17 -o "$SIM" "$HERE/tlb_prefetch_sim.cc" || { echo "ERROR: cannot build tlb_prefetch_sim"; exit 1; }
+fi
+# one workload's analysis: both outputs are written to a temporary name first
+job_cmd() {  # $1 = dump, $2 = workload
+  printf '%s' "python3 '$AN' --dump '$1' --workload '$2' --out '$JDIR/$2.json' && " \
+    "'$SIM' --dump '$1' --workload '$2' --out '$TDIR/$2.json.tmp' $SIM_ARGS && mv '$TDIR/$2.json.tmp' '$TDIR/$2.json'"
+}
 
 # A workload counts as analysed only if its JSON is complete: a truncated one
 # (job killed mid-write by an older, non-atomic analyze_dump.py) would otherwise
 # be skipped forever by this resume test and then break the plot.
-json_ok() { [ -s "$1" ] && [ "$(tail -c 1 "$1" 2>/dev/null)" = "}" ]; }
+json_ok() { [ -s "$1" ] && tail -c 2 "$1" 2>/dev/null | tr -d '\n' | grep -q '}$'; }
 
 # build the worklist of dumps still needing a JSON
 work=$(mktemp)
 for dump in "$DUMPS"/*.csv "$DUMPS"/*.csv.gz; do
   [ -e "$dump" ] || continue
   wl=$(basename "$dump"); wl="${wl%.csv.gz}"; wl="${wl%.csv}"
-  json_ok "$JDIR/$wl.json" || echo "$dump"
+  { json_ok "$JDIR/$wl.json" && json_ok "$TDIR/$wl.json"; } || echo "$dump"
 done > "$work"
 todo=$(grep -c . "$work"); total=$(ls "$DUMPS"/*.csv "$DUMPS"/*.csv.gz 2>/dev/null | wc -l)
 have() {  # complete JSONs only
   local f n=0
-  for f in "$JDIR"/*.json; do [ -e "$f" ] || continue; json_ok "$f" && n=$((n+1)); done
+  for f in "$JDIR"/*.json; do [ -e "$f" ] || continue; json_ok "$f" && json_ok "$TDIR/$(basename "$f")" && n=$((n+1)); done
   echo "$n"
 }
 plot_cmd="bash experiments/ae/motivation/run_motivation.sh --plot${OUT_SET:+ --out $OUT}"
@@ -167,7 +179,7 @@ if [ "$ACTION" = "plot" ]; then
     echo "  wait and re-run this command, or pass --allow-partial to plot anyway." >&2
     exit 1
   fi
-  python3 "$HERE/plot_motivation.py" --json-dir "$JDIR" --dumps-dir "$DUMPS" --out-dir "$OUT" \
+  python3 "$HERE/plot_motivation.py" --json-dir "$JDIR" --tlb-dir "$TDIR" --out-dir "$OUT" \
     && echo "figures in $OUT" || { echo "  (plot failed — need matplotlib)"; exit 1; }
   exit 0
 fi
@@ -182,8 +194,7 @@ if [ -n "$EMIT_CMDS" ]; then
   : > "$EMIT_CMDS"
   while IFS= read -r dump; do
     wl=$(basename "$dump"); wl="${wl%.csv.gz}"; wl="${wl%.csv}"
-    printf '%s\0' "python3 '$AN' --dump '$dump' --workload '$wl' --out '$JDIR/$wl.json' >/dev/null 2>&1" \
-      >> "$EMIT_CMDS"
+    printf '%s\0' "{ $(job_cmd "$dump" "$wl"); } >/dev/null 2>&1" >> "$EMIT_CMDS"
   done < "$work"
   rm -f "$work"
   echo "  local: queued $todo analyses for the shared scheduler."
@@ -198,16 +209,20 @@ if [ "$todo" -gt 0 ]; then
       wl=$(basename "$dump"); wl="${wl%.csv.gz}"; wl="${wl%.csv}"
       sbatch ${PARTS:+--partition=$PARTS} -c 2 -J "mot_$wl" \
         --output="$JDIR/$wl.slurm.out" --error="$JDIR/$wl.slurm.err" \
-        --wrap="python3 '$AN' --dump '$dump' --workload '$wl' --out '$JDIR/$wl.json'" >/dev/null
+        --wrap="$(job_cmd "$dump" "$wl")" >/dev/null
       # exact names for the watcher: a mot_* prefix could alias another job of yours
       echo "mot_$wl" >> "$AE_OUT/motivation.jobnames"
     done < "$work"
     echo "  submitted $todo SLURM jobs."
   else
     echo "  running locally on up to $JOBS cores ..."
-    xargs -a "$work" -P "$JOBS" -I{} bash -c '
-      d="{}"; wl=$(basename "$d"); wl="${wl%.csv.gz}"; wl="${wl%.csv}"
-      python3 "'"$AN"'" --dump "$d" --workload "$wl" --out "'"$JDIR"'/$wl.json" >/dev/null 2>&1'
+    cmds=$(mktemp)
+    while IFS= read -r dump; do
+      wl=$(basename "$dump"); wl="${wl%.csv.gz}"; wl="${wl%.csv}"
+      printf '%s\0' "{ $(job_cmd "$dump" "$wl"); } >/dev/null 2>&1"
+    done < "$work" > "$cmds"
+    xargs -0 -a "$cmds" -P "$JOBS" -I{} bash -c '{}'
+    rm -f "$cmds"
   fi
 fi
 rm -f "$work"
