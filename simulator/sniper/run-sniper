@@ -468,6 +468,48 @@ if not os.path.exists(outputdir):
     print('Failed to create output directory', outputdir, file=sys.stderr)
     sys.exit(-1)
 
+# One simulation per output directory.  Two runs writing the same directory
+# (e.g. a job submitted twice) interleave their outputs: the first to finish
+# dumps statistics from a sim.stats.sqlite3 the other is still writing, which
+# leaves an empty sim.stats.  Take an exclusive POSIX lock before touching
+# anything in the directory; a second run finds it held and exits without
+# modifying the directory.  POSIX (fcntl) locks are enforced across hosts on
+# NFSv4 and released by the kernel when the holder exits or dies, so a crashed
+# run never leaves a stale lock.  The lock is held until this process exits.
+import fcntl, errno
+_run_lock_path = os.path.join(outputdir, '.run-sniper.lock')
+try:
+  _run_lock = open(_run_lock_path, 'a+')
+except OSError as e:
+  print('[SNIPER] ERROR: cannot create %s: %s' % (_run_lock_path, e), file=sys.stderr)
+  sys.exit(-1)
+try:
+  fcntl.lockf(_run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError as e:
+  if e.errno not in (errno.EAGAIN, errno.EACCES):
+    # Not a conflict: the lock service itself failed (e.g. ENOLCK on NFS).
+    # Don't report a phantom duplicate; fail with the real error.
+    print('[SNIPER] ERROR: cannot lock %s: %s' % (_run_lock_path, e), file=sys.stderr)
+    sys.exit(-1)
+  try:
+    with open(_run_lock_path) as f: _holder = f.read().strip()
+  except OSError:
+    _holder = 'unknown'
+  _msg = '[SNIPER] ERROR: output directory %s is in use by another run (%s); refusing to start a second simulation there.' % (outputdir, _holder or 'unknown')
+  print(_msg, file=sys.stderr)
+  # Also leave a marker of its own: when the duplicate runs on another host,
+  # its line in the shared slurm.err can be overwritten (appends from two NFS
+  # clients to one file are not atomic).
+  try:
+    with open(os.path.join(outputdir, '.run-sniper.refused.%s.%d' % (os.getenv('SLURM_JOB_ID', 'nojob'), os.getpid())), 'w') as f:
+      f.write(_msg + '\n')
+  except OSError:
+    pass
+  sys.exit(75)   # EX_TEMPFAIL
+_run_lock.seek(0); _run_lock.truncate()
+_run_lock.write('host=%s pid=%d slurm_job=%s started=%s\n' % (platform.node(), os.getpid(), os.getenv('SLURM_JOB_ID', '-'), time.strftime('%Y-%m-%d %H:%M:%S')))
+_run_lock.flush()
+
 if save_output:
   prefix_fd = run_sniper.Tee(os.path.join(outputdir, 'sim.stdout'))
   os.dup2(prefix_fd, sys.stdout.fileno())

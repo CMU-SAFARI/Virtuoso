@@ -61,21 +61,81 @@ ae_preflight_traces() {  # $1 = jobfile
   return 0
 }
 
+# Fills VALID / HAVEDB (declared by the caller; bash scoping is dynamic) with
+# the run dirs under $1 that have a valid sim.stats / a sim.stats.sqlite3.
+# Keyed by the full run dir, spelled as in the jobfile's -d.  Single-core run
+# dirs are results/<rundir>, multicore results/<suite>/<rundir>, so the
+# files are at depth 3 or 4.
+_ae_scan_results() {  # $1 = results root
+  local p
+  VALID=(); HAVEDB=()
+  while IFS= read -r p; do VALID["${p%/simulation}"]=1; done < <(
+    find "$1" -maxdepth 4 -path '*/simulation/sim.stats' -size +50k -printf '%h\n' 2>/dev/null)
+  while IFS= read -r p; do HAVEDB["${p%/simulation}"]=1; done < <(
+    find "$1" -maxdepth 4 -path '*/simulation/sim.stats.sqlite3' -printf '%h\n' 2>/dev/null)
+}
+
 # --- emit sbatch lines whose result is NOT valid (missing/failed/truncated) --
-# Fast: build the set of valid run-dir basenames once via `find -size` (a valid
-# sim.stats is ~140KB; missing/failed jobs have none or a tiny one), then filter
-# the jobfile with bash builtins. Injects partitions. NUL-separated to stdout.
+# Fast: build the set of valid run dirs once via `find -size` (a valid sim.stats
+# is ~140KB; missing/failed jobs have none or a tiny one), then filter the
+# jobfile with bash builtins. Injects partitions. NUL-separated to stdout.
 ae_missing_lines() {  # $1=jobfile $2=partitions
-  local jf="$1" parts="$2" rroot d b line
+  # Emit (NUL-separated, partitions injected) the sbatch lines that still need
+  # to run.  A line is skipped when its run dir
+  #   - already has a valid sim.stats (after regenerating it where possible), or
+  #   - belongs to a job that is queued or running right now.
+  # The second rule prevents duplicate runs: two runs in one directory corrupt
+  # each other's statistics (run-sniper also refuses a second run into a
+  # directory it is using).
+  # Returns 1, emitting nothing, if the queue cannot be read.
+  local jf="$1" parts="$2" rroot d line p q errf cand nq=0
+  declare -A VALID HAVEDB QUEUED
+  # 1. Queue snapshot FIRST, so a job that finishes while the scans below run
+  #    is still seen as queued rather than resubmitted.  Its run dir comes from
+  #    --output=<rundir>/slurm.out.  If squeue fails, stop: carrying on with
+  #    an empty list would resubmit every in-flight job.
+  errf=$(mktemp)
+  if ! q=$(squeue -u "$USER" -h -O "STDOUT:1024" 2>"$errf"); then
+    echo "  ERROR: squeue failed; cannot tell which jobs are already queued/running:" >&2
+    sed 's/^/    /' "$errf" >&2
+    echo "  Nothing submitted (it would duplicate in-flight jobs). Retry when squeue works." >&2
+    rm -f "$errf"; return 1
+  fi
+  rm -f "$errf"
+  # squeue pads each field to 1024 chars; `read` with the default IFS strips
+  # the padding (a parameter-expansion trim is quadratic: ~0.1 s per job).
+  while read -r p; do
+    [ -n "$p" ] && QUEUED["${p%/*}"]=1
+  done <<< "$q"
+  # 2. Results on disk.
   rroot=$(grep -m1 -oE -- '-d [^ ]+/results' "$jf" | awk '{print $2}')
-  declare -A VALID
-  while IFS= read -r p; do VALID["${p##*/}"]=1; done < <(
-    find "$rroot" -maxdepth 3 -name sim.stats -size +50k -printf '%h\n' 2>/dev/null | sed -E 's#/simulation$##')
+  _ae_scan_results "$rroot"
+  # 3. Finished runs (stats DB present) whose sim.stats is missing/invalid:
+  #    rebuild it, never re-run.  Run dirs of in-flight jobs are left alone.
+  cand=$(mktemp)
   while IFS= read -r line; do
     case "$line" in sbatch*) ;; *) continue;; esac
-    d="${line#* -d }"; d="${d%% *}"; b="${d##*/}"
-    [ -n "${VALID[$b]:-}" ] || printf '%s\0' "$(ae_ensure_partition "$line" "$parts")"
+    d="${line#* -d }"; d="${d%% *}"
+    [ -n "${HAVEDB[$d]:-}" ] && [ -z "${VALID[$d]:-}" ] && [ -z "${QUEUED[$d]:-}" ] && printf '%s\n' "$d"
+  done < "$jf" > "$cand"
+  if [ -s "$cand" ]; then
+    xargs -a "$cand" -d '\n' python3 "$AE_LIB/regen_stats.py" "$ROOT/simulator/sniper" | awk '
+      $1=="REGENERATED"{r++} $1=="SKIP"{s[$2]++}
+      END{ if (r) printf "  regenerated sim.stats for %d finished run(s)\n", r > "/dev/stderr";
+           for (k in s) if (k!="valid") printf "  not regenerated (%s): %d\n", k, s[k] > "/dev/stderr" }'
+    _ae_scan_results "$rroot"
+  fi
+  rm -f "$cand"
+  # 4. Emit what is neither valid nor in flight.
+  while IFS= read -r line; do
+    case "$line" in sbatch*) ;; *) continue;; esac
+    d="${line#* -d }"; d="${d%% *}"
+    [ -n "${VALID[$d]:-}" ] && continue
+    if [ -n "${QUEUED[$d]:-}" ]; then nq=$((nq+1)); continue; fi
+    printf '%s\0' "$(ae_ensure_partition "$line" "$parts")"
   done < "$jf"
+  [ "$nq" -gt 0 ] && echo "  skipped $nq job(s) already queued/running" >&2
+  return 0
 }
 
 # --- count valid results under a results dir (fast: file presence during poll) ---

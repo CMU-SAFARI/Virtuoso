@@ -66,12 +66,15 @@ if [ "$KIND" = "mot" ]; then
   }
   if [ -s "$MOTNAMES" ]; then
     count_active_slurm() {
-      comm -12 <(squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | sort -u) \
-               <(sort -u "$MOTNAMES") | wc -l
+      local q
+      q=$(squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null) || { echo "?"; return; }
+      comm -12 <(printf '%s\n' "$q" | sort -u) <(sort -u "$MOTNAMES") | wc -l
     }
   else
     count_active_slurm() {
-      squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | grep -c '^mot_'
+      local q
+      q=$(squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null) || { echo "?"; return; }
+      printf '%s\n' "$q" | grep -c '^mot_'
     }
   fi
 else
@@ -83,10 +86,12 @@ else
   count_valid() {  # valid sim.stats among expected rundirs
     local d n=0; for d in "${RUNDIRS[@]}"; do ae_valid_result "$d" && n=$((n+1)); done; echo "$n"
   }
-  count_active_slurm() {  # suite jobs still queued/running
-    local active; active=$(comm -12 \
-       <(squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null | sort -u) \
-       <(printf '%s\n' "${JOBNAMES[@]}") | wc -l); echo "$active"
+  count_active_slurm() {  # suite jobs still queued/running; "?" if squeue failed
+    # A failed squeue (e.g. slurmctld timing out under load) must not read as an
+    # empty queue: that would end the watch early and report every job as failed.
+    local q
+    q=$(squeue -u "$USER" -h -o '%j' -t PD,R,CG,CF,S 2>/dev/null) || { echo "?"; return; }
+    comm -12 <(printf '%s\n' "$q" | sort -u) <(printf '%s\n' "${JOBNAMES[@]}") | wc -l
   }
 fi
 
@@ -107,6 +112,14 @@ while :; do
     active=$([ "$done" -lt "$exp" ] && [ "$stalled" -eq 0 ] && echo 1 || echo 0)
   fi
   prev_done=$done
+  if [ "$active" = "?" ]; then     # queue unknown this round: report, retry later
+    { echo "suite:   $SUITE        mode: $mode"
+      echo "updated: $(date '+%Y-%m-%d %H:%M:%S')"
+      echo "done:    $done / $exp   (jobs with a valid sim.stats)"
+      echo "active:  ?   (squeue unavailable; retrying)"
+      echo "status:  RUNNING"; } > "$STATUS"
+    sleep "$INTERVAL"; continue
+  fi
   pending=$(( exp - done )); [ "$pending" -lt 0 ] && pending=0
   # RESULTS ON DISK ARE THE TRUTH; the queue is only a secondary signal.
   # Once every expected result is there the suite IS finished, whatever SLURM
