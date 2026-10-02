@@ -4,13 +4,13 @@ This artifact reproduces the main results of the TRAIL paper. TRAIL is a tempora
 TLB prefetcher that makes each page-table
 entry carry the translations that most often follow it, so one prefetch both
 installs a translation and delivers the next prediction. The experiments compare
-TRAIL against a no-prefetch baseline, prior TLB prefetchers (ASP, Stride/NextPage,
+TRAIL against a no-prefetch baseline, prior TLB prefetchers (IP-Stride, Next-Page,
 DP, Recency, ATP, Berti), and a Perfect-L2TLB upper bound on the Sniper
 architectural simulator (with the MimicOS operating-system model), across
 single-core (8 MB and 2 MB last-level-cache NUCA) and 4-core configurations.
 
 Reproducing a result takes three steps: **(1) install dependencies → (2) build &
-validate → (3) run the experiments.** The motivation figures (4, 5, 6, 8, 9) are
+validate → (3) run the experiments.** The motivation figures (2, 3, 5, 6, 7) are
 a separate, trace-free step — two commands (analyse, then plot) over a set of
 page-table-walk dumps, with no simulation involved.
 
@@ -112,20 +112,21 @@ into `experiments/vm_tlist/` for you.
 ## Step 3 — Reproduce the paper results
 
 Every row below is one paper artifact, and every row is a **suite** driven by the
-same `ae_run_all.sh` — six of them simulate, while `motivation` analyses
+same `ae_run_all.sh` — all but `motivation` simulate, while `motivation` analyses
 page-table-walk dumps instead. Outputs land in `experiments/ae/ae_out/` and, for
 the motivation figures, `experiments/ae/motivation/motivation_out/`.
 
 | suite / step | reproduces                                       |  jobs | output |
 |--------------|--------------------------------------------------|------:|--------|
-| `head8mb`    | Head-to-head @ 8 MB NUCA (headline)              |  2761 | **Figure 12** (bottom) + **Figure 13** (mechanism) |
-| `head2mb`    | Head-to-head @ 2 MB NUCA                         |  2761 | **Figure 12** (top) |
-| `table5`     | In-PTE payload-budget sweep                      |  5271 | **Table 5** |
-| `table6`     | Side-car payload sweep                           |  6275 | **Table 6** |
-| `pqsweep`    | L2-TLB prefetch-queue sensitivity                |  3012 | **Figure 20** |
-| `multicore`  | 4-core, 100-mix head-to-head                     |  1000 | **Figure 22** |
-| `motivation` | Temporal-locality characterization (no simulation) | 251 | **Figures 4, 5, 6, 8, 9** |
-| **all**      | every suite above, the default                   | **21331** | |
+| `head2mb`    | Head-to-head @ 2 MB LLC per core                 |  3263 | **Figure 11** (top) + **Figure 13** |
+| `head8mb`    | Head-to-head @ 8 MB LLC per core                 |  3263 | **Figure 11** (bottom) |
+| `table5`     | In-PTE payload-budget sweep                      |  5271 | **Table 4** |
+| `table6`     | TRAIL-External payload sweep                     |  6275 | **Table 5** |
+| `multicore`  | 4-core, 100-mix head-to-head                     |  1200 | **Figure 16** |
+| `head2mb_mtps400` … `head2mb_mtps4800` | DRAM bandwidth (400–4800 MT/s; 2400 is `head2mb`) | 3000 | **Figure 18** |
+| `abl2mb`     | TRAIL component ablation @ 2 MB LLC per core     |   600 | **Figure 19** |
+| `motivation` | Temporal-locality characterization (no simulation) | 251 | **Figures 2, 3, 5, 6, 7** |
+| **all**      | every suite above, the default                   | **23123** | |
 
 The order is the same everywhere: **launch everything, check progress, then
 produce the figures.** Nothing plots by itself, and the plotting passes only work
@@ -202,25 +203,26 @@ bash experiments/ae/ae_run_all.sh --results
 ```
 
 This parses each finished suite and renders its figure or table, including
-Figures 4, 5, 6, 8, 9 from the motivation suite. It skips anything not finished
+Figures 2, 3, 5, 6, 7 from the motivation suite. It skips anything not finished
 yet and says so, so it is safe to re-run as the remaining suites land.
 
 ### What you get (SLURM or single machine)
 
-`ae_run_all.sh --results` writes, for each suite, a table (`ae_out/<suite>.md`)
-and a rendered image in `ae_out/`: `figure12.pdf` (the 2×2 plot, once **both**
-`head8mb` and `head2mb` have run), `figure13.pdf`, `figure20.pdf`, `figure22.pdf`,
-and `table5.pdf`/`table6.pdf`. Progress lives in `ae_out/<suite>.status`, and each
+`ae_run_all.sh --results` writes each figure or table to `ae_out/` as a PDF (and
+PNG) with its numbers next to it in a Markdown file: `figure11` (one row per LLC
+size; both rows once `head2mb` and `head8mb` have run), `figure13`, `figure16`,
+`figure18` (every DRAM speed that has run), `figure19`, `table4` and `table5`. Progress lives in `ae_out/<suite>.status`, and each
 finished suite gets an `ae_out/<suite>.DONE` **pass/fail report** (listing any
 failed jobs and where to find their logs).
 
 On the motivation side, the 3.1 analysis writes one JSON per workload to
-`motivation_out/json/`, and 3.3's `--plot` renders Figures 4, 5, 6, 8, 9 into
+`motivation_out/json/` and one TLB-simulation result to `motivation_out/tlbsim/`
+(Figure 6), and 3.3's `--plot` renders Figures 2, 3, 5, 6, 7 into
 `experiments/ae/motivation/motivation_out/` (see
 [`motivation/README.md`](motivation/)).
 
 **Scale & runtime:** a single-core job simulates 300 M instructions (a few
-minutes to under an hour each); `all` is 21,080 jobs. On a **~1300-core cluster
+minutes to under an hour each); `all` is 22,872 simulations. On a **~1300-core cluster
 the entire set finishes within ~1 day**, and the longest single suite (`table6`)
 takes **~10 hours**. On a single machine the shared scheduler spreads whatever you
 launch across your cores; a full local run is still large, so use `--icount` for a
@@ -258,14 +260,15 @@ closely match the paper. Speedups are geometric-mean over the workload suite
 
 | suite | expected (approx.) |
 |-------|--------------------|
-| `head8mb` (Figure 12,13, 8 MB) | **TRAIL ≈ +4.7%** over no-prefetch (**+2.4%** over ASP); Perfect-L2TLB ≈ +11% (upper bound) |
-| `head2mb` (Figure 12, 2 MB) | **TRAIL ≈ +5.1%** over no-prefetch (**+2.8%** over ASP); Perfect-L2TLB ≈ +16.5% |
-| `table5`  (Table 5)         | TRAIL (in-PTE) grows with the payload budget, up to **≈ +2.4%** over ASP |
-| `table6`  (Table 6)         | TRAIL (side-car) grows with the payload budget, up to **≈ +2.5%** over ASP |
-| `pqsweep` (Figure 20)       | **TRAIL ≈ +2.2–2.4%** over the same-size ASP across every PQ size (64→1024) |
-| `multicore` (Figure 22)     | **TRAIL ≈ +11%** harmonic-mean (best prior prefetcher ≈ +5%); Perfect-L2TLB ≈ +23% |
+| `head2mb` (Figure 11 top, Figure 13) | **TRAIL ≈ +5.7%** over No-TLB-Prefetcher, **+1.6%** over the best prior prefetcher (Recency); Perfect-L2TLB ≈ +16.7%. On the 50 most translation-intensive workloads TRAIL cuts total demand page-table-walk latency by ≈ 60% (Recency ≈ 42%) |
+| `head8mb` (Figure 11 bottom) | **TRAIL ≈ +5.2%** over No-TLB-Prefetcher, **+1.8%** over Recency; Perfect-L2TLB ≈ +12.0% |
+| `table5`  (Table 4)  | in-PTE TRAIL grows with the number of deltas, up to **≈ +5.15%** |
+| `table6`  (Table 5)  | TRAIL-External grows with the payload, up to **≈ +5.26%** |
+| `multicore` (Figure 16) | **TRAIL ≈ +11.5%** harmonic-mean, Recency ≈ +8.7%; with Next-Page ≈ +14.1%; Perfect-L2TLB ≈ +23.1% |
+| `head2mb_mtps*` (Figure 18) | TRAIL above Recency at every DRAM speed: ≈ +1.7% vs +0.7% at 400 MT/s, ≈ +5.2% vs +3.5% from 1600 MT/s up |
+| `abl2mb` (Figure 19) | top-50 workloads: global deltas ≈ +9.1%, + PC table ≈ +10.6%, + virtualized PC table ≈ +10.7%, full TRAIL ≈ +11.1% |
 
-In every suite **TRAIL should beat all prior prefetchers** (ASP, Stride/NextPage,
+In every suite **TRAIL should beat all prior prefetchers** (IP-Stride, Next-Page,
 DP, Recency, ATP, Berti) and move toward the Perfect-L2TLB upper bound. The
 `motivation` figures are characterization (temporal locality of TLB-miss
 successors), so they carry no speedup number.

@@ -73,9 +73,31 @@ if [ "$MODE" = "slurm" ]; then
   [ -n "$AE_EXCLUDE" ] && desc="$desc, exclude=$AE_EXCLUDE"
   echo "submitting $EXPECTED SLURM jobs ($desc) ..."
   # submit every job lacking a valid result, injecting partitions
-  ntmp=$(mktemp); ae_missing_lines "$JOBFILE" "$PARTS" > "$ntmp"
+  ntmp=$(mktemp)
+  ae_missing_lines "$JOBFILE" "$PARTS" > "$ntmp" || { rm -f "$ntmp"; echo "[abort] could not build the submit list."; exit 1; }
   cnt=0
-  while IFS= read -r -d '' line; do eval "$line" >/dev/null 2>&1 && cnt=$((cnt+1)); done < "$ntmp"
+  # Every submission attempt is recorded in $AE_OUT/submissions.tsv
+  # (time, suite, OK/FAIL, job id, job name, run dir, message); a failed
+  # sbatch (e.g. slurmctld timeout) is retried 3 times before it is logged FAIL.
+  LEDGER="$AE_OUT/submissions.tsv"
+  [ -s "$LEDGER" ] || printf 'time\tsuite\tstatus\tjobid\tjobname\trundir\tmessage\n' > "$LEDGER"
+  nfail=0
+  while IFS= read -r -d '' line; do
+    jn="${line#* -J }"; jn="${jn%% *}"; rd="${line#* -d }"; rd="${rd%% *}"
+    for try in 1 2 3 4; do
+      out=$(eval "$line" 2>&1); rc=$?
+      [ $rc -eq 0 ] && break
+      sleep $((try * 10))
+    done
+    jid=$(printf '%s' "$out" | grep -oE 'Submitted batch job [0-9]+' | awk '{print $4}')
+    msg=$(printf '%s' "$out" | tr '\t\n' '  ' | cut -c1-200)
+    if [ $rc -eq 0 ] && [ -n "$jid" ]; then
+      cnt=$((cnt+1)); printf '%s\t%s\tOK\t%s\t%s\t%s\t\n' "$(date '+%F %T')" "$SUITE" "$jid" "$jn" "$rd" >> "$LEDGER"
+    else
+      nfail=$((nfail+1)); printf '%s\t%s\tFAIL\t-\t%s\t%s\t%s\n' "$(date '+%F %T')" "$SUITE" "$jn" "$rd" "$msg" >> "$LEDGER"
+    fi
+  done < "$ntmp"
+  [ "$nfail" -gt 0 ] && echo "  WARNING: $nfail submission(s) failed after retries (see $LEDGER); re-run this launch to retry them."
   rm -f "$ntmp"
   echo "  submitted $cnt jobs."
 else

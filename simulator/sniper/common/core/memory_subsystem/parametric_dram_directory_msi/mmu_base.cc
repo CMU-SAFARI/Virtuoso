@@ -461,6 +461,7 @@ namespace ParametricDramDirectoryMSI
 							ptw_info.ptw_id = current_ptw_id;
 							ptw_info.table_id = current_table;
 							ptw_info.is_pte = accesses[req].is_pte;
+							ptw_info.is_ptw_prefetch = is_prefetch;  // lets L2/LLC tag lines filled by prefetch walks
 							
 							MetadataContext::set(core->getId(), ptw_info);
 							

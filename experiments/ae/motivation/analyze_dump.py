@@ -2,12 +2,12 @@
 """analyze_dump.py — per-workload PTW-dump analysis for the motivation figures.
 
 Reads ONE page-table-walk dump (ptw_dump CSV, optionally .gz) and, in a single
-pass, computes the per-workload metrics behind motivation Figures 1-4:
+pass, computes the per-workload metrics behind the motivation figures:
 
-  Fig 1  top-k successor coverage        cov_global[k], cov_pc[k]   (k=1..8)
-  Fig 2  successor-region granularity    cov4_s{shift}, cov8_s{shift}, ntrans_s{shift}
-  Fig 3  unique (PC, delta) pairs         n_unique_pc_delta, n_unique_pc, n_unique_regions, ...
-  Fig 4  representable delta occurrences  global_wt[b], pc_wt[b]     (b=4,6,..,20)
+  Fig 2  top-k successor coverage        cov_global[k], cov_pc[k]   (k=1..8)
+  Fig 5  successor-region granularity    cov4_s{shift}, cov8_s{shift}, ntrans_s{shift}
+  Fig 7  representable delta occurrences  global_wt[b], pc_wt[b]     (b=4,6,..,20)
+         unique (PC, delta) pairs         n_unique_pc_delta, n_unique_pc, n_unique_regions, ...
 
 Writes a single JSON file with all of the above.
 

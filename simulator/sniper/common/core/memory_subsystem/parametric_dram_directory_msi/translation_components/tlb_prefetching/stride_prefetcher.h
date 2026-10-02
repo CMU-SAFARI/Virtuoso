@@ -13,6 +13,17 @@
 namespace ParametricDramDirectoryMSI
 {
 
+	/**
+	 * @brief Sequential (+/-length) TLB prefetcher.
+	 *
+	 * On every access reaching the PQ level it walks the `length` pages on
+	 * EACH side of the accessed page: VPN-length..VPN-1 and VPN+1..VPN+length,
+	 * i.e. 2*length walks per access.  Note that the "next-page" setups in the
+	 * experiment lists (length=1) therefore also prefetch the PREVIOUS page.
+	 * There is no training and no filtering: pages already resident in a TLB
+	 * are walked and returned again (the PQ's region dedup only drops pages
+	 * whose region already has a walk in flight).  Assumes 4KB pages.
+	 */
 	class StridePrefetcher : public TLBPrefetcherBase
 	{
 
@@ -31,5 +42,13 @@ namespace ParametricDramDirectoryMSI
 
 		StridePrefetcher(Core *_core, MemoryManagerBase *_memory_manager, ShmemPerfModel *_shmem_perf_model, int length, String name);
 		std::vector<query_entry> performPrefetch(IntPtr address, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count, PageTable *pt, bool instruction = false, bool tlb_hit = false, bool pq_hit = false, int page_size = 12) override;
+
+	protected:
+		void appendSummary(std::ostream &os) const override
+		{
+			os << " walks=" << stats.prefetch_attempts
+			   << " walks_ok=" << stats.successful_prefetches
+			   << " walks_failed=" << stats.failed_prefetches;
+		}
 	};
 }

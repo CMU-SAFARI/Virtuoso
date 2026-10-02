@@ -58,6 +58,7 @@ void AgileTLBPrefetcher::registerAllStats(core_id_t core_id)
 	registerStatsMetric(cat, core_id, "free_candidates_seen",      &m_stats.free_candidates_seen);
 	registerStatsMetric(cat, core_id, "free_inserted_pq",          &m_stats.free_inserted_pq);
 	registerStatsMetric(cat, core_id, "free_inserted_sampler",     &m_stats.free_inserted_sampler);
+	registerStatsMetric(cat, core_id, "sbfp_demand_unmapped",      &m_stats.sbfp_demand_unmapped);
 
 	// Per-distance stats
 	static const char *dist_names[14] = {
@@ -151,6 +152,10 @@ AgileTLBPrefetcher::AgileTLBPrefetcher(
 	, m_masp_lookahead(masp_lookahead == 0 ? 1 : masp_lookahead)
 	, m_masp_degree(masp_degree == 0 ? 1 : masp_degree)
 	, m_current_instruction(false)
+	, m_functional_demand_lookup(false)
+	, m_probe_allocates(true)
+	, m_fpq_insert_free(true)
+	, m_avg_demand_walk_latency(SubsecondTime::Zero())
 {
 	(void)pq_size; // pq_size is no longer used; the TLB subsystem owns the PQ
 	// Initialize Sampler entries
@@ -172,6 +177,36 @@ AgileTLBPrefetcher::AgileTLBPrefetcher(
 }
 
 AgileTLBPrefetcher::~AgileTLBPrefetcher() {}
+
+void AgileTLBPrefetcher::configureModelFixes(bool functional_demand_lookup, bool probe_allocates, bool fpq_insert_free)
+{
+	m_functional_demand_lookup = functional_demand_lookup;
+	m_probe_allocates = probe_allocates;
+	m_fpq_insert_free = fpq_insert_free;
+
+	// Printed here rather than in the constructor: the factory calls this
+	// right after construction, so the model-fix flags are final.
+	std::cout << logPrefix() << "config: sampler=" << m_sampler_size
+	          << " fpq=" << m_fpq_size << " fdt_bits=" << m_fdt_counter_bits
+	          << " fdt_thr=" << m_fdt_threshold
+	          << " masp_lookahead=" << m_masp_lookahead << " masp_degree=" << m_masp_degree
+	          << " page_shift=" << m_page_shift
+	          << " functional_demand_lookup=" << m_functional_demand_lookup
+	          << " probe_allocates=" << m_probe_allocates
+	          << " fpq_insert_free=" << m_fpq_insert_free
+	          << (m_functional_demand_lookup ? "" : "  (LEGACY: second modelled walk of every missed page; it also faults the demand page in)")
+	          << std::endl;
+}
+
+// EWMA (1/8) of the MMU's demand-walk latency, used to time SBFP free
+// neighbours when they are derived from the demand walk functionally.
+void AgileTLBPrefetcher::onDemandWalkComplete(IntPtr /*address*/, SubsecondTime walk_latency)
+{
+	if (m_avg_demand_walk_latency == SubsecondTime::Zero())
+		m_avg_demand_walk_latency = walk_latency;
+	else
+		m_avg_demand_walk_latency = SubsecondTime::FS((m_avg_demand_walk_latency.getFS() * 7 + walk_latency.getFS()) / 8);
+}
 
 // ═══════════════════════════════════════════════════════════════════
 //  FDT helpers
@@ -339,7 +374,7 @@ bool AgileTLBPrefetcher::inAnyTLB(uint64_t vpn) const
 	IntPtr page_addr = static_cast<IntPtr>(vpn) << m_page_shift;
 	for (auto *tlb : m_tlb_hierarchy)
 	{
-		if (tlb->contains(page_addr, m_page_shift))
+		if (tlb->contains(withTag(page_addr), m_page_shift))   // TLBs hold tagged addresses (see m_addr_tag)
 			return true;
 	}
 	return false;
@@ -356,11 +391,15 @@ bool AgileTLBPrefetcher::inAnyTLB(uint64_t vpn) const
 //   - SBFP neighbor validation in fake (FPQ) mode
 
 bool AgileTLBPrefetcher::directPageTableLookupVPN(PageTable *pt, uint64_t vpn,
-												  uint64_t &ppn, uint32_t &page_size) const
+												  uint64_t &ppn, uint32_t &page_size,
+												  bool allow_allocate) const
 {
 	if (!pt) return false;
 	IntPtr addr = static_cast<IntPtr>(vpn) << m_page_shift;
-	PTWResult r = pt->initializeWalk(addr, /*count*/ false, /*is_prefetch*/ true, /*restart_walk*/ true);
+	// restart_walk=true makes initializeWalk fault the page in (allocate it)
+	// when it is unmapped; with false it only reports that no mapping exists.
+	bool restart = allow_allocate && m_probe_allocates;
+	PTWResult r = pt->initializeWalk(withTag(addr), /*count*/ false, /*is_prefetch*/ true, /*restart_walk*/ restart);   // tagged for the page table (see m_addr_tag)
 	if (r.fault_happened || r.ppn == 0)
 		return false;
 	ppn       = static_cast<uint64_t>(r.ppn);
@@ -812,7 +851,26 @@ std::vector<query_entry> AgileTLBPrefetcher::performPrefetch(
 
 	// ── 3. Demand page walk ─────────────────────────────────────
 	m_stats.demand_walks++;
-	query_entry demand_q = PTWTransparent(address, eip, lock, modeled, count, pt);
+	query_entry demand_q{};
+	if (m_functional_demand_lookup)
+	{
+		// SBFP runs on the MMU's own demand walk (which follows this call):
+		// read the PTE functionally, without a second modeled walk and without
+		// allocating, and make the free neighbours ready when that walk is
+		// expected to complete.
+		uint64_t d_ppn = 0; uint32_t d_ps = 0;
+		if (directPageTableLookupVPN(pt, vpn, d_ppn, d_ps, /*allow_allocate*/ false))
+		{
+			demand_q.address   = address;
+			demand_q.ppn       = static_cast<IntPtr>(d_ppn);
+			demand_q.page_size = static_cast<int>(d_ps);
+			demand_q.timestamp = shmem_perf_model->getElapsedTime(ShmemPerfModel::_USER_THREAD) + m_avg_demand_walk_latency;
+		}
+		else
+			m_stats.sbfp_demand_unmapped++;
+	}
+	else
+		demand_q = PTWTransparent(address, eip, lock, modeled, count, pt);
 	if (demand_q.ppn != 0)
 	{
 		m_stats.demand_walks_successful++;
@@ -919,7 +977,8 @@ std::vector<query_entry> AgileTLBPrefetcher::performPrefetch(
 				fpqInstall(m_fpq_p0, m_fpq_p0_fifo_ptr, fvpn);
 				m_stats.fpq_p0_inserts++;
 				// SBFP free neighbors for this fake walk
-				std::vector<uint64_t> free_vpns = getSBFPAdmittedFreeVPNs(fvpn, pt);
+				std::vector<uint64_t> free_vpns;
+				if (m_fpq_insert_free) free_vpns = getSBFPAdmittedFreeVPNs(fvpn, pt);
 				for (uint64_t fv : free_vpns)
 				{
 					m_stats.fpq_fake_free_preds_p0++;
@@ -940,7 +999,8 @@ std::vector<query_entry> AgileTLBPrefetcher::performPrefetch(
 				m_stats.fpq_fake_base_preds_p1++;
 				fpqInstall(m_fpq_p1, m_fpq_p1_fifo_ptr, fvpn);
 				m_stats.fpq_p1_inserts++;
-				std::vector<uint64_t> free_vpns = getSBFPAdmittedFreeVPNs(fvpn, pt);
+				std::vector<uint64_t> free_vpns;
+				if (m_fpq_insert_free) free_vpns = getSBFPAdmittedFreeVPNs(fvpn, pt);
 				for (uint64_t fv : free_vpns)
 				{
 					m_stats.fpq_fake_free_preds_p1++;
@@ -961,7 +1021,8 @@ std::vector<query_entry> AgileTLBPrefetcher::performPrefetch(
 				m_stats.fpq_fake_base_preds_p2++;
 				fpqInstall(m_fpq_p2, m_fpq_p2_fifo_ptr, fvpn);
 				m_stats.fpq_p2_inserts++;
-				std::vector<uint64_t> free_vpns = getSBFPAdmittedFreeVPNs(fvpn, pt);
+				std::vector<uint64_t> free_vpns;
+				if (m_fpq_insert_free) free_vpns = getSBFPAdmittedFreeVPNs(fvpn, pt);
 				for (uint64_t fv : free_vpns)
 				{
 					m_stats.fpq_fake_free_preds_p2++;

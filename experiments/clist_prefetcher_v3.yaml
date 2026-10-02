@@ -711,6 +711,98 @@ configs:
       - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/payload_in_side_table=true"
       - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/side_table_radix=true"
     description: "v4: TRAIL (best) with OS radix side-car payload table on new substrate"
+  v4-asp-recency-stride:
+    name: "v4-asp-recency-stride"
+    file: "trail_comparison_v4/v4_asp_recency_stride.cfg"
+    extends: ["--perf_model/reserve_thp/target_fragmentation=0.0"]
+    description: "v4: ASP + Recency + Next-Page"
+  v4-trail-stride:
+    name: "v4-trail-stride"
+    file: "trail_comparison_v4/v4_trail_stride.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4: TRAIL + Next-Page"
+  v4-trail-sidecar-stride:
+    name: "v4-trail-sidecar-stride"
+    file: "trail_comparison_v4/v4_trail_sidecar_stride.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/payload_in_side_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/side_table_radix=true"
+    description: "v4: Trail-External + Next-Page"
+  v4-trail-abl-global:
+    name: "v4-trail-abl-global"
+    file: "trail_comparison_v4/v4_trail.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=learn_pte_on_transitions"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4 TRAIL ablation: global deltas (no PC table, no stride)"
+  v4-trail-abl-pc64:
+    name: "v4-trail-abl-pc64"
+    file: "trail_comparison_v4/v4_trail.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4 TRAIL ablation: + 64-entry PC table (no virtualization, no stride)"
+  v4-trail-abl-pc64vt:
+    name: "v4-trail-abl-pc64vt"
+    file: "trail_comparison_v4/v4_trail.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4 TRAIL ablation: + virtualized PC table (no stride)"
 
   # ==========================================================================
   # trail_comparison_v4 @ 2MB NUCA — same 11 eval points, nuca/cache_size=2048
@@ -893,6 +985,105 @@ configs:
       - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/payload_in_side_table=true"
       - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/side_table_radix=true"
     description: "v4 @2MB NUCA: TRAIL (best) with OS radix side-car"
+  v4-asp-recency-stride-nuca2mb:
+    name: "v4-asp-recency-stride-nuca2mb"
+    file: "trail_comparison_v4/v4_asp_recency_stride.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+    description: "v4: ASP + Recency + Next-Page (2 MB NUCA)"
+  v4-trail-stride-nuca2mb:
+    name: "v4-trail-stride-nuca2mb"
+    file: "trail_comparison_v4/v4_trail_stride.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4: TRAIL + Next-Page (2 MB NUCA)"
+  v4-trail-sidecar-stride-nuca2mb:
+    name: "v4-trail-sidecar-stride-nuca2mb"
+    file: "trail_comparison_v4/v4_trail_sidecar_stride.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/payload_in_side_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/side_table_radix=true"
+    description: "v4: Trail-External + Next-Page (2 MB NUCA)"
+  v4-trail-abl-global-nuca2mb:
+    name: "v4-trail-abl-global-nuca2mb"
+    file: "trail_comparison_v4/v4_trail.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=learn_pte_on_transitions"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4 TRAIL ablation: global deltas (no PC table, no stride) (2 MB NUCA)"
+  v4-trail-abl-pc64-nuca2mb:
+    name: "v4-trail-abl-pc64-nuca2mb"
+    file: "trail_comparison_v4/v4_trail.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4 TRAIL ablation: + 64-entry PC table (no virtualization, no stride) (2 MB NUCA)"
+  v4-trail-abl-pc64vt-nuca2mb:
+    name: "v4-trail-abl-pc64vt-nuca2mb"
+    file: "trail_comparison_v4/v4_trail.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4 TRAIL ablation: + virtualized PC table (no stride) (2 MB NUCA)"
 
   # ==========================================================================
   # TRAIL-best ablations — ALL @ 2MB NUCA (high LLC pressure).
@@ -1305,7 +1496,9 @@ experiment_suites:
       - v4-asp-berti         # ASP + Berti
       - v4-trail             # TRAIL (standalone, PTE-embedded)
       - v4-trail-sidecar     # TRAIL (standalone, OS radix side-car)
-      - v4-asp-frag0.005     # ASP-64 baseline at frag=0.005 (vs 0.0)
+      - v4-asp-recency-stride  # ASP + Recency + Next-Page
+      - v4-trail-stride        # TRAIL + Next-Page
+      - v4-trail-sidecar-stride  # TRAIL side-car + Next-Page
     trace_suite: top250
     instruction_count: 300000000
     enable_icache_for: ["srv"]
@@ -1359,11 +1552,37 @@ experiment_suites:
       - v4-asp-berti-nuca2mb
       - v4-trail-nuca2mb
       - v4-trail-sidecar-nuca2mb
-      - v4-asp-frag0.005-nuca2mb
+      - v4-asp-recency-stride-nuca2mb
+      - v4-trail-stride-nuca2mb
+      - v4-trail-sidecar-stride-nuca2mb
     trace_suite: top250
     instruction_count: 300000000
     enable_icache_for: ["srv"]
     slurm_partitions: ["cpu_part", "bio_part"]
+    instruction_count_overrides:
+      top250_virtuoso.tlist: 100000000
+
+  trail_ablation_v4:
+    description: "TRAIL component ablation on the v4 substrate (8 MB NUCA); full TRAIL = v4-trail"
+    configs:
+      - v4-trail-abl-global
+      - v4-trail-abl-pc64
+      - v4-trail-abl-pc64vt
+    trace_suite: top250
+    instruction_count: 300000000
+    enable_icache_for: ["srv"]
+    instruction_count_overrides:
+      top250_virtuoso.tlist: 100000000
+
+  trail_ablation_v4_nuca2mb:
+    description: "TRAIL component ablation on the v4 substrate (2 MB NUCA); full TRAIL = v4-trail-nuca2mb"
+    configs:
+      - v4-trail-abl-global-nuca2mb
+      - v4-trail-abl-pc64-nuca2mb
+      - v4-trail-abl-pc64vt-nuca2mb
+    trace_suite: top250
+    instruction_count: 300000000
+    enable_icache_for: ["srv"]
     instruction_count_overrides:
       top250_virtuoso.tlist: 100000000
 

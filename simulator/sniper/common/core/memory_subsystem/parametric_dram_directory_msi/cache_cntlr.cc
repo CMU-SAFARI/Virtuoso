@@ -214,6 +214,7 @@
 #include "cache_atd.h"
 #include "shmem_perf.h"
 #include "utopia_cache_template.h"
+#include "metadata_info.h"
 #include <cstring>
 
 // Define to allow private L2 caches not to take the stack lock.
@@ -533,11 +534,23 @@ namespace ParametricDramDirectoryMSI
 		registerStatsMetric(name, core_id, "metadata-mshr-latency", &stats.metadata_mshr_latency);
 		registerStatsMetric(name, core_id, "prefetches", &stats.prefetches);
 		registerStatsMetric(name, core_id, "prefetches-fillup", &stats.prefetches_fillup);
+		// TLB-prefetcher page-walk lines (page-table data); see cache_cntlr.h
+		registerStatsMetric(name, core_id, "mmu-prefetches", &stats.mmu_prefetches);
+		registerStatsMetric(name, core_id, "mmu-prefetches-fillup", &stats.mmu_prefetches_fillup);
+		registerStatsMetric(name, core_id, "mmu-hits-prefetch", &stats.mmu_hits_prefetch);
+		registerStatsMetric(name, core_id, "mmu-hits-prefetch-dram", &stats.mmu_hits_prefetch_dram);
+		registerStatsMetric(name, core_id, "mmu-hits-prefetch-nuca", &stats.mmu_hits_prefetch_nuca);
+		registerStatsMetric(name, core_id, "mmu-evict-prefetch", &stats.mmu_evict_prefetch);
+		registerStatsMetric(name, core_id, "mmu-evict-prefetch-dram", &stats.mmu_evict_prefetch_dram);
+		registerStatsMetric(name, core_id, "mmu-evict-prefetch-nuca", &stats.mmu_evict_prefetch_nuca);
 		registerStatsMetric(name, core_id, "late-metadata-prefetches", &stats.late_metadata_prefetches);
 		registerStatsMetric(name, core_id, "hits-prefetch-dram", &stats.hits_prefetch_dram);
 		registerStatsMetric(name, core_id, "hits-prefetch-nuca", &stats.hits_prefetch_nuca);
 		registerStatsMetric(name, core_id, "evict-prefetch-dram", &stats.evict_prefetch_dram);
 		registerStatsMetric(name, core_id, "evict-prefetch-nuca", &stats.evict_prefetch_nuca);
+		registerStatsMetric(name, core_id, "ptw-pf-fills", &stats.ptw_pf_fills);
+		registerStatsMetric(name, core_id, "ptw-pf-used", &stats.ptw_pf_used);
+		registerStatsMetric(name, core_id, "ptw-pf-evicted-unused", &stats.ptw_pf_evicted_unused);
 		registerStatsMetric(name, core_id, "spec-evict-total", &stats.spec_evict_total);
 		registerStatsMetric(name, core_id, "spec-evict-harmful", &stats.spec_evict_harmful);
 
@@ -765,10 +778,13 @@ namespace ParametricDramDirectoryMSI
 				stats.hits_warmup++;
 				cache_block_info->clearOption(CacheBlockInfo::WARMUP);
 			}
-			if (cache_block_info->hasOption(CacheBlockInfo::PREFETCH))
+			if (cache_block_info->hasOption(CacheBlockInfo::PREFETCH) && !isPtwPrefetchRequest())
 			{
-				// This line was fetched by the prefetcher and has proven useful
-				stats.hits_prefetch++;
+				// This line was fetched by a prefetcher and has proven useful
+				if (isMMUPrefetchLine(cache_block_info))
+					stats.mmu_hits_prefetch++;
+				else
+					stats.hits_prefetch++;
 				prefetch_hit = true;
 				cache_block_info->clearOption(CacheBlockInfo::PREFETCH);
 			}
@@ -1343,14 +1359,31 @@ namespace ParametricDramDirectoryMSI
 		if (cache_hit)
 		{
 			// This asks the question: is it a demand request which was prefetched?
-			if (isPrefetch == Prefetch::NONE && cache_block_info->hasOption(CacheBlockInfo::PREFETCH))
+			// (A prefetch walk hitting a line an earlier prefetch walk brought in
+			// is not a use: neighbouring prefetch walks share upper-level
+			// page-table lines, and letting them consume the flag credited
+			// prefetch-on-prefetch hits as useful prefetches.)
+			if (isPrefetch == Prefetch::NONE && !isPtwPrefetchRequest() && cache_block_info->hasOption(CacheBlockInfo::PREFETCH))
 			{
-				// This line was fetched by the prefetcher and has proven useful
-				stats.hits_prefetch++;
-				if (cache_block_info->hasOption(CacheBlockInfo::PREFETCH_FROM_DRAM))
-					++stats.hits_prefetch_dram;
+				// This line was fetched by a prefetcher and has proven useful.
+				// Page-table lines come from TLB-prefetcher walks (mmu_*),
+				// DATA lines from the data prefetchers.
+				if (isMMUPrefetchLine(cache_block_info))
+				{
+					stats.mmu_hits_prefetch++;
+					if (cache_block_info->hasOption(CacheBlockInfo::PREFETCH_FROM_DRAM))
+						++stats.mmu_hits_prefetch_dram;
+					else
+						++stats.mmu_hits_prefetch_nuca;
+				}
 				else
-					++stats.hits_prefetch_nuca;
+				{
+					stats.hits_prefetch++;
+					if (cache_block_info->hasOption(CacheBlockInfo::PREFETCH_FROM_DRAM))
+						++stats.hits_prefetch_dram;
+					else
+						++stats.hits_prefetch_nuca;
+				}
 				prefetch_hit = true;
 				cache_block_info->clearOption(CacheBlockInfo::PREFETCH);
 				cache_block_info->clearOption(CacheBlockInfo::PREFETCH_FROM_DRAM);
@@ -1359,8 +1392,17 @@ namespace ParametricDramDirectoryMSI
 			// (PTE) the first demand walk consumes from a prefetched line, so a
 			// region/temporal TLB prefetch serving several PTEs in one 64B line
 			// is credited per-PTE rather than once-per-line (cleared above).
-			if (isPrefetch == Prefetch::NONE && cache_block_info->consumePrefetch(offset, data_length))
+			if (isPrefetch == Prefetch::NONE && !isPtwPrefetchRequest() && cache_block_info->consumePrefetch(offset, data_length))
 				stats.hits_prefetch_subline++;
+			// Page-table line brought in by a prefetch walk, now touched by a demand walk
+			if (cache_block_info->hasOption(CacheBlockInfo::PTW_PREFETCH)
+				&& MetadataContext::isValid(m_core_id)
+				&& MetadataContext::get(m_core_id).is_metadata
+				&& !MetadataContext::get(m_core_id).is_ptw_prefetch)
+			{
+				++stats.ptw_pf_used;
+				cache_block_info->clearOption(CacheBlockInfo::PTW_PREFETCH);
+			}
 			if (cache_block_info->hasOption(CacheBlockInfo::WARMUP) && Sim()->getInstrumentationMode() != InstMode::CACHE_ONLY)
 			{
 				stats.hits_warmup++;
@@ -2028,6 +2070,16 @@ namespace ParametricDramDirectoryMSI
 		if (Sim()->getInstrumentationMode() == InstMode::CACHE_ONLY)
 			cache_block_info->setOption(CacheBlockInfo::WARMUP);
 
+		// Tag page-table lines filled on behalf of a TLB-prefetcher page walk
+		if (CacheBlockInfo::isMetadataBlockType(block_type)
+			&& MetadataContext::isValid(m_core_id)
+			&& MetadataContext::get(m_core_id).is_metadata
+			&& MetadataContext::get(m_core_id).is_ptw_prefetch)
+		{
+			cache_block_info->setOption(CacheBlockInfo::PTW_PREFETCH);
+			++stats.ptw_pf_fills;
+		}
+
 		// if (Sim()->getConfig()->hasCacheEfficiencyCallbacks())
 		//    cache_block_info->setOwner(Sim()->getConfig()->getCacheEfficiencyCallbacks().call_get_owner(requester, address));
 
@@ -2063,14 +2115,28 @@ namespace ParametricDramDirectoryMSI
 				// Line was prefetched, but is evicted without ever being used
 				if (evict_block_info.hasOption(CacheBlockInfo::PREFETCH))
 				{
-					++stats.evict_prefetch;
-					if (evict_block_info.hasOption(CacheBlockInfo::PREFETCH_FROM_DRAM))
-						++stats.evict_prefetch_dram;
+					if (isMMUPrefetchLine(&evict_block_info))
+					{
+						++stats.mmu_evict_prefetch;
+						if (evict_block_info.hasOption(CacheBlockInfo::PREFETCH_FROM_DRAM))
+							++stats.mmu_evict_prefetch_dram;
+						else
+							++stats.mmu_evict_prefetch_nuca;
+					}
 					else
-						++stats.evict_prefetch_nuca;
+					{
+						++stats.evict_prefetch;
+						if (evict_block_info.hasOption(CacheBlockInfo::PREFETCH_FROM_DRAM))
+							++stats.evict_prefetch_dram;
+						else
+							++stats.evict_prefetch_nuca;
+					}
 				}
 				if (evict_block_info.hasOption(CacheBlockInfo::WARMUP))
 					++stats.evict_warmup;
+				// Page-table line fetched by a prefetch walk, evicted without a demand walk using it
+				if (evict_block_info.hasOption(CacheBlockInfo::PTW_PREFETCH))
+					++stats.ptw_pf_evicted_unused;
 
 				// Track evictions caused by speculative prefetches (L2)
 				if (m_doing_spec_prefetch && old_state != CacheState::INVALID)

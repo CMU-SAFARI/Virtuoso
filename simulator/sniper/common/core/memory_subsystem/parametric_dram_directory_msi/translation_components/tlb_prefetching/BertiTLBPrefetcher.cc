@@ -31,9 +31,15 @@ BertiTLBPrefetcher::BertiTLBPrefetcher(
       IP_TABLE_ENTRIES(ip_table_entries),
       IP_TABLE_MASK(ip_table_entries - 1)
 {
-    // prev_requests_entries must be power of 2
-    assert((prev_requests_entries & (prev_requests_entries - 1)) == 0);
-    assert((ip_table_entries & (ip_table_entries - 1)) == 0);
+    // u_vector is a 64-bit bitmap of the pages touched in a region, indexed
+    // by the page's offset in the region: more than 64 pages per region would
+    // make (1 << offset) undefined.
+    LOG_ASSERT_ERROR(region_bits <= 6, "Berti region_bits must be <= 6 (64-bit page bitmap), got %u", region_bits);
+    // Both tables are indexed with a mask, so their sizes must be powers of 2.
+    LOG_ASSERT_ERROR((prev_requests_entries & (prev_requests_entries - 1)) == 0,
+        "Berti prev_requests must be a power of 2 (got %u)", prev_requests_entries);
+    LOG_ASSERT_ERROR((ip_table_entries & (ip_table_entries - 1)) == 0,
+        "Berti ip_table_entries must be a power of 2 (got %u)", ip_table_entries);
 
     PREV_REQUESTS_NULL = CURRENT_PAGES_ENTRIES;
     IP_TABLE_NULL = RECORD_PAGES_ENTRIES;
@@ -87,7 +93,8 @@ BertiTLBPrefetcher::BertiTLBPrefetcher(
     registerStatsMetric("tlb_berti", _core->getId(), "predictions_from_record", &stats.predictions_from_record);
     registerStatsMetric("tlb_berti", _core->getId(), "predictions_from_current", &stats.predictions_from_current);
 
-    std::cout << "Berti TLB prefetcher created: region_bits=" << region_bits
+    std::cout << logPrefix() << "config: region_bits=" << region_bits
+              << " (" << (1u << region_bits) << " pages/region)"
               << " current_pages=" << current_pages_entries
               << " prev_requests=" << prev_requests_entries
               << " record_pages=" << record_pages_entries
@@ -358,7 +365,11 @@ std::vector<query_entry> BertiTLBPrefetcher::performPrefetch(
             addBertiCurrentPage(index, stride);
         }
 
-        // Group IPs: if different IP, point to same record
+        // Group IPs: if different IP, point to same record.
+        // Note: the table stores the IP already masked (ip & IP_TABLE_MASK,
+        // see addCurrentPage below), so this compares a masked IP with an
+        // unmasked one and is true even for the same IP.  That case is a
+        // harmless self-assignment of ip_table[ip & mask].
         if (first_ip != ip) {
             uint64_t first_ptr = ip_table[first_ip & IP_TABLE_MASK];
             if (first_ptr < RECORD_PAGES_ENTRIES)

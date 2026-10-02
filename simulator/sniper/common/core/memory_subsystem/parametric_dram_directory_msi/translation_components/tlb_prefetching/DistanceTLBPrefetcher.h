@@ -27,6 +27,21 @@ struct DPRow
 	DPRow() : valid(false), distance_tag(0), row_lru(0) {}
 };
 
+/**
+ * @brief DP: Distance Prefetching ("Going the Distance for TLB Prefetching").
+ *
+ * Trains on the miss stream at the PQ level (accesses that missed the PQ; with
+ * the PQ at level 2 this includes L2-TLB hits, see TLBPrefetcherBase).  The
+ * "distance" is the VPN delta between two consecutive misses.  A table keyed
+ * by distance (num_rows rows, assoc-way set-associative) stores, per row, up
+ * to num_slots distances that followed it, in LRU order.
+ *
+ * On a miss with distance d: look up row d and prefetch VPN + d' for every
+ * successor d' in the row (MRU first), skipping targets already in a TLB and
+ * targets predicted recently (64-entry filter); then record d as a successor
+ * of the previous distance.  max_depth > 1 additionally follows the MRU
+ * successor chain (a speculative Markov walk), one extra row per level.
+ */
 class DistanceTLBPrefetcher : public TLBPrefetcherBase
 {
 public:
@@ -67,6 +82,19 @@ private:
 
 	// ── Stats registration ───────────────────────────────────────
 	void registerAllStats(core_id_t core_id);
+
+protected:
+	void appendSummary(std::ostream &os) const override
+	{
+		os << " misses=" << m_stats.tlb_misses
+		   << " table_hits=" << m_stats.table_hits
+		   << " zero_dist=" << m_stats.zero_distance_seen
+		   << " issued=" << m_stats.predictions_issued
+		   << " skip_resident=" << m_stats.predictions_skipped_tlb_resident
+		   << " skip_dup=" << m_stats.predictions_skipped_pq_duplicate
+		   << " chain_issued=" << m_stats.chain_predictions_issued;
+	}
+private:
 
 	// ── Configuration ────────────────────────────────────────────
 	uint32_t m_page_shift;

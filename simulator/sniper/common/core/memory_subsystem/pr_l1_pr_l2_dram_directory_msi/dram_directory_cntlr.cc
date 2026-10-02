@@ -652,7 +652,7 @@ DramDirectoryCntlr::retrieveDataAndSendToL2Cache(ShmemMsg::msg_t reply_msg_type,
          SubsecondTime nuca_latency;
          HitWhere::where_t hit_where;
          Byte nuca_data_buf[getCacheBlockSize()];
-         boost::tie(nuca_latency, hit_where) = m_nuca_cache->read(address, nuca_data_buf, getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), orig_shmem_msg->getPerf(), true,orig_shmem_msg->getBlockType());
+         boost::tie(nuca_latency, hit_where) = m_nuca_cache->read(address, nuca_data_buf, getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), orig_shmem_msg->getPerf(), true,orig_shmem_msg->getBlockType(), orig_shmem_msg->getRequester());
 
          getShmemPerfModel()->incrElapsedTime(nuca_latency, ShmemPerfModel::_SIM_THREAD);
 
@@ -1234,7 +1234,8 @@ DramDirectoryCntlr::sendDataToNUCA(IntPtr address, core_id_t requester, Byte* da
          address, data_buf,
          eviction, evict_address, evict_buf,
          getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD),
-         count,block_type
+         count,block_type,
+         requester, block_type
       );
 
       if (eviction)

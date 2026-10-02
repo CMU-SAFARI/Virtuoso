@@ -50,6 +50,9 @@ void RecencyTLBPrefetcher::registerAllStats(core_id_t core_id)
 	registerStatsMetric("recency_tlb", core_id, "recency_nodes_created",     &m_stats.recency_nodes_created);
 	registerStatsMetric("recency_tlb", core_id, "recency_missing_node",      &m_stats.recency_missing_node);
 	registerStatsMetric("recency_tlb", core_id, "recency_victim_insertions", &m_stats.recency_victim_insertions);
+	registerStatsMetric("recency_tlb", core_id, "victims_overwritten",       &m_stats.victims_overwritten);
+	registerStatsMetric("recency_tlb", core_id, "victims_queue_overflow",    &m_stats.victims_queue_overflow);
+	registerStatsMetric("recency_tlb", core_id, "pq_victims_ignored",        &m_stats.pq_victims_ignored);
 
 	// Timing
 	registerStatsMetric("recency_tlb", core_id, "prefetch_attempts",         &m_stats.prefetch_attempts);
@@ -92,6 +95,7 @@ RecencyTLBPrefetcher::RecencyTLBPrefetcher(
 	  m_model_prefetch_walks(model_prefetch_walks),
 	  m_consume_pq_on_hit(consume_pq_on_hit),
 	  m_model_pointer_chase(model_pointer_chase),
+	  m_legacy_model(false),
 	  m_pointer_table(
 		// Physical base: 0xE000'0000'0000 + core_id * 256 MB
 		// Chosen high enough to avoid overlap with real application physical memory.
@@ -103,19 +107,34 @@ RecencyTLBPrefetcher::RecencyTLBPrefetcher(
 
 RecencyTLBPrefetcher::~RecencyTLBPrefetcher() {}
 
+void RecencyTLBPrefetcher::printConfig() const
+{
+	std::cout << logPrefix() << "config: page_shift=" << m_page_shift
+	          << " same=" << m_prefetch_same_recency
+	          << " minus1=" << m_prefetch_recency_minus_1
+	          << " plus1=" << m_prefetch_recency_plus_1
+	          << " on_tlb_hit=" << m_prefetch_on_tlb_hit
+	          << " model_walks=" << m_model_prefetch_walks
+	          << " pointer_chase=" << m_model_pointer_chase
+	          << " consume_pq_on_hit=" << m_consume_pq_on_hit << "(unused)"
+	          << " legacy_model=" << m_legacy_model
+	          << (m_legacy_model ? "  (LEGACY: victims dropped on first-touch misses; demand faults absorbed by an untimed walk)" : "")
+	          << std::endl;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Direct page-table lookup (no timing, no stats)
 // ═══════════════════════════════════════════════════════════════════
 
 bool RecencyTLBPrefetcher::directPageTableLookupVPN(
 	PageTable *pt, uint64_t vpn,
-	uint64_t &ppn, uint32_t &page_size) const
+	uint64_t &ppn, uint32_t &page_size, bool allow_allocate) const
 {
 	if (!pt) return false;
 	IntPtr addr = static_cast<IntPtr>(vpn) << m_page_shift;
-	PTWResult r = pt->initializeWalk(addr, /*count*/ false,
+	PTWResult r = pt->initializeWalk(withTag(addr), /*count*/ false,
 									 /*is_prefetch*/ true,
-									 /*restart_walk*/ true);
+									 /*restart_walk*/ allow_allocate);
 	if (r.fault_happened || r.ppn == 0)
 		return false;
 	ppn       = static_cast<uint64_t>(r.ppn);
@@ -140,10 +159,11 @@ RecencyNode *RecencyTLBPrefetcher::getOrCreateNode(PageTable *pt, uint64_t vpn)
 	if (it != m_nodes.end())
 		return &it->second;
 
-	// Lazy creation – validate mapping via direct PT lookup.
+	// Lazy creation – validate mapping via direct PT lookup.  Only used by
+	// legacy_model; restart_walk = true faults the page in (see performPrefetch).
 	uint64_t ppn = 0;
 	uint32_t page_size = 0;
-	if (!directPageTableLookupVPN(pt, vpn, ppn, page_size))
+	if (!directPageTableLookupVPN(pt, vpn, ppn, page_size, /*allow_allocate*/ true))
 		return nullptr;
 
 	RecencyNode &node = m_nodes[vpn];
@@ -275,19 +295,30 @@ void RecencyTLBPrefetcher::capturePredictionNeighbors(
 
 void RecencyTLBPrefetcher::consumePendingVictim()
 {
-	if (m_pending_victim_vpn == RECENCY_INVALID_VPN)
-		return;
-
-	RecencyNode *victim = getNode(m_pending_victim_vpn);
-	if (victim)
-	{
+	auto push = [this](uint64_t vpn) {
+		RecencyNode *victim = getNode(vpn);
+		if (!victim) return;
 		victim->in_tlb = false;
-		if (listContains(m_pending_victim_vpn))
-			listRemove(m_pending_victim_vpn);
-		listPushFront(m_pending_victim_vpn);
+		if (listContains(vpn))
+			listRemove(vpn);
+		listPushFront(vpn);
 		m_stats.recency_victim_insertions++;
+	};
+
+	if (m_legacy_model)
+	{
+		if (m_pending_victim_vpn != RECENCY_INVALID_VPN)
+			push(m_pending_victim_vpn);
+		m_pending_victim_vpn = RECENCY_INVALID_VPN;
+		return;
 	}
-	m_pending_victim_vpn = RECENCY_INVALID_VPN;
+
+	// Oldest first, so the most recent eviction ends up at the head.
+	while (!m_pending_victims.empty())
+	{
+		push(m_pending_victims.front());
+		m_pending_victims.pop_front();
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -317,7 +348,7 @@ bool RecencyTLBPrefetcher::inAnyTLB(uint64_t vpn) const
 	IntPtr page_addr = static_cast<IntPtr>(vpn) << m_page_shift;
 	for (auto *tlb : m_tlb_hierarchy)
 	{
-		if (tlb->contains(page_addr, m_page_shift))
+		if (tlb->contains(withTag(page_addr), m_page_shift))   // TLBs hold tagged addresses (see m_addr_tag)
 			return true;
 	}
 	return false;
@@ -439,9 +470,34 @@ void RecencyTLBPrefetcher::notifyVictim(IntPtr victim_address, int page_size, In
 		it->second.ppn = static_cast<uint64_t>(ppn);
 	}
 
-	// Buffer the victim VPN; it will be consumed by the next
-	// onTranslationInstalledIntoTLB() call and pushed to the list head.
-	m_pending_victim_vpn = vpn;
+	// Buffer the victim; consumePendingVictim() pushes it at the start of the
+	// next miss.
+	if (m_legacy_model)
+	{
+		// Old behaviour: one slot, a second victim replaces the first.
+		if (m_pending_victim_vpn != RECENCY_INVALID_VPN && m_pending_victim_vpn != vpn)
+			m_stats.victims_overwritten++;
+		m_pending_victim_vpn = vpn;
+		return;
+	}
+	if (m_pending_victims.size() >= MAX_PENDING_VICTIMS)
+	{
+		m_pending_victims.pop_front();
+		m_stats.victims_queue_overflow++;
+	}
+	m_pending_victims.push_back(vpn);
+}
+
+void RecencyTLBPrefetcher::notifyPQVictim(IntPtr victim_address, int page_size, IntPtr ppn)
+{
+	// A prefetched entry leaving the prefetch queue never was in the TLB, so it
+	// is not part of the TLB's eviction order.  legacy_model fed it in anyway.
+	if (m_legacy_model)
+	{
+		notifyVictim(victim_address, page_size, ppn);
+		return;
+	}
+	m_stats.pq_victims_ignored++;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -574,6 +630,21 @@ std::vector<query_entry> RecencyTLBPrefetcher::performPrefetch(
 	bool instruction, bool tlb_hit, bool pq_hit, int page_size)
 {
 	std::vector<query_entry> result;
+
+	// ── Step 1: push the victims buffered since the last call ────
+	// The stack must follow TLB eviction order, so every buffered victim
+	// is pushed here, before anything below can return early -- including
+	// the PQ-hit return: a PQ-served access still fills L1 and evicts into
+	// L2, so skipping the push on PQ hits would let long PQ-hit runs
+	// overflow the victim queue.  Event ordering:
+	//   miss N-1: TLB::allocate() evicts V(N-1) -> notifyVictim() buffers it
+	//   miss N  : performPrefetch(N) pushes V(N-1) to the head, so it is
+	//             already a neighbour when miss N's predictions are read
+	// (legacy_model pushed it only after the node lookup below succeeded,
+	// so every miss to a never-evicted page dropped the preceding victim.)
+	if (!m_legacy_model)
+		consumePendingVictim();
+
 	if (!pt) return result;
 
 	uint64_t vpn = static_cast<uint64_t>(address) >> m_page_shift;
@@ -603,23 +674,26 @@ std::vector<query_entry> RecencyTLBPrefetcher::performPrefetch(
 			m_stats.pq_misses_on_demand_miss++;
 	}
 
-	// ── Ensure a node exists for the demanded translation ────────
-	RecencyNode *node = getOrCreateNode(pt, vpn);
+	// ── Node of the demanded page ────────────────────────────────
+	// Only pages that were evicted earlier are linked into the stack, and
+	// notifyVictim() creates their node.  A page with no node has never been
+	// evicted, so it has no neighbours and there is nothing to predict: a
+	// plain lookup is enough.  No page-table walk here -- the page being
+	// accessed may be unmapped (first touch), and its fault belongs to the
+	// MMU's demand walk, not to the prefetcher.
+	//
+	// legacy_model: getOrCreateNode() did an untimed walk with
+	// restart_walk = true, which faulted the demand page in before the
+	// demand walk ran (the demand access then never saw its fault).
+	RecencyNode *node = m_legacy_model ? getOrCreateNode(pt, vpn) : getNode(vpn);
 	if (!node)
 	{
-		m_stats.recency_missing_node++;
+		m_stats.recency_missing_node++;   // demanded page was never evicted
 		return result;
 	}
 
-	// ── Step 1: consume the pending victim from the prior miss ───
-	// The victim V(N-1) must be pushed to the list head BEFORE we
-	// capture neighbors, so that V(N-1) is available as a neighbor
-	// of the demanded page.  Event ordering:
-	//   Phase 3 of miss N-1: TLB::allocate() evicts V(N-1) →
-	//       notifyVictim() buffers V(N-1)
-	//   Phase 1 of miss  N : performPrefetch(N) runs →
-	//       consumePendingVictim() pushes V(N-1) to head
-	consumePendingVictim();
+	if (m_legacy_model)
+		consumePendingVictim();
 
 	// ── Step 2: capture predictors BEFORE mutation ───────────────
 	uint64_t same_vpn, minus1_vpn, plus1_vpn;

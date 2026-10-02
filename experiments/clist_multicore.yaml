@@ -688,6 +688,53 @@ configs:
       - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
       - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
     description: "v4-substrate 4-core: mc-v4-trail"
+  mc-v4-asp-stride:
+    name: "mc-v4-asp-stride"
+    file: "trail_comparison_v4/v4_asp_stride.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp-stride (ASP + Next-Page, stride length 2)"
+  mc-v4-asp-recency-stride:
+    name: "mc-v4-asp-recency-stride"
+    file: "trail_comparison_v4/v4_asp_recency_stride.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+    description: "v4-substrate 4-core: mc-v4-asp-recency-stride (ASP + Recency + Next-Page)"
+  mc-v4-trail-stride:
+    name: "mc-v4-trail-stride"
+    file: "trail_comparison_v4/v4_trail_stride.cfg"
+    extends:
+      - "--perf_model/reserve_thp/target_fragmentation=0.0"
+      - "--perf_model/nuca/cache_size=2048"
+      - "--perf_model/dram/type=readwrite"
+      - "--perf_model/dram/latency=55"
+      - "--perf_model/dram/per_controller_bandwidth=153"
+      - "--perf_model/dram/queue_model/type=history_list"
+      - "--perf_model/dram/readwrite/shared=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/mode=pc_cond_learn"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/reserve_global_slot=false"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/conf_init=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/max_prefetch_depth=3"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/pc_table_size=64"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/virtualize_pc_table=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/stride_direct_prefetch=true"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/confidence_policy=none"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_score_threshold=0.05"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/region_shift=5"
+      - "--perf_model/mmu/tlb_prefetch/pq1/temporal_pte_prefetcher/chain_edge_decay=0.85"
+    description: "v4-substrate 4-core: mc-v4-trail-stride (TRAIL (best) + Next-Page)"
   mc-v4-perfect:
     name: "mc-v4-perfect"
     file: "trail_comparison_v4/v4_perfect_l2tlb.cfg"
@@ -1278,10 +1325,12 @@ experiment_suites:
       - mc-v4-asp-recency
       - mc-v4-asp-atp
       - mc-v4-asp-berti
-      - mc-v4-asp-l2tlb32k
       - mc-v4-asp-l2tlb64k
       - mc-v4-trail
       - mc-v4-perfect
+      - mc-v4-asp-stride
+      - mc-v4-asp-recency-stride
+      - mc-v4-trail-stride
     trace_suite: prefetcher_v4_diverse_4core
     instruction_count: 50000000
     sim_end: last
@@ -1296,10 +1345,12 @@ experiment_suites:
       - mc-v4-asp-recency
       - mc-v4-asp-atp
       - mc-v4-asp-berti
-      - mc-v4-asp-l2tlb32k
       - mc-v4-asp-l2tlb64k
       - mc-v4-trail
       - mc-v4-perfect
+      - mc-v4-asp-stride
+      - mc-v4-asp-recency-stride
+      - mc-v4-trail-stride
     trace_suite: prefetcher_v4_diverse_4core_x60
     instruction_count: 50000000
     sim_end: last

@@ -109,6 +109,13 @@ DistanceTLBPrefetcher::DistanceTLBPrefetcher(
 	}
 
 	registerAllStats(_core->getId());
+
+	std::cout << logPrefix() << "config: rows=" << m_num_rows << " assoc=" << m_assoc
+	          << " sets=" << m_num_sets << " slots/row=" << m_num_slots
+	          << " max_depth=" << m_max_depth << " page_shift=" << m_page_shift
+	          << " model_prefetch_walks=" << m_model_prefetch_walks
+	          << (m_model_prefetch_walks ? "" : "  (WARNING: untimed lookups; they also allocate unmapped pages for free)")
+	          << std::endl;
 }
 
 DistanceTLBPrefetcher::~DistanceTLBPrefetcher() {}
@@ -295,6 +302,12 @@ void DistanceTLBPrefetcher::updateSuccessorDistance(
 
 // ═══════════════════════════════════════════════════════════════════
 //  Direct page-table lookup (no timing)
+//
+//  Only used when model_prefetch_walks = false.  restart_walk = true means an
+//  unmapped target page is faulted in (allocated) here, with no latency and no
+//  fault charged -- a prefetch that allocates memory for free.  Every shipped
+//  config uses model_prefetch_walks = true, which goes through PTWTransparent
+//  instead; the constructor warns if this path is enabled.
 // ═══════════════════════════════════════════════════════════════════
 
 bool DistanceTLBPrefetcher::directPageTableLookupVPN(
@@ -303,7 +316,7 @@ bool DistanceTLBPrefetcher::directPageTableLookupVPN(
 {
 	if (!pt) return false;
 	IntPtr addr = static_cast<IntPtr>(vpn) << m_page_shift;
-	PTWResult r = pt->initializeWalk(addr, /*count*/ false,
+	PTWResult r = pt->initializeWalk(withTag(addr), /*count*/ false,
 									 /*is_prefetch*/ true,
 									 /*restart_walk*/ true);
 	if (r.fault_happened || r.ppn == 0)
@@ -323,7 +336,7 @@ bool DistanceTLBPrefetcher::inAnyTLB(uint64_t vpn) const
 	IntPtr page_addr = static_cast<IntPtr>(vpn) << m_page_shift;
 	for (auto *tlb : m_tlb_hierarchy)
 	{
-		if (tlb->contains(page_addr, m_page_shift))
+		if (tlb->contains(withTag(page_addr), m_page_shift))   // TLBs hold tagged addresses (see m_addr_tag)
 			return true;
 	}
 	return false;

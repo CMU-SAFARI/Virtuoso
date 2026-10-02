@@ -93,6 +93,16 @@ using namespace std;
 namespace ParametricDramDirectoryMSI
 {
 
+/* Total recorded mappings across every address space (the sanity maps are
+   nested per app_id). */
+static size_t sanityMappingCount(
+   const std::unordered_map<int, std::unordered_map<IntPtr, IntPtr> >& m)
+{
+   size_t n = 0;
+   for (const auto& kv : m) n += kv.second.size();
+   return n;
+}
+
 // ============================================================================
 // Construction / Destruction
 // ============================================================================
@@ -160,8 +170,8 @@ namespace ParametricDramDirectoryMSI
         if (sanity_checks_enabled)
         {
             std::cout << "[MMU Sanity] Core " << core->getId() 
-                      << " checked " << va_to_pa_map.size() << " unique VA->PA mappings, "
-                      << pa_to_va_map.size() << " unique PA->VA mappings, "
+                      << " checked " << sanityMappingCount(va_to_pa_map) << " unique VA->PA mappings, "
+                      << sanityMappingCount(pa_to_va_map) << " unique PA->VA mappings, "
                       << sanity_check_violations << " violations detected" << std::endl;
         }
 
@@ -245,6 +255,32 @@ namespace ParametricDramDirectoryMSI
     {
         tlb_subsystem = new TLBHierarchy(name, core, memory_manager, shmem_perf_model);
 
+        // Which accesses train the TLB prefetchers.  The PQ is probed in
+        // parallel with the regular TLB(s) of its level, so from inside the PQ
+        // lookup every access reaching that level looks like a candidate,
+        // including those the L2 TLB hits.
+        //   "all_l1_misses" (default): train on every access reaching the PQ's
+        //                   level, i.e. every L1 TLB miss, L2 hits included --
+        //                   how the prefetchers have always been trained.
+        //   "l2_miss":      train only when no regular TLB at the PQ's level
+        //                   hit.  PQ hits still train -- they are misses at
+        //                   that level that the prefetch queue served.
+        {
+            String key = "perf_model/" + name + "/tlb_prefetch/train_on";
+            String train_on = Sim()->getCfg()->hasKey(key) ? Sim()->getCfg()->getString(key) : "all_l1_misses";
+            LOG_ASSERT_ERROR(train_on == "l2_miss" || train_on == "all_l1_misses",
+                "%s must be \"l2_miss\" or \"all_l1_misses\" (got \"%s\")", key.c_str(), train_on.c_str());
+            const bool defer = (train_on == "l2_miss");
+            int n_pq = 0;
+            for (auto &level : tlb_subsystem->getTLBSubsystem())
+                for (auto *t : level)
+                    if (t->getPrefetch()) { t->setDeferPrefetch(defer); n_pq++; }
+            if (n_pq)
+                std::cout << "[TLBPF] core " << core->getId() << ": prefetchers train on "
+                          << (defer ? "L2 TLB misses only (incl. PQ hits)" : "all L1 TLB misses (L2 hits included)")
+                          << " [tlb_prefetch/train_on=" << train_on.c_str() << "]" << std::endl;
+        }
+
         // Page Size Prediction configuration
         page_size_prediction_enabled = Sim()->getCfg()->getBool("perf_model/" + name + "/page_size_prediction_enabled");
         l2_tlb_correct_prediction_latency = ComponentLatency(
@@ -307,6 +343,7 @@ namespace ParametricDramDirectoryMSI
         // Latency statistics
         registerStatsMetric(name, core->getId(), "total_table_walk_latency", &translation_stats.total_walk_latency);
         registerStatsMetric(name, core->getId(), "total_tlb_latency", &translation_stats.total_tlb_latency);
+        registerStatsMetric(name, core->getId(), "pq_hit_latency_charges", &translation_stats.pq_hit_latency_charges);
         registerStatsMetric(name, core->getId(), "total_translation_latency", &translation_stats.total_translation_latency);
         registerStatsMetric(name, core->getId(), "total_fault_latency", &translation_stats.total_fault_latency);
 
@@ -548,6 +585,7 @@ namespace ParametricDramDirectoryMSI
         CacheBlockInfo *tlb_block_info_hit = NULL;  // Block info from hitting TLB
         CacheBlockInfo *tlb_block_info = NULL;      // Temporary for lookup results
         int hit_level = -1;                      // Level where hit occurred (-1 = miss)
+        bool regular_hit_at_hit_level = false;   // a non-PQ TLB also hit at hit_level
         int page_size = -1;                      // Page size: 12 for 4KB, 21 for 2MB
         IntPtr ppn_result = 0;                   // Physical Page Number result
 
@@ -564,6 +602,7 @@ namespace ParametricDramDirectoryMSI
             mmu_log->debug("Searching TLB at level: " + std::to_string(i));
             
             // Search all TLBs at this level (may have separate i/d TLBs)
+            bool regular_hit_at_level = false;   // a non-PQ TLB of this level hit
             for (UInt32 j = 0; j < tlbs[i].size(); j++)
             {
                 // Check if this TLB handles instruction addresses
@@ -583,6 +622,7 @@ namespace ParametricDramDirectoryMSI
                         hit_tlb = tlbs[i][j];
                         hit_level = i;
                         hit = true;
+                        if (!tlbs[i][j]->getPrefetch()) regular_hit_at_level = true;
                     }
                 }
                 // For data accesses, check dTLB or unified TLB
@@ -598,14 +638,22 @@ namespace ParametricDramDirectoryMSI
                             hit_tlb = tlbs[i][j];
                             hit_level = i;
                             hit = true;
+                            if (!tlbs[i][j]->getPrefetch()) regular_hit_at_level = true;
                         }
                     }
                 }
             }
+            // The level has resolved: let a deferred-mode PQ train its
+            // prefetchers only if no regular TLB of this level hit.
+            for (UInt32 j = 0; j < tlbs[i].size(); j++)
+                if (tlbs[i][j]->getDeferPrefetch())
+                    tlbs[i][j]->resolveDeferredPrefetch(!regular_hit_at_level);
+
             // Stop searching once we find a hit at any level
             // (we search all TLBs at the same level in parallel, but levels are serial)
             if (hit)
             {
+                regular_hit_at_hit_level = regular_hit_at_level;
                 mmu_log->log("TLB Hit at level " + std::to_string(hit_level) + 
                            " at TLB " + std::string(hit_tlb->getName().c_str()));
                 break;
@@ -709,7 +757,28 @@ namespace ParametricDramDirectoryMSI
                 charged_tlb_latency += tlb_latency[i];
             }
 
-            // Handle latency for the hit level itself
+            // Handle latency for the hit level itself.
+            // A hit served ONLY by the prefetch queue is charged the PQ's own
+            // latency: it is probed in parallel with the regular TLB(s) of its
+            // level and answers on its own.  (The level-2 branches below
+            // charge the FIRST TLB of the level, i.e. the L2 TLB, so without
+            // this a PQ hit cost the L2 TLB's latency and pq*/access_latency
+            // was unused.)
+            // If a regular TLB of the level hit too, the access is an ordinary
+            // L2 hit and pays the L2 latency as before.  hit_tlb is the PQ in
+            // that case too (it is probed last), so the test must not rely on
+            // hit_tlb alone: a PQ entry stays after its first use, the page
+            // later also lands in L2 (L1 victim), and charging the PQ latency
+            // for those repeat hits made the PQ a big 1-cycle second-level
+            // TLB -- total TLB latency fell below Perfect-L2-TLB.
+            if (hit_tlb != NULL && hit_tlb->getPrefetch() && !regular_hit_at_hit_level)
+            {
+                translation_stats.total_tlb_latency += hit_tlb->getLatency();
+                charged_tlb_latency += hit_tlb->getLatency();
+                translation_stats.tlb_latency_per_level[hit_level] += hit_tlb->getLatency();
+                if (count) translation_stats.pq_hit_latency_charges++;
+            }
+            else
             for (UInt32 j = 0; j < tlb_path[hit_level].size(); j++)
             { 
                 // For any TLB level other than L2 (level 1), charge the 
@@ -973,7 +1042,10 @@ namespace ParametricDramDirectoryMSI
                         int npf = t->getNumPrefetchers();
                         for (int wk = 0; wk < npf; wk++)
                             if (pfs[wk])
+                            {
                                 pfs[wk]->flushPendingPayloadWritebacks(page_table);
+                                pfs[wk]->demandWalkDone(address, total_walk_latency);
+                            }
                     }
             }
 
@@ -1274,15 +1346,21 @@ namespace ParametricDramDirectoryMSI
             IntPtr va_page = address & ~(page_size_bytes - 1);
             IntPtr pa_page = final_physical_address & ~(page_size_bytes - 1);
 
-            // Check 1: Same VA should always map to same PA
-            auto va_it = va_to_pa_map.find(va_page);
-            if (va_it != va_to_pa_map.end())
+            // Scope both checks to this address space.
+            int sanity_app_id = core->getThread() ? core->getThread()->getAppId() : 0;
+            auto& va2pa = va_to_pa_map[sanity_app_id];
+            auto& pa2va = pa_to_va_map[sanity_app_id];
+
+            // Check 1: within one address space, a VA should keep its frame
+            auto va_it = va2pa.find(va_page);
+            if (va_it != va2pa.end())
             {
                 if (va_it->second != pa_page)
                 {
                     sanity_check_violations++;
                     std::cerr << "[MMU SANITY ERROR] Core " << core->getId()
                               << " VA=0x" << std::hex << va_page
+                              << " (app " << sanity_app_id << ")"
                               << " mapped to different PAs! Previous=0x" << va_it->second
                               << " Current=0x" << pa_page << std::dec << std::endl;
                     assert(false && "VA-PA mapping inconsistency detected!");
@@ -1291,18 +1369,21 @@ namespace ParametricDramDirectoryMSI
             else
             {
                 // First time seeing this VA, record the mapping
-                va_to_pa_map[va_page] = pa_page;
+                va2pa[va_page] = pa_page;
             }
 
-            // Check 2: Each PA should be assigned to only one VA
-            auto pa_it = pa_to_va_map.find(pa_page);
-            if (pa_it != pa_to_va_map.end())
+            // Check 2: within one address space, a frame should back one VA.
+            // Across address spaces sharing is expected (fork COW, MAP_SHARED),
+            // which is why this is scoped per app rather than global.
+            auto pa_it = pa2va.find(pa_page);
+            if (pa_it != pa2va.end())
             {
                 if (pa_it->second != va_page)
                 {
                     sanity_check_violations++;
                     std::cerr << "[MMU SANITY ERROR] Core " << core->getId()
                               << " PA=0x" << std::hex << pa_page
+                              << " (app " << std::dec << sanity_app_id << std::hex << ")"
                               << " assigned to multiple VAs! Previous=0x" << pa_it->second
                               << " Current=0x" << va_page << std::dec << std::endl;
                     assert(false && "PA assigned to multiple VAs detected!");
@@ -1311,7 +1392,7 @@ namespace ParametricDramDirectoryMSI
             else
             {
                 // First time seeing this PA, record the mapping
-                pa_to_va_map[pa_page] = va_page;
+                pa2va[pa_page] = va_page;
             }
         }
 

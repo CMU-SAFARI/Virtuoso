@@ -90,6 +90,7 @@ namespace ParametricDramDirectoryMSI
 		std::priority_queue<query_entry, std::vector<query_entry>, Compare> entry_priority_queue;
 		std::unordered_map<uint64_t, uint32_t> m_pq_region_refcount;  // Region ID → number of PQ entries (for dedup)
 		uint32_t m_pq_region_bits;  // Bits to right-shift an address to get region ID (page_shift + region_shift)
+		bool m_pq_dedup_whole_batch;  // Legacy dedup: test only the first entry's region, discard the whole batch on a match
 
 		// External observers notified on TLB evictions (e.g., PQ prefetchers
 		// registered by the TLB subsystem so that main-TLB evictions reach
@@ -107,13 +108,40 @@ namespace ParametricDramDirectoryMSI
 			UInt64 m_miss_instruction, m_miss_data;
 			UInt64 m_insertions_instruction, m_insertions_data;
 			UInt64 m_eviction_instruction, m_eviction_data;
-			UInt64 m_pq_dedup_skipped;  // Prefetches skipped due to PQ region dedup
+			UInt64 m_pq_dedup_skipped;  // Prefetch batches fully skipped due to PQ region dedup
 			UInt64 m_pq_hits;           // Demand hits on prefetch-sourced entries (accuracy numerator)
 			UInt64 m_pq_materialized;   // Total prefetch entries materialized into TLB
+
+			// In-flight queue (entry_priority_queue) pressure.  The queue holds
+			// prefetch walks that have completed but whose results are not yet
+			// available to the TLB.  It is capped at max_prefetch_count; when
+			// the cap binds we silently lose prefetches, so account for it.
+			UInt64 m_pq_dedup_skipped_entries;  // Individual entries dropped by region dedup
+			UInt64 m_pq_full_skipped_calls;     // performPrefetch() calls skipped: queue already at cap
+			UInt64 m_pq_full_dropped_entries;   // Entries discarded mid-batch: queue reached cap
+			UInt64 m_pq_max_occupancy;          // High-water mark of in-flight queue occupancy
+			UInt64 m_pq_enqueued;               // Entries that actually entered the in-flight queue
+			UInt64 m_pq_purged_stale;           // In-flight entries dropped by a TLB invalidate (shootdown/migration)
+			UInt64 m_pq_train_skipped_level_hit; // Deferred mode: prefetchers not run because a regular TLB at this level hit
 
 		} tlb_stats;
 
 		SimLog *tlb_log;
+
+		// Deferred prefetch training (see setDeferPrefetch).
+		bool m_defer_prefetch = false;
+		struct DeferredPrefetch
+		{
+			bool valid = false;
+			IntPtr address = 0, eip = 0;
+			Core::lock_signal_t lock = Core::NONE;
+			bool modeled = false, count = false, instruction = false, tlb_hit = false, pq_hit = false;
+			int page_size = 0;
+			PageTable *pt = nullptr;
+			SubsecondTime now = SubsecondTime::Zero();
+		} m_deferred;
+
+		void runPrefetchers(IntPtr address, IntPtr eip, Core::lock_signal_t lock, bool modeled, bool count, PageTable *pt, bool instruction, bool tlb_hit, bool pq_hit, int hit_page_size, SubsecondTime now);
 
 	public:
 		TLB(String name, String cfgname, core_id_t core_id, ComponentLatency access_latency, UInt32 num_entries, UInt32 associativity, int *page_size_list, int page_sizes, String tlb_type, bool allocate_on_miss, bool prefetch = false, TLBPrefetcherBase **tpb = NULL, int number_of_prefetchers = 0, int max_prefetch_count = 1000);
@@ -153,6 +181,30 @@ namespace ParametricDramDirectoryMSI
 		 * @return True if an entry was found and invalidated
 		 */
 		bool invalidate(IntPtr address, int page_size);
+
+		/**
+		 * @brief Train this PQ's prefetchers on level misses only.
+		 *
+		 * The PQ is probed in parallel with the regular TLB(s) of its level, so
+		 * lookup() cannot tell whether the access missed at that level.  When
+		 * enabled, lookup() only records the access and the MMU must call
+		 * resolveDeferredPrefetch() after the level's lookups.  Only MMU designs
+		 * that make that call may enable it (mmu.cc does, via tlb_prefetch/train_on).
+		 */
+		void setDeferPrefetch(bool defer) { m_defer_prefetch = defer; }
+		bool getDeferPrefetch() const { return m_defer_prefetch; }
+		void resolveDeferredPrefetch(bool level_missed);
+
+		/**
+		 * @brief Drop in-flight prefetch-queue entries for a virtual address.
+		 *
+		 * Called by invalidate() so a shootdown cannot be undone by a
+		 * prefetch queued before it landing afterwards with a stale PPN.
+		 *
+		 * @param page_size Page size in bits, or 0 to match any page size
+		 * @return Number of queued entries discarded
+		 */
+		UInt64 purgePQ(IntPtr address, int page_size = 0);
 		
 		/**
 		 * @brief Check if TLB contains an entry for a given virtual address

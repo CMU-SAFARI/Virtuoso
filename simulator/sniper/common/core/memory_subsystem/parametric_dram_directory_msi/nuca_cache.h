@@ -34,6 +34,8 @@ class NucaCache
 
       UInt64 m_reads, m_writes, m_read_misses, m_write_misses;
       UInt64 m_metadata_reads, m_metadata_writes, m_metadata_read_misses, m_metadata_write_misses;
+      // Page-table lines filled by TLB-prefetcher page walks (PTW_PREFETCH)
+      UInt64 m_ptw_pf_fills, m_ptw_pf_used, m_ptw_pf_evicted_unused;
       ShmemPerf m_dummy_shmem_perf;
 
       // NUCA content logging
@@ -49,8 +51,11 @@ class NucaCache
       NucaCache(MemoryManagerBase* memory_manager, ShmemPerfModel* shmem_perf_model, AddressHomeLookup* home_lookup, UInt32 cache_block_size, ParametricDramDirectoryMSI::CacheParameters& parameters);
       ~NucaCache();
 
-      boost::tuple<SubsecondTime, HitWhere::where_t> read(IntPtr address, Byte* data_buf, SubsecondTime now, ShmemPerf *perf, bool count,bool is_metadata);
-      boost::tuple<SubsecondTime, HitWhere::where_t> write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_address, Byte* evict_buf, SubsecondTime now, bool count,bool is_metadata);
+      // requester/block_type are only used to track lines filled by prefetch page walks
+      boost::tuple<SubsecondTime, HitWhere::where_t> read(IntPtr address, Byte* data_buf, SubsecondTime now, ShmemPerf *perf, bool count,bool is_metadata,
+         core_id_t requester = INVALID_CORE_ID);
+      boost::tuple<SubsecondTime, HitWhere::where_t> write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_address, Byte* evict_buf, SubsecondTime now, bool count,bool is_metadata,
+         core_id_t requester = INVALID_CORE_ID, CacheBlockInfo::block_type_t block_type = CacheBlockInfo::block_type_t::DATA);
       void markTranslationMetadata(IntPtr address, CacheBlockInfo::block_type_t blocktype);
       Cache* getCache(){return m_cache;}
       void measureStats();

@@ -9,11 +9,32 @@ namespace ParametricDramDirectoryMSI
 {
 
 // Berti TLB Prefetcher
-// Adapted from the cache-level Berti prefetcher (Bera et al.)
-// Operates on VPN regions instead of cache-line pages.
-// A "region" is a group of consecutive VPNs (default 64).
-// Learns dominant VPN stride per region and uses recorded patterns to prefetch.
-// Latency-aware feedback is skipped; stride is learned from consecutive accesses.
+// Adapted from the cache-level Berti prefetcher (Navarro-Torres et al.).
+// Operates on VPN regions instead of cache-line pages: a "region" is
+// 2^region_bits consecutive VPNs (default 64), and a per-region 64-bit
+// bitmap (u_vector) records which of its pages were touched -- hence
+// region_bits must be <= 6 (enforced in the constructor).
+//
+// Structures (all small, fully associative, LRU):
+//   current pages  - regions being touched now: bitmap, first offset, and up
+//                    to num_berti candidate strides with confidence counters
+//   prev requests  - circular history of (region, offset) used to derive a
+//                    stride between consecutive touches of the same region
+//   record pages   - bitmap + best stride of regions that were evicted from
+//                    current pages, looked up by region / region+first offset
+//   ip table       - PC -> record entry, so a PC that starts a new region can
+//                    replay the pattern it produced last time
+//
+// Prediction priority: (1) record hit on region+first offset whose bitmap
+// covers everything touched so far, (2) the same via the PC pointer, (3) the
+// current region's most confident stride (>= BERTI_CTR_CONFIDENCE), (4)
+// record hit on region only, (5) the PC's record.  With (1)/(2) the recorded
+// bitmap is replayed as a burst of up to max_burst pages; in every case one
+// "single stride" prefetch at offset + stride is issued.
+//
+// Simplification vs. the paper: the latency-aware ("timely") delta selection
+// is not modelled; the stride is simply the delta to the previous touch of
+// the same region.  Prefetches never cross a region boundary.
 
 class BertiTLBPrefetcher : public TLBPrefetcherBase
 {
@@ -118,6 +139,16 @@ private:
         UInt64 predictions_from_record;
         UInt64 predictions_from_current;
     } stats;
+
+protected:
+    void appendSummary(std::ostream &os) const override
+    {
+        os << " strides_learned=" << stats.strides_learned
+           << " pred_record=" << stats.predictions_from_record
+           << " pred_current=" << stats.predictions_from_current
+           << " walks=" << stats.prefetch_attempts
+           << " walks_ok=" << stats.successful_prefetches;
+    }
 };
 
 } // namespace ParametricDramDirectoryMSI
