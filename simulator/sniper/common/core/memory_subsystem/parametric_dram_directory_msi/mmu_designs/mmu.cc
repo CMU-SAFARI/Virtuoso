@@ -93,6 +93,16 @@ using namespace std;
 namespace ParametricDramDirectoryMSI
 {
 
+/* Total recorded mappings across every address space (the sanity maps are
+   nested per app_id). */
+static size_t sanityMappingCount(
+   const std::unordered_map<int, std::unordered_map<IntPtr, IntPtr> >& m)
+{
+   size_t n = 0;
+   for (const auto& kv : m) n += kv.second.size();
+   return n;
+}
+
 // ============================================================================
 // Construction / Destruction
 // ============================================================================
@@ -160,8 +170,8 @@ namespace ParametricDramDirectoryMSI
         if (sanity_checks_enabled)
         {
             std::cout << "[MMU Sanity] Core " << core->getId() 
-                      << " checked " << va_to_pa_map.size() << " unique VA->PA mappings, "
-                      << pa_to_va_map.size() << " unique PA->VA mappings, "
+                      << " checked " << sanityMappingCount(va_to_pa_map) << " unique VA->PA mappings, "
+                      << sanityMappingCount(pa_to_va_map) << " unique PA->VA mappings, "
                       << sanity_check_violations << " violations detected" << std::endl;
         }
 
@@ -1336,15 +1346,21 @@ namespace ParametricDramDirectoryMSI
             IntPtr va_page = address & ~(page_size_bytes - 1);
             IntPtr pa_page = final_physical_address & ~(page_size_bytes - 1);
 
-            // Check 1: Same VA should always map to same PA
-            auto va_it = va_to_pa_map.find(va_page);
-            if (va_it != va_to_pa_map.end())
+            // Scope both checks to this address space.
+            int sanity_app_id = core->getThread() ? core->getThread()->getAppId() : 0;
+            auto& va2pa = va_to_pa_map[sanity_app_id];
+            auto& pa2va = pa_to_va_map[sanity_app_id];
+
+            // Check 1: within one address space, a VA should keep its frame
+            auto va_it = va2pa.find(va_page);
+            if (va_it != va2pa.end())
             {
                 if (va_it->second != pa_page)
                 {
                     sanity_check_violations++;
                     std::cerr << "[MMU SANITY ERROR] Core " << core->getId()
                               << " VA=0x" << std::hex << va_page
+                              << " (app " << sanity_app_id << ")"
                               << " mapped to different PAs! Previous=0x" << va_it->second
                               << " Current=0x" << pa_page << std::dec << std::endl;
                     assert(false && "VA-PA mapping inconsistency detected!");
@@ -1353,18 +1369,21 @@ namespace ParametricDramDirectoryMSI
             else
             {
                 // First time seeing this VA, record the mapping
-                va_to_pa_map[va_page] = pa_page;
+                va2pa[va_page] = pa_page;
             }
 
-            // Check 2: Each PA should be assigned to only one VA
-            auto pa_it = pa_to_va_map.find(pa_page);
-            if (pa_it != pa_to_va_map.end())
+            // Check 2: within one address space, a frame should back one VA.
+            // Across address spaces sharing is expected (fork COW, MAP_SHARED),
+            // which is why this is scoped per app rather than global.
+            auto pa_it = pa2va.find(pa_page);
+            if (pa_it != pa2va.end())
             {
                 if (pa_it->second != va_page)
                 {
                     sanity_check_violations++;
                     std::cerr << "[MMU SANITY ERROR] Core " << core->getId()
                               << " PA=0x" << std::hex << pa_page
+                              << " (app " << std::dec << sanity_app_id << std::hex << ")"
                               << " assigned to multiple VAs! Previous=0x" << pa_it->second
                               << " Current=0x" << va_page << std::dec << std::endl;
                     assert(false && "PA assigned to multiple VAs detected!");
@@ -1373,7 +1392,7 @@ namespace ParametricDramDirectoryMSI
             else
             {
                 // First time seeing this PA, record the mapping
-                pa_to_va_map[pa_page] = va_page;
+                pa2va[pa_page] = va_page;
             }
         }
 

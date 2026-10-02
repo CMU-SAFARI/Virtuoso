@@ -112,8 +112,14 @@ namespace ParametricDramDirectoryMSI
 		// - va_to_pa_map: VA (page-aligned) -> PA (page-aligned), ensures same VA always maps to same PA
 		// - pa_to_va_map: PA (page-aligned) -> VA (page-aligned), ensures no two VAs map to same PA
 		bool sanity_checks_enabled;  ///< Enable translation sanity checks
-		std::unordered_map<IntPtr, IntPtr> va_to_pa_map;  ///< VA -> PA mapping for consistency check
-		std::unordered_map<IntPtr, IntPtr> pa_to_va_map;  ///< PA -> VA mapping for uniqueness check
+		// Both checks are PER ADDRESS SPACE (outer key = app_id). Keyed on the
+		// page alone they are wrong as soon as more than one address space
+		// exists: the same VA legitimately maps to different frames in
+		// different processes, and after fork the same frame is legitimately
+		// mapped by both parent and child (copy-on-write), as is any
+		// MAP_SHARED region. Only a duplicate WITHIN one address space is a bug.
+		std::unordered_map<int, std::unordered_map<IntPtr, IntPtr> > va_to_pa_map;  ///< app -> (VA -> PA)
+		std::unordered_map<int, std::unordered_map<IntPtr, IntPtr> > pa_to_va_map;  ///< app -> (PA -> VA)
 		UInt64 sanity_check_violations;  ///< Count of detected violations
 
 
