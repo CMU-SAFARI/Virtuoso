@@ -258,8 +258,10 @@ downloads: everything from here on reads what this script just staged.
 Don't run the three back-to-back: launch once, poll --status until every suite
 reads DONE, then --results.
 
-  Suites:  head8mb head2mb table5 table6 pqsweep multicore motivation
-           (all seven by default; 'motivation' produces Figures 4, 5, 6, 8, 9 from
+  Suites:  head2mb head8mb table5 table6 multicore abl2mb
+           head2mb_mtps400 head2mb_mtps800 head2mb_mtps1600 head2mb_mtps3200
+           head2mb_mtps4800 motivation
+           (all of them by default; 'motivation' produces Figures 2, 3, 5, 6, 7 from
             the PTW dumps staged in [3/4] and runs alongside the simulations)
   Subset:  --suites "head8mb motivation"   |   quick test:  --icount 2000000
 

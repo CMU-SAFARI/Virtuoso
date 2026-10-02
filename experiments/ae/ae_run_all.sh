@@ -15,9 +15,10 @@
 #   experiments/ae/ae_run_all.sh --status     # progress of every launched suite
 #   experiments/ae/ae_run_all.sh --results    # parse + plot every FINISHED suite
 #
-# Paper mapping:  head8mb+head2mb -> Figure 12 (8MB bottom / 2MB top),
-#                 table5 -> Table 5,  table6 -> Table 6,
-#                 pqsweep -> Figure 20,  multicore -> Figure 22.
+# Paper mapping:  head2mb+head8mb -> Figure 11 (2 MB top / 8 MB bottom), head2mb -> Figure 13,
+#                 table5 -> Table 4,  table6 -> Table 5,  multicore -> Figure 16,
+#                 head2mb_mtps* -> Figure 18,  abl2mb -> Figure 19,
+#                 motivation -> Figures 2, 3, 5, 6, 7.
 # ===========================================================================
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
