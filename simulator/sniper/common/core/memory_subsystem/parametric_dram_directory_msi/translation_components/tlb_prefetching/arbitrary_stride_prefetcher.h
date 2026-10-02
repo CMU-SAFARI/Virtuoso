@@ -37,7 +37,7 @@ namespace ParametricDramDirectoryMSI
 	 * a zero stride, and uses an explicit valid bit instead of the old
 	 * stride == -1 "unset" sentinel (which also collided with a real -1 stride:
 	 * a change away from stride -1 did not reset the counter).  Default true;
-	 * false reproduces the pre-2026-09-28 behaviour.
+	 * false trains on and prefetches with zero strides.
 	 */
 	class ArbitraryStridePrefetcher : public TLBPrefetcherBase
 	{

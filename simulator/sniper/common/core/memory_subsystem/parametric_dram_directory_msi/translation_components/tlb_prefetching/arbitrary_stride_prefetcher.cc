@@ -49,7 +49,7 @@ namespace ParametricDramDirectoryMSI
 		          << " degree=" << degree << " extra_prefetch=" << extra_prefetch
 		          << " install_pq=" << install_pq << " skip_zero_stride=" << skip_zero_stride
 		          << (skip_zero_stride ? "" : "  (LEGACY: stride-0 entries prefetch the page being accessed)")
-		          << (entries == 1 ? "  (LEGACY: 1-entry table, as in the pre-2026-09-28 v4 runs)" : "")
+		          << (entries == 1 ? "  (1-entry table)" : "")
 		          << std::endl;
 
 		registerStatsMetric("asp_tlb", core->getId(), "successful_prefetches", &stats.successful_prefetches);
