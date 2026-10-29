@@ -285,6 +285,31 @@
         .person-bio p { color: var(--ink-soft); font-size: 0.88rem; }
         .person-bio a { margin-top: auto; font-size: 0.8rem; }
 
+        .people-grid.trio { grid-template-columns: repeat(3, minmax(0, 360px)); }
+
+        /* ---------- Speakers ---------- */
+        .speakers { background: var(--paper-deep); }
+        .speaker-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+        .talk { display: flex; flex-direction: column; gap: 16px; padding: 28px; background: var(--white); border: 1px solid var(--line); border-top: 3px solid var(--red); border-radius: 14px; transition: transform 220ms ease, box-shadow 220ms ease; }
+        .talk:hover { transform: translateY(-4px); box-shadow: var(--shadow); }
+        .talk .person-photo img { width: 84px; height: 84px; }
+        .talk-title { font-size: clamp(1.3rem, 2.2vw, 1.6rem); line-height: 1.2; }
+        .talk details { border-top: 1px solid var(--line); padding-top: 12px; }
+        .talk details + details { padding-top: 12px; }
+        .talk summary { cursor: pointer; color: var(--teal); font-family: var(--label); font-size: 0.82rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+        .talk summary:hover { color: var(--red-dark); }
+        .talk details p { margin-top: 10px; color: var(--ink-soft); font-size: 0.88rem; }
+        .timeline span a { color: var(--yellow); text-decoration: none; }
+        .timeline span a:hover { text-decoration: underline; }
+
+        /* ---------- Livestream ---------- */
+        .stream { background: var(--white); }
+        .stream-layout { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: clamp(2rem, 5vw, 4rem); align-items: center; }
+        .stream-copy p { margin-top: 12px; color: var(--ink-soft); }
+        .stream-copy .btn { margin-top: 24px; }
+        .stream-player { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 14px; background: var(--ink-deep); box-shadow: var(--shadow); }
+        .stream-player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
         /* ---------- FAQ ---------- */
 
         /* ---------- Updates ---------- */
@@ -388,9 +413,9 @@
             .nav-links a:not(.nav-cta)::after { display: none; }
             .menu-toggle { display: grid; place-items: center; }
             .hero { min-height: 0; }
-            .lab-layout, .logistics-grid, .agenda { grid-template-columns: 1fr; }
+            .lab-layout, .logistics-grid, .agenda, .stream-layout { grid-template-columns: 1fr; }
             .event-facts { grid-template-columns: 1fr 1fr; }
-            .people-grid { grid-template-columns: 1fr 1fr; }
+            .people-grid, .people-grid.trio { grid-template-columns: 1fr 1fr; }
             .footer-wrap { grid-template-columns: 1fr 1fr; }
         }
 
@@ -412,7 +437,8 @@
             .timeline li { grid-template-columns: 1fr; gap: 4px; }
             .speak-cta { align-items: start; flex-direction: column; padding: 24px; }
             .logistics-row { grid-template-columns: 1fr; gap: 4px; }
-            .people-grid { grid-template-columns: 1fr; }
+            .people-grid, .people-grid.trio, .speaker-grid { grid-template-columns: 1fr; }
+            .talk { padding: 22px; }
             .past-grid { grid-template-columns: 1fr; }
             .footer-wrap { grid-template-columns: 1fr; }
             .footer-bottom { flex-direction: column; align-items: flex-start; }
@@ -459,6 +485,8 @@
                 <ul class="nav-links" id="mainNav">
                     <li><a href="#about">About</a></li>
                     <li><a href="#program">Program</a></li>
+                    <li><a href="#speakers">Speakers</a></li>
+                    <li><a href="#livestream">Livestream</a></li>
                     <li><a href="#hands-on">Hands-on</a></li>
                     <li><a href="#attend">Attend</a></li>
                     <li><a href="#organizers">Organizers</a></li>
@@ -490,7 +518,7 @@
                 </div>
                 <div class="event-facts" aria-label="Event details">
                     <div class="event-fact"><span>Date</span><strong>Sat, October 31, 2026</strong></div>
-                    <div class="event-fact"><span>Place</span><strong>Athens, Greece</strong></div>
+                    <div class="event-fact"><span>Room</span><strong>Ypsilon II, Athens</strong></div>
                     <div class="event-fact"><span>Conference</span><strong>MICRO 2026</strong></div>
                     <div class="event-fact"><span>Format</span><strong>Half day, 13:00 – 17:00</strong></div>
                 </div>
@@ -535,16 +563,17 @@
                     <div class="agenda-copy">
                         <p class="eyebrow">Outline</p>
                         <h3>13:00 to 17:00 EET, in the Saturday afternoon slot of MICRO 2026.</h3>
-                        <p>The 15:00 coffee break is shared with the other MICRO 2026 workshops. Session titles and speakers will replace the placeholders below as they are confirmed.</p>
-                        <span class="tag">Tentative</span>
+                        <p>Invited talks, a 15:00 coffee break shared with the other MICRO 2026 workshops, then a look inside Virtuoso and MimicOS.</p>
                     </div>
-                    <ol class="timeline" aria-label="Tentative schedule">
-                        <li><time>13:00 – 13:10</time><div><strong>Welcome and opening remarks</strong><span>Why HW/OS interfaces, and what the afternoon covers.</span></div></li>
-                        <li><time>13:10 – 14:30</time><div><strong>Invited talks</strong><span>Speakers to be announced.</span></div></li>
-                        <li><time>14:30 – 15:00</time><div><strong>Inside Virtuoso</strong><span>Methodology, MimicOS, simulator integration, and the component library.</span></div></li>
+                    <ol class="timeline" aria-label="Schedule">
+                        <li><time>13:00 – 13:30</time><div><strong>Introduction</strong><span>Konstantinos Kanellopoulos (ETH Zurich)</span></div></li>
+                        <li><time>13:30 – 14:00</time><div><strong>The Renaissance of Distributed Shared Memory Systems</strong><span><a href="#talk-alverti">Chloe Alverti</a> (NTUA)</span></div></li>
+                        <li><time>14:00 – 14:30</time><div><strong>Characterizing Synonyms and TLB Invalidations for Virtually-Indexed Virtually-Tagged Caches</strong><span><a href="#talk-totomis">Sotiris Totomis</a> (FORTH-ICS)</span></div></li>
+                        <li><time>14:30 – 15:00</time><div><strong>Revisiting Dynamic Memory Management in the Era of Heterogeneous Memory Systems</strong><span><a href="#talk-katsaragakis">Manolis Katsaragakis</a> (NTUA)</span></div></li>
                         <li class="break"><time>15:00 – 15:30</time><div><strong>☕ Coffee break</strong></div></li>
-                        <li><time>15:30 – 16:45</time><div><strong>Hands-on tutorial</strong><span>Guided implementation and evaluation of a cross-layer idea.</span></div></li>
-                        <li><time>16:45 – 17:00</time><div><strong>Wrap-up and open discussion</strong><span>Where the infrastructure goes next.</span></div></li>
+                        <li><time>15:30 – 16:00</time><div><strong>Secure Integration of Third-party Design in AI SoCs</strong><span><a href="#talk-alam">Faiz Alam</a> (Granular Labs)</span></div></li>
+                        <li><time>16:00 – 16:30</time><div><strong>Virtuoso key concepts</strong><span>Konstantinos Marios Sgouras (ETH Zurich)</span></div></li>
+                        <li><time>16:30 – 17:00</time><div><strong>What&rsquo;s new in Virtuoso</strong><span>Konstantinos Kanellopoulos (ETH Zurich)</span></div></li>
                     </ol>
                 </div>
 
@@ -558,9 +587,103 @@
             </div>
         </section>
 
+        <section class="section speakers" id="speakers">
+            <div class="container">
+                <div class="section-head reveal">
+                    <div>
+                        <div class="chapter"><span>03</span> Invited speakers</div>
+                    </div>
+                </div>
+                <div class="speaker-grid reveal">
+                    <article class="talk" id="talk-alverti">
+                        <div class="person-photo">
+                            <img src="../img/speakers/chloe_alverti.jpg" alt="Chloe Alverti" loading="lazy">
+                            <div class="person-head"><h3>Chloe Alverti</h3><p>NTUA</p></div>
+                        </div>
+                        <h4 class="talk-title">The Renaissance of Distributed Shared Memory Systems</h4>
+                        <details>
+                            <summary>Abstract</summary>
+                            <p>Distributed Shared Memory (DSM), a long-standing vision in computer systems, is being revisited as emerging interconnects such as CXL enable low-latency, cache-coherent memory access across nodes within a rack. This technological shift invites us to rethink fundamental systems interfaces: how processes and their state move across machines, how shared-memory applications scale in distributed environments, and how DSM systems remain resilient in the presence of failures. Realizing this vision requires advances in both software and hardware, often through their co-design. This talk highlights three recent developments along this path. At the software layer, CXLfork introduces a zero-serialization, near-zero-copy remote fork mechanism by checkpointing process state directly into shared CXL memory. At the hardware layer, PhasedStore and Diktamo address a fundamental challenge in cache-coherent DSM systems: resilience to node failures. In such systems, node crashes can result in the silent loss of dirty shared data buffered in private CPU caches. PhasedStore mitigates this risk by enabling high-performance write-through coherence protocols that propagate dirty data into a fault-tolerant domain. Diktamo takes a complementary approach by replicating dirty cache lines across the rack to ensure their availability in the event of node failures. Together, these developments outline a path toward practical, high-performance, and fault-tolerant distributed shared memory systems.</p>
+                        </details>
+                        <details>
+                            <summary>Bio</summary>
+                            <p>Chloe Alverti is a postdoctoral researcher at the Computing Systems Laboratory (CSLab) of the National Technical University of Athens (NTUA). Her research interests span operating systems, computer architecture, and hardware&ndash;software co-design, with a particular focus on memory systems for over a decade. She received her Ph.D. in Computer Engineering from NTUA in 2022. From 2023 to 2025, she was a postdoctoral researcher in the Department of Computer Science at the University of Illinois Urbana-Champaign. Before and during her doctoral studies, she held research positions at Chalmers University of Technology and the University of Wisconsin&ndash;Madison, and spent a year in industry at ZeroPoint Technologies.</p>
+                        </details>
+                    </article>
+                    <article class="talk" id="talk-totomis">
+                        <div class="person-photo">
+                            <img src="../img/speakers/sotiris_totomis.jpg" alt="Sotiris Totomis" loading="lazy">
+                            <div class="person-head"><h3>Sotiris Totomis</h3><p>FORTH-ICS &amp; University of Crete</p></div>
+                        </div>
+                        <h4 class="talk-title">Characterizing Synonyms and TLB Invalidations for Virtually-Indexed Virtually-Tagged Caches</h4>
+                        <details>
+                            <summary>Abstract</summary>
+                            <p>Conventional virtual memory architectures require virtual-to-physical address translation via Translation Lookaside Buffers (TLBs) for every load or store before accessing the cache. Virtually-Indexed Virtually-Tagged (VIVT) caches enable direct access via untranslated virtual addresses. Such designs can reduce cache access latency and power consumption by bypassing TLBs and deferring address translation to a deeper level of the memory hierarchy. Two inherent virtual memory behaviors hinder the effectiveness of VIVTs: 1) Synonyms that occur when different virtual addresses map to the same physical address, and 2) TLB invalidations (TLBIs) that arise when the virtual memory subsystem synchronizes TLBs during mapping modifications. This work argues that an in-depth analysis of synonyms and TLBIs is crucial to VIVT advancements. In this regard, we adapt the gem5 simulator to generate detailed memory traces of both the user&rsquo;s and the OS kernel&rsquo;s contexts. Additionally, we implement SynSeeker, a tool that parses these traces and reports system-level synonym and TLBI properties. Our results make the following observations: a) 4&minus;17% of the total memory operations are synonyms that require resolution, b) synonyms stem not only from copy-on-write routines, but also from the Linux kernel&rsquo;s fundamental operation of clearing pages upon initial access, and c) TLBIs are frequent, especially in I/O workloads. This work serves as the baseline of our ongoing work on the OS-VIVT cooperation.</p>
+                        </details>
+                        <details>
+                            <summary>Bio</summary>
+                            <p>Sotiris Totomis is a Ph.D. student at the Institute of Computer Science of the Foundation for Research and Technology - Hellas (FORTH - ICS) and the Computer Science Department of the University of Crete, advised by Asst. Prof. Vassilis Papaefstathiou. His interests include virtual memory, cache memories, and cache coherence. His current Ph.D. work focuses on the intersection of these domains, specifically how Virtually-Indexed Virtually-Tagged (VIVT) caches can reduce address translation and memory-access costs while cooperating with the operating system (OS).</p>
+                        </details>
+                    </article>
+                    <article class="talk" id="talk-katsaragakis">
+                        <div class="person-photo">
+                            <img src="../img/speakers/manolis_katsaragakis.jpg" alt="Manolis Katsaragakis" loading="lazy">
+                            <div class="person-head"><h3>Manolis Katsaragakis</h3><p>NTUA</p></div>
+                        </div>
+                        <h4 class="talk-title">Revisiting Dynamic Memory Management in the Era of Heterogeneous Memory Systems</h4>
+                        <details>
+                            <summary>Abstract</summary>
+                            <p>The increasing complexity of modern applications and the growing diversity of computing and memory technologies are driving the adoption of heterogeneous architectures. While these systems offer new opportunities to improve performance, energy efficiency, and resource utilization, they also introduce challenges in application deployment and system optimization. Addressing these challenges calls for cross-layer approaches that account for application behavior, data characteristics, and system-level constraints. In this talk, we present an Application-to-System-to-Technology co-design approach for multi-objective optimization in heterogeneous architectures. At the application level, we explore lightweight and scalable data structure refinement techniques based on access pattern analysis to improve data representation and memory utilization. At the system level, we investigate data placement strategies that balance performance, energy consumption, and memory lifetime across heterogeneous memory technologies. We also examine runtime-aware memory management flows that leverage system-level performance information to guide data placement decisions and reduce optimization overhead. Together, these approaches demonstrate how application behavior, data representation, and runtime-aware memory management can be jointly optimized to enhance the performance, efficiency, and sustainability of heterogeneous computing systems.</p>
+                        </details>
+                        <details>
+                            <summary>Bio</summary>
+                            <p>Manolis Katsaragakis received his PhD in 2025 from the School of Electrical and Computer Engineering at the National Technical University of Athens (NTUA), Greece and the Faculty of Engineering Science at KU Leuven, Belgium. His doctoral research focused on optimized dynamic memory management techniques for heterogeneous memory systems. He also holds a Diploma in Electrical and Computer Engineering from NTUA, which he received in 2018. He is currently a postdoctoral researcher at the Microprocessors and Digital Systems Laboratory (Microlab) at NTUA. He has contributed to several European research projects, including AgRibot, EXA2PRO, NEPHELE, and CMOS2.0, and completed research internships at imec, Belgium, in 2021 and 2023. His research activities focus on dynamic memory management, heterogeneous systems, Edge/Cloud resource allocation and has resulted in more than 25 publications in international journals and conferences, including IEEE CLOUD, where he received a Best Paper Award, IEEE DATE, IEEE Transactions on Computers (TC), ACM Transactions on Architecture and Code Optimization (TACO), ACM Transactions on Embedded Computing Systems (TECS) and other.</p>
+                        </details>
+                    </article>
+                    <article class="talk" id="talk-alam">
+                        <div class="person-photo">
+                            <img src="../img/speakers/faiz_alam.jpg" alt="Faiz Alam" loading="lazy">
+                            <div class="person-head"><h3>Faiz Alam</h3><p>Granular Labs</p></div>
+                        </div>
+                        <h4 class="talk-title">Secure Integration of Third-party Design in AI SoCs</h4>
+                        <details>
+                            <summary>Abstract</summary>
+                            <p>Due to increasing energy and performance gaps between general-purpose processors and hardware accelerators, clear trends for leveraging accelerators arise in various fields or workloads, such as edge devices, cloud systems, and data centers. Moreover, system integrators desire higher flexibility to deploy custom accelerators based on their performance, power, and cost constraints, where such integration can be as early as (1) at the design time when third-party intellectual properties (IPs) are used, (2) at integration/upgrade time when third-party discrete chip accelerators are used, or (3) during runtime as in reconfigurable logic.</p>
+                            <p>A malicious third-party accelerator can compromise the entire system by accessing other processes&rsquo; data, overwriting OS data structures, etc. To eliminate these security ramifications, a unit similar to a memory management unit (MMU), namely an IOMMU, is typically used to scrutinize memory accesses from I/O devices, including accelerators. Still, IOMMU incurs significant performance overhead because it resides on the critical path of each I/O memory access. We propose CryptoMMU, to delegate the translation processes to accelerators, whereas the authentication of the targeted address is elegantly performed using a cryptography-based approach. Our evaluation results show that CryptoMMU improves system throughput by an average of 2.97&times; and 1.13&times; compared to the conventional IOMMU and the state-of-the-art solutions.</p>
+                        </details>
+                        <details>
+                            <summary>Bio</summary>
+                            <p>Faiz Alam is co-founder of Granular Labs, an Austin-based hardware startup building high-performance memory systems for Physical AI, with a dedicated R&amp;D site at Proto Town in Lockhart, Texas. He recently earned his Ph.D. in ECE from North Carolina State University, specializing in the secure virtualization of heterogeneous architectures, where his work was recognized as Best Paper Runner-Up at MICRO 2023. During his PhD, he collaborated closely with NVIDIA Research, working on secure MMUs and Prefetchers. He also patented an XR neural inpainting architecture at Qualcomm Research. He also spent time at AMD Research working on op-cache software management.</p>
+                        </details>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <section class="section stream" id="livestream">
+            <div class="container">
+                <div class="section-head reveal">
+                    <div>
+                        <div class="chapter"><span>04</span> Livestream</div>
+                    </div>
+                </div>
+                <div class="stream-layout reveal">
+                    <div class="stream-copy">
+                        <p class="eyebrow">Watch on YouTube</p>
+                        <h3 class="h2-compact">Can&rsquo;t make it to Athens? Join us live.</h3>
+                        <p>The full afternoon is streamed on YouTube, and the recording stays available afterwards.</p>
+                        <a class="btn" href="https://www.youtube.com/watch?v=rKex4Dj9DDE" target="_blank" rel="noopener"><svg class="icon"><use href="#i-play"/></svg> Open on YouTube</a>
+                    </div>
+                    <div class="stream-player">
+                        <iframe src="https://www.youtube-nocookie.com/embed/rKex4Dj9DDE" title="Virtuoso Workshop at MICRO 2026: livestream" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section class="section lab" id="hands-on">
             <div class="container">
-                <div class="chapter reveal"><span>03</span> The working session</div>
+                <div class="chapter reveal"><span>05</span> The working session</div>
                 <div class="lab-layout">
                     <div class="lab-copy reveal">
                         <p class="eyebrow">Hands-on</p>
@@ -594,7 +717,7 @@
 
         <section class="section logistics on-dark" id="attend">
             <div class="container">
-                <div class="chapter reveal"><span>04</span> Plan your day</div>
+                <div class="chapter reveal"><span>06</span> Plan your day</div>
                 <div class="logistics-grid reveal">
                     <div>
                         <p class="eyebrow">Attend</p>
@@ -602,12 +725,12 @@
                         <div class="logistics-list">
                             <div class="logistics-row"><span>When</span><div><strong>Saturday, October 31, 2026</strong><small>Afternoon session, 13:00 to 17:00 EET (UTC+2)</small></div></div>
                             <div class="logistics-row"><span>Venue</span><div><strong>InterContinental Athenaeum Athens Hotel</strong><small>MICRO 2026 conference venue. <a href="https://www.google.com/maps/search/?api=1&amp;query=InterContinental+Athenaeum+Athens" target="_blank" rel="noopener">Open in maps</a></small></div></div>
-                            <div class="logistics-row"><span>Room</span><div><strong>To be announced by MICRO 2026</strong></div></div>
+                            <div class="logistics-row"><span>Room</span><div><strong>Ypsilon II</strong><small>Inside the InterContinental Athenaeum.</small></div></div>
                             <div class="logistics-row"><span>Registration</span><div><strong>Through MICRO 2026 registration</strong><small>Select the workshop day when registering. A direct link will be posted here once registration opens.</small></div></div>
-                            <div class="logistics-row"><span>Remote</span><div><strong>Livestream planned</strong><small>Previous editions were streamed and recorded on YouTube. The link will appear here closer to the date.</small></div></div>
+                            <div class="logistics-row"><span>Remote</span><div><strong>Livestream on YouTube</strong><small>The session will be streamed and recorded. <a href="https://www.youtube.com/watch?v=rKex4Dj9DDE" target="_blank" rel="noopener">Watch the livestream</a></small></div></div>
                         </div>
                         <div class="logistics-actions">
-                            <a class="btn" href="https://calendar.google.com/calendar/render?action=TEMPLATE&amp;text=Virtuoso%20Workshop%20%26%20Tutorial%20%40%20MICRO%202026&amp;dates=20261031T110000Z/20261031T150000Z&amp;details=Ideas%20and%20Infrastructures%20for%20Novel%20HW/OS%20Interfaces.%20https://cmu-safari.github.io/Virtuoso/workshop/micro2026.html&amp;location=InterContinental%20Athenaeum%20Athens%20Hotel%2C%20Athens%2C%20Greece" target="_blank" rel="noopener"><svg class="icon"><use href="#i-calendar"/></svg> Add to calendar</a>
+                            <a class="btn" href="https://calendar.google.com/calendar/render?action=TEMPLATE&amp;text=Virtuoso%20Workshop%20%26%20Tutorial%20%40%20MICRO%202026&amp;dates=20261031T110000Z/20261031T150000Z&amp;details=Ideas%20and%20Infrastructures%20for%20Novel%20HW/OS%20Interfaces.%20https://cmu-safari.github.io/Virtuoso/workshop/micro2026.html&amp;location=Ypsilon%20II%2C%20InterContinental%20Athenaeum%20Athens%20Hotel%2C%20Athens%2C%20Greece" target="_blank" rel="noopener"><svg class="icon"><use href="#i-calendar"/></svg> Add to calendar</a>
                             <a class="btn btn-secondary" href="https://www.microarch.org/micro59/" target="_blank" rel="noopener">MICRO 2026 website <svg class="icon"><use href="#i-arrow-up-right"/></svg></a>
                         </div>
                     </div>
@@ -630,10 +753,10 @@
             <div class="container">
                 <div class="section-head reveal">
                     <div>
-                        <div class="chapter"><span>05</span> Workshop team</div>
+                        <div class="chapter"><span>07</span> Workshop team</div>
                     </div>
                 </div>
-                <div class="people-grid reveal">
+                <div class="people-grid trio reveal">
                     <article class="person">
                         <div class="person-photo">
                             <img src="../img/organizers/kon_image.jpeg" alt="Konstantinos Kanellopoulos" loading="lazy">
@@ -642,6 +765,16 @@
                         <div class="person-bio">
                             <p>Recent PhD graduate from ETH Zurich, advised by Prof. Onur Mutlu. Works at the intersection of hardware, software, and operating systems, focusing on performance, programmability, and security. Lead developer of Virtuoso.</p>
                             <a class="link-arrow" href="https://konkanello.github.io/" target="_blank" rel="noopener">Personal site <svg class="icon"><use href="#i-arrow-up-right"/></svg></a>
+                        </div>
+                    </article>
+                    <article class="person">
+                        <div class="person-photo">
+                            <img src="../img/organizers/sgouras.jpg" alt="Konstantinos Marios Sgouras" loading="lazy">
+                            <div class="person-head"><h3>Konstantinos Marios Sgouras</h3><p>ETH Zurich</p></div>
+                        </div>
+                        <div class="person-bio">
+                            <p>Second-year master&rsquo;s student at ETH Zurich, working with the SAFARI Research Group under the supervision of Prof. Onur Mutlu. Broadly interested in computer architecture, microarchitecture, and memory systems, with a particular focus on processing-in-memory (PIM) and processing-using-memory (PUM) architectures. His current research focuses on understanding PUM systems and improving their performance.</p>
+                            <a class="link-arrow" href="https://konossgouras.github.io/" target="_blank" rel="noopener">Personal site <svg class="icon"><use href="#i-arrow-up-right"/></svg></a>
                         </div>
                     </article>
                     <article class="person">
@@ -662,7 +795,7 @@
             <div class="container">
                 <div class="section-head reveal">
                     <div>
-                        <div class="chapter"><span>06</span> Past editions</div>
+                        <div class="chapter"><span>08</span> Past editions</div>
                     </div>
                 </div>
                 <div class="past-grid reveal">
